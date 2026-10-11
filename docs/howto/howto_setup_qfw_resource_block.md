@@ -63,7 +63,7 @@ The default QFw resource configuration is:
 | Parameter | Default value |
 |---|---|
 | `device_id` | `ibm_fez` |
-| `device_access_config` | `/etc/openqse/qfw/device/device-access.yaml` |
+| `device_access_config` | `/workspace/qfw-container-base/device-access.yaml` |
 | `interface` | `qrmi` |
 
 Update these values if your QFw-SLURM environment uses a different device, configuration path or interface library.

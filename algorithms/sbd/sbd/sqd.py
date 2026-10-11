@@ -1,4 +1,4 @@
-# Workflow for observability demo on Miyabi
+# Workflow for observability demo
 
 import asyncio
 from datetime import datetime, timezone
@@ -26,6 +26,7 @@ from .np_type_extension import (
     NpStrict1DArrayLL,
     NpStrict2DArrayBool,
 )
+from .qfw_resource import QFwResource
 from .solver_job import SBDResult, SBDSolverJob
 from .transpile_custom import find_optimal_layout, transpile_circuit
 
@@ -61,7 +62,11 @@ def walker_sqd(
     }
 
     options = Variable.get("sqd_options", default={"params": {"shots": 100_000}})
+    shots = int(options.get("params", {}).get("shots") or 100_000)
+
     runtime = None
+    qfw = None
+    resource_name = None
 
     if quantum_source == "real-device":
         try:
@@ -73,15 +78,34 @@ def walker_sqd(
                 "deterministic random sampling instead."
             ) from exc
 
-    if runtime is not None:
-        logger.info("Preparing quantum sampling on backend %s.", runtime.resource_name)
+        resource_name = runtime.resource_name
+
+    elif quantum_source == "qfw":
+        try:
+            qfw = QFwResource.load("qfw-runner")
+        except ValueError as exc:
+            raise RuntimeError(
+                "Quantum source 'qfw' requested but QFwResource block "
+                "'qfw-runner' is not defined."
+            ) from exc
+
+        resource_name = qfw.device_id
+
+    if quantum_source in ("real-device", "qfw"):
+        logger.info("Preparing quantum sampling on backend %s.", resource_name)
+
         target_start = perf_counter()
-        target = runtime.get_target()
+        if runtime is not None:
+            target = runtime.get_target()
+        else:
+            target = qfw.get_target()
+
         logger.info(
             "Loaded backend target for %s in %.2fs.",
-            runtime.resource_name,
+            resource_name,
             perf_counter() - target_start,
         )
+
         vir_circuit = create_lucj_circuit(
             ucj_parameter=ucj_parameter,
             elec_props=elec_props,
@@ -90,10 +114,11 @@ def walker_sqd(
             n_lucj_layers=circuit_params.n_lucj_layers,
             use_reset_mitigation=circuit_params.use_reset_mitigation,
         )
+
         logger.info(
             "Searching ISA layout for backend %s "
             "(max_iterations=%s, swap_trials=%s, layout_trials=%s).",
-            runtime.resource_name,
+            resource_name,
             circuit_params.sabre_max_iterations,
             circuit_params.sabre_swap_trials,
             circuit_params.sabre_layout_trials,
@@ -106,7 +131,8 @@ def walker_sqd(
             swap_trials=circuit_params.sabre_swap_trials,
             layout_trials=circuit_params.sabre_layout_trials,
         )
-        logger.info("Transpiling ISA circuit for backend %s.", runtime.resource_name)
+
+        logger.info("Transpiling ISA circuit for backend %s.", resource_name)
         transpile_start = perf_counter()
         isa_circuit = transpile_circuit(
             circuit=vir_circuit,
@@ -116,60 +142,89 @@ def walker_sqd(
         )
         logger.info(
             "Completed ISA transpilation for %s in %.2fs.",
-            runtime.resource_name,
+            resource_name,
             perf_counter() - transpile_start,
         )
+
         logger.info(
             "Submitting sampler workload to %s (shots=%s).",
-            runtime.resource_name,
-            options.get("params", {}).get("shots"),
+            resource_name,
+            shots,
         )
         sampling_start = perf_counter()
-        try:
-            pub_result = runtime.sampler(
-                sampler_pubs=[(isa_circuit,)],
-                options=options,
-                tags=["res: quantum"],
-            )
-        except Exception:
-            logger.exception(
-                "Sampler submission or execution failed for backend %s.",
-                runtime.resource_name,
-            )
-            raise
+
+        if runtime is not None:
+            try:
+                pub_result = runtime.sampler(
+                    sampler_pubs=[(isa_circuit,)],
+                    options=options,
+                    tags=["res: quantum"],
+                )
+            except Exception:
+                logger.exception(
+                    "Sampler submission or execution failed for backend %s.",
+                    resource_name,
+                )
+                raise
+
+            meas_bits = pub_result[0].data.meas
+            if circuit_params.use_reset_mitigation:
+                test_bits = pub_result[0].data.test
+                bit_array = meas_bits.get_bitstrings(test_bits.bitcount() == 0)
+                bit_array = BitArray.from_samples(
+                    bit_array,
+                    num_bits=meas_bits.num_bits,
+                )
+            else:
+                bit_array = meas_bits
+
+            shot_retention_rate = float(bit_array.num_shots / meas_bits.num_shots)
+
+        else:
+            try:
+                bit_array = qfw.run_sampler(
+                    isa_circuit,
+                    num_shots=shots,
+                    use_reset_mitigation=circuit_params.use_reset_mitigation,
+                )
+            except Exception:
+                logger.exception(
+                    "QFw sampler submission or execution failed for device %s.",
+                    resource_name,
+                )
+                raise
+
+            shot_retention_rate = float(bit_array.num_shots / shots)
+
         logger.info(
             "Completed sampler workload on %s in %.2fs.",
-            runtime.resource_name,
+            resource_name,
             perf_counter() - sampling_start,
         )
-        # Reset mitigation
-        meas_bits = pub_result[0].data.meas
-        if circuit_params.use_reset_mitigation:
-            test_bits = pub_result[0].data.test
-            bit_array = meas_bits.get_bitstrings(test_bits.bitcount() == 0)
-            bit_array = BitArray.from_samples(bit_array, num_bits=meas_bits.num_bits)
-        else:
-            bit_array = meas_bits
-        # Update application telemetry
+
         telemetry.update(
-            shot_retention_rate=float(bit_array.num_shots / meas_bits.num_shots),
+            shot_retention_rate=shot_retention_rate,
         )
-    
-    elif quantum_source == "qfw":
-        # Quantum execution in QFw-SLURM container
-  
-    else:
+
+    elif quantum_source == "random":
         # Random sampling
-        # Isolate bitstring seed from the module seed for equivalent control with real device path.
+        # Isolate bitstring seed from the module seed for equivalent control
+        # with quantum-device sampling path.
         seed = int(
             random_seed
             + ((trial_index + walker_index) * (trial_index + walker_index + 1) // 2 + walker_index)
         )
         logger.info("Sampling bitstrings with RNG seed %s", seed)
         bit_array = generate_bit_array_uniform(
-            num_samples=options.get("params", {}).get("shots", 100_000),
+            num_samples=shots,
             num_bits=elec_props.num_orbitals * 2,
             rand_seed=seed,
+        )
+
+    else:
+        raise ValueError(
+            f"Unsupported quantum_source: {quantum_source!r}. "
+            "Expected 'random', 'real-device' or 'qfw'."
         )
 
     logger.debug("Starting configuration recovery and diagonalization.")
@@ -331,3 +386,4 @@ def _deduplicate_and_accumurate_probs(
         minlength=len(ci_strs_unique),
     )
     return ci_strs_unique, ci_probs_unique
+
