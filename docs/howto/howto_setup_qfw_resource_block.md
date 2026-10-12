@@ -13,13 +13,14 @@ quantum_source = "qfw"
 Before creating the `QFwResource` block:
 
 - The QFw-SLURM container environment must be running.
-- QFw/QRMI and the target quantum device must be configured at `/etc/openqse/qfw/device/device-access.yaml`.
+- QFw and QRMI must already be configured for the target quantum device.
+- The QFw device-access configuration and provider credentials must be available in the QFw-SLURM environment.
 - A Prefect server must be running and the active Prefect profile must point to that server.
-- The QFw device-access configuration and provider credentials must already be available.
+- The `qcsc-prefect` repository must be available in the active QFw-SLURM environment.
+
+For QFw device and provider credential setup, see the [QFw device configuration](howto_setup_qfw_device_configuration.md).
 
 For Prefect server setup in the QFw-SLURM environment, see [How to Run and Access a Prefect Server on a Slurm Login Node](howto_setup_prefect_server_slurm.md).
-
-Provider credentials should remain in the QFw credential configuration rather than being duplicated directly in the Prefect block.
 
 ## 2. Register the QFw Resource Block Type
 
