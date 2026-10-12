@@ -85,8 +85,7 @@ def walker_sqd(
             qfw = QFwResource.load("qfw-runner")
         except ValueError as exc:
             raise RuntimeError(
-                "Quantum source 'qfw' requested but QFwResource block "
-                "'qfw-runner' is not defined."
+                "Quantum source 'qfw' requested but QFwResource block 'qfw-runner' is not defined."
             ) from exc
 
         resource_name = qfw.device_id
@@ -386,4 +385,3 @@ def _deduplicate_and_accumurate_probs(
         minlength=len(ci_strs_unique),
     )
     return ci_strs_unique, ci_probs_unique
-

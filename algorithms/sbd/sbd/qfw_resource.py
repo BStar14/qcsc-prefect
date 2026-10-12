@@ -12,9 +12,7 @@ from util.circuit_payload import dump_qpy
 
 
 class QFwResource(Block):
-    device_id: str = Field(
-        description="QFw device identifier, for example ibm_fez."
-    )
+    device_id: str = Field(description="QFw device identifier, for example ibm_fez.")
 
     device_access_config: str = Field(
         default="/workspace/qfw-container-base/device-access.yaml",
@@ -81,7 +79,7 @@ class QFwResource(Block):
                     raise RuntimeError(
                         "Expected QFw reset-mitigation counts to contain "
                         f"two classical registers, got {bitstring!r}."
-                    )   
+                    )
 
                 # Qiskit count strings list classical registers
                 # in reverse register order.
@@ -98,4 +96,3 @@ class QFwResource(Block):
             samples.extend([bitstring] * count)
 
         return BitArray.from_samples(samples)
-
