@@ -1,15 +1,14 @@
 import os
 from types import SimpleNamespace
 
-import defw
-
+import defw  # noqa: F401
 from prefect.blocks.core import Block
 from pydantic import Field
+from qiskit.primitives.containers import BitArray
 from svc_lib_qpm.descriptor import resolve_descriptor
 from svc_lib_qpm.drivers.qrmi_driver import QrmiDriver
 from svc_lib_qpm.frontend import Frontend
 from util.circuit_payload import dump_qpy
-from qiskit.primitives.containers import BitArray
 
 
 class QFwResource(Block):
