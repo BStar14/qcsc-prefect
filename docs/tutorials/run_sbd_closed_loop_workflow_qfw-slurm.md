@@ -28,42 +28,89 @@ Before starting, make sure that:
 
 The tutorial will cover creating and starting the QFw-SLURM environment, configuring QFw access to the quantum device, setting up Prefect and running the SQD workflow.
 
-## 0. What changes for QFw-SLURM?
+## Workflow architecture
 
-The SQD workflow logic remains the same, but the quantum execution path changes.
+With `quantum_source="qfw"`, the SQD workflow uses QFw and QRMI for quantum execution and Slurm/MPI for the classical SBD stage.
 
-```text
-                    SQD Prefect Flow
-                          |
-             +------------+------------+
-             |                         |
-        Quantum stage              Classical stage
-             |                         |
-        QFwResource                SBDSolverJob
-             |                         |
-            QFw                      Slurm
-             |                         |
-           QRMI                       MPI
-             |                         |
-            QPU                       SBD
-```
+![QFw-SLURM SQD workflow architecture](../images/img-sbd-qfw-slurm-architecture.png)
 
-With `quantum_source="qfw"`, the workflow obtains the target quantum system through QFw, prepares and transpiles the SQD circuit for that target and submits the quantum workload through QFw and QRMI.
+<p align="center">
+  <em>QFw-SLURM execution architecture for the SQD workflow.</em>
+</p>
+
+The workflow obtains the target quantum system through QFw, prepares and transpiles the LUCJ circuit for that target and submits the quantum workload through QFw and QRMI.
 
 The classical stage continues to use the generic Slurm execution support provided by `qcsc-prefect`.
 
-## 1. Big picture: where the workflow runs
-
 A typical QFw-SLURM setup contains three execution contexts:
 
-- **`slurmctld` container** — runs the Prefect server, Prefect workflow logic, QFw and QRMI client-side execution.
-- **Slurm compute nodes** — run the compiled SBD `diag` executable through MPI.
-- **Quantum device** — executes quantum sampling through QFw and QRMI.
+- `slurmctld` container — runs the Prefect server, Prefect workflow logic and QFw/QRMI client-side execution.
+- Slurm compute nodes — run the compiled SBD `diag` executable through MPI.
+- Quantum device — executes quantum sampling through QFw and QRMI.
 
-The `slurmctld` container acts as the workflow/control environment for this tutorial.
+The `slurmctld` container acts as the workflow/control environment for this tutorial. The repository and workflow files should be located in a filesystem shared with the Slurm compute nodes.
 
-The repository and workflow files should be located in a filesystem shared with the Slurm compute nodes.
 
+## SQD closed-loop workflow
+
+The SQD workflow uses differential evolution to optimize the LUCJ parameters. For each differential-evolution iteration, multiple SQD walkers are launched in parallel using Ray.
+
+Each walker performs the following stages:
+
+1. Build the LUCJ circuit for the current parameter set.
+2. Execute quantum sampling through QFw and QRMI on the configured quantum device.
+3. Perform SQD post-processing and construct the determinant subspace.
+4. Run the SBD solver through Slurm and MPI.
+5. Return the resulting energy and carryover information to the differential-evolution workflow.
+
+After all walker results are collected, differential-evolution selection updates the LUCJ population and begins the next iteration. The loop continues for the configured number of iterations, after which the workflow reports the best energy found.
+
+Conceptually, the workflow is:
+
+```text
+Read FCIDUMP
+     |
+     v
+Initialize LUCJ population
+     |
+     v
+Differential Evolution loop
+     |
+     +-- Mutation / crossover
+     |
+     +-- Launch SQD walkers with Ray
+     |      |
+     |      v
+     |   Build LUCJ circuit
+     |      |
+     |      v
+     |   Quantum sampling
+     |   QFw -> QRMI -> QPU
+     |      |
+     |      v
+     |   SQD post-processing
+     |      |
+     |      v
+     |   Determinant subspace
+     |      |
+     |      v
+     |   SBD solver
+     |   Slurm -> MPI -> SBD
+     |      |
+     |      v
+     |   Energy + carryover state
+     |
+     +-- Collect walker results
+     +-- DE selection
+     +-- Update LUCJ population
+             |
+             +-- next iteration
+                    |
+                    v
+             Final best energy
+```
+
+The key feedback path is the energy returned by the SBD solver. After all walker results are collected, differential-evolution selection uses these energies to update the LUCJ population for the next iteration. In this way, the quantum sampling and classical SBD stages form a closed optimization loop rather a sequence of independent workflow steps.
 
 ## 2. Tutorial steps
 
