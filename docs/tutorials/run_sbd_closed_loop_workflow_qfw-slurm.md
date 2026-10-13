@@ -1,6 +1,8 @@
 # Run the SQD Closed-loop Workflow with SBD on QFw-SLURM (qcsc-prefect)
 
-This tutorial demonstrates a Sample-based Quantum Diagonalization (SQD) workflow using the `qcsc-prefect` architecture in a [QFw-SLURM](https://github.com/openQSE/QFw-SLURM-Cluster#readme) environment.
+This tutorial demonstrates a Sample-based Quantum Diagonalization (SQD) workflow with the [SBD solver](https://github.com/r-ccs-cms/sbd) in a [QFw-SLURM](https://github.com/openQSE/QFw-SLURM-Cluster#readme) environment. The workflow combines quantum sampling with classical processing and uses SBD to diagonalize a sparse chemistry Hamiltonian in the `QFw-SLURM` environment, with Prefect orchestrating the end-to-end workflow.
+
+For the example in this tutorial, the goal is to compute the ground-state energy of the N₂ molecular system using the SQD workflow.
 
 [QFw](https://github.com/openQSE/QFw) is a quantum execution framework for running quantum applications against simulator or hardware services. It provides the quantum execution infrastructure used by this workflow, while [QFw-SLURM](https://github.com/openQSE/QFw-SLURM-Cluster#readme) provides a containerized Slurm environment in which QFw applications and classical HPC workloads can be executed.
 
