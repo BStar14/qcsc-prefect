@@ -26,7 +26,7 @@ from .np_type_extension import (
     NpStrict1DArrayLL,
     NpStrict2DArrayBool,
 )
-from .qfw_resource import QFwResource
+# from .qfw_resource import QFwResource
 from .solver_job import SBDResult, SBDSolverJob
 from .transpile_custom import find_optimal_layout, transpile_circuit
 
@@ -81,6 +81,13 @@ def walker_sqd(
         resource_name = runtime.resource_name
 
     elif quantum_source == "qfw":
+        try:
+            from .qfw_resource import QFwResource
+        except ImportError as exc:
+            raise RuntimeError(
+                "Quantum source 'qfw' requires the QFw environment and dependencies."
+            ) from exc
+
         try:
             qfw = QFwResource.load("qfw-runner")
         except ValueError as exc:
