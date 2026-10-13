@@ -1,4 +1,4 @@
-# Run SBD Closed-loop Workflow on QFw-SLURM (qcsc-prefect)
+# Run the SQD Closed-loop Workflow with SBD on QFw-SLURM (qcsc-prefect)
 
 This tutorial demonstrates a Sample-based Quantum Diagonalization (SQD) workflow using the `qcsc-prefect` architecture in a [QFw-SLURM](https://github.com/openQSE/QFw-SLURM-Cluster#readme) environment.
 
@@ -12,6 +12,8 @@ The workflow combines:
 - QFw and QRMI for quantum resource access and execution
 - Slurm for classical HPC job scheduling
 - MPI and SBD for Davidson diagonalization
+
+In this workflow, SQD defines the overall quantum-classical workflow, while SBD provides the classical Davidson diagonalization used to evaluate the determinant subspace.
 
 > **Note**
 >
@@ -506,18 +508,20 @@ During execution, the workflow submits the quantum sampling workload through QFw
 
 ![SQD workflow execution with QFw and Slurm](../images/img-sbd-qfw-workflow-run.png)
 
-*Execution of the QFw-SLURM SQD closed-loop workflow from the Prefect UI.*
+<p align="center">
+  <em>Execution of the QFw-SLURM SQD closed-loop workflow from the Prefect UI.</em>
+</p>
 
 The workflow should:
 
-1. construct the SQD/LUCJ quantum circuit
+1. construct the LUCJ circuit for the SQD walker
 2. prepare and transpile the circuit for the configured quantum target
 3. submit quantum sampling through QFw and QRMI
 4. retrieve the quantum sampling result
 5. perform SQD configuration recovery and post-processing
 6. generate the determinant subspace
 7. submit SBD diagonalization through Slurm
-8. retrieve the SBD energy
+8. retrieve the energy returned by the SBD solver
 9. update the SQD differential-evolution state
 10. continue the closed-loop iteration as configured
 
@@ -567,6 +571,10 @@ These files can be used to inspect the generated Slurm submission script and the
 After the workflow completes, inspect the `sqd-telemetry` artifact in the Prefect UI to view the calculated energies and workflow results.
 
 ![SQD telemetry artifact for the QFw-SLURM workflow](../images/img-sbd-qfw-telemetry.png)
+
+<p align="center">
+  <em>SQD telemetry generated after successful QFw-SLURM workflow execution.</em>
+</p>
 
 *SQD telemetry generated after successful QFw-SLURM workflow execution.*
 
