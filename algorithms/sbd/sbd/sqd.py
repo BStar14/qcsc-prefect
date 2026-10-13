@@ -26,7 +26,6 @@ from .np_type_extension import (
     NpStrict1DArrayLL,
     NpStrict2DArrayBool,
 )
-# from .qfw_resource import QFwResource
 from .solver_job import SBDResult, SBDSolverJob
 from .transpile_custom import find_optimal_layout, transpile_circuit
 
