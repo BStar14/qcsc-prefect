@@ -17,12 +17,8 @@ Before starting, make sure that:
 For the QFw-SLURM environment, also make sure that:
 
 - The QFw-SLURM container environment is running.
-- QFw is installed and configured.
-- The target quantum device is configured in:
-
-```text
-/etc/openqse/qfw/device/device-access.yaml
-```
+- QFw and QRMI are installed and available in the workflow environment.
+- The target quantum device and provider credentials are configured for QFw.
 
 ## Step 1. Log in to the Slurm login node
 
