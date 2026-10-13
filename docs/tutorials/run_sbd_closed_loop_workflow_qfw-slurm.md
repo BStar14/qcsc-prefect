@@ -26,7 +26,7 @@ In this workflow, SQD defines the overall quantum-classical workflow, while SBD 
 Before starting, make sure that:
 
 - Podman/Docker is installed and available on the host system.
-- You have access to the [QFw-SLURM](https://github.com/openQSE/QFw-SLURM-Cluster#readme) repository.
+- You can access to the [QFw-SLURM](https://github.com/openQSE/QFw-SLURM-Cluster#readme) repository.
 - You have valid provider credentials for submitting jobs to the target quantum device.
 - The host system has sufficient resources to run the QFw-SLURM environment.
 
@@ -748,5 +748,6 @@ If this occurs, rebuild the same `ffsim` version from source inside the QFw envi
 
 This is an environment compatibility issue rather than an SQD or QFw workflow requirement.
 
---
+------------------------------------------------------------------------
+
 END OF TUTORIAL
