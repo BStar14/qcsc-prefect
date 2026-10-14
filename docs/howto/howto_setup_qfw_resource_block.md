@@ -31,26 +31,35 @@ The block implementation is located at:
 ```text
 /path/to/qcsc-prefect/algorithms/sbd/sbd/qfw_resource.py
 ```
-Register the block type with Prefect:
+Register the block type with Prefect from the `qcsc-prefect` repository root::
 
 ```bash
-prefect block register -f /path/to/qcsc-prefect/algorithms/sbd/sbd/qfw_resource.py
+python - <<'PY'
+from sbd.qfw_resource import QFwResource
+
+QFwResource.register_type_and_schema()
+print("QFwResource registered")
+PY
 ```
-The registered block will appear like this:
+
+A successful registration prints:
 
 ```text
-
-Successfully registered 1 block
-
-┏━━━━━━━━━━━━━━━━━━━┓
-┃ Registered Blocks ┃
-┡━━━━━━━━━━━━━━━━━━━┩
-│ QFwResource       │
-└───────────────────┘
-
- To configure the newly registered blocks, go to the Blocks page in the Prefect UI: http://127.0.0.1:4200/blocks/catalog
-
+QFwResource registered
 ```
+
+Verify that the block type is registered:
+
+```bash
+prefect block type ls | grep -i qfw
+```
+
+The output should include `QFwResource`.
+
+> **Note**
+>
+> Do not use `prefect block register -f` for `qfw_resource.py`. Prefect loads block files in a worker thread, while QFw initializes DEFw during import. DEFw installs signal handlers, which Python only permits from the main interpreter thread. Registering the block type through Python, as shown above, ensures that the QFw module is imported from the main thread.
+
 
 ## 3. Create the QFw Resource Block Instance
 

@@ -25,8 +25,8 @@ In this workflow, SQD defines the overall quantum-classical workflow, while SBD 
 
 Before starting, make sure that:
 
-- Podman/Docker is installed and available on the host system.
-- You can access to the [QFw-SLURM](https://github.com/openQSE/QFw-SLURM-Cluster#readme) repository.
+- Docker is installed and available on the host system.
+- You can access the [QFw-SLURM](https://github.com/openQSE/QFw-SLURM-Cluster#readme) repository.
 - You have valid provider credentials for submitting jobs to the target quantum device.
 - The host system has sufficient resources to run the QFw-SLURM environment.
 
@@ -140,13 +140,13 @@ Start the QFw-SLURM environment using the procedure provided by the QFw-SLURM re
 Verify that the containers are running:
 
 ```bash id="5uxpyb"
-podman ps
+docker ps
 ```
 
 Verify that port `4200` is published for `slurmctld`:
 
 ```bash id="2793w6"
-podman port slurmctld
+docker port slurmctld
 ```
 
 The output should include a mapping similar to:
@@ -176,7 +176,7 @@ The exact partitions, node names and node counts may differ depending on the QFw
 From the host running the QFw-SLURM environment, enter the `slurmctld` container:
 
 ```bash
-podman exec -it \
+docker exec -it \
   -w /workspace/qfw-container-base \
   slurmctld bash
 ```
@@ -211,12 +211,35 @@ cd /workspace/qfw-container-base
 git clone https://github.com/qiskit-community/qcsc-prefect.git
 cd qcsc-prefect
 ```
+From the repository root, install the local packages:
 
-Install the workflow packages into the active QFw environment:
+``` bash
+uv pip install --no-deps \
+  -e packages/qcsc-prefect-core \
+  -e packages/qcsc-prefect-adapters \
+  -e packages/qcsc-prefect-blocks \
+  -e packages/qcsc-prefect-executor
+```
+
+Install the workflow utility and SBD packages into the active QFw environment:
 
 ```bash
 uv pip install -e algorithms/qcsc_workflow_utility
 uv pip install -e algorithms/sbd
+```
+
+Check the installation:
+
+``` bash
+uv pip list | grep -E "(qcsc-prefect|sbd|qcsc)"
+
+qcsc-prefect-adapters              0.2.5
+qcsc-prefect-blocks                0.2.5
+qcsc-prefect-core                  0.2.5
+qcsc-prefect-executor              0.2.5
+qcsc-workflow-utility              0.1.0
+sbd                                0.1.0
+
 ```
 
 Verify that Prefect is available from the active QFw virtual environment:
@@ -418,7 +441,7 @@ The output should include the following blocks:
 ```
 You can also verify the generated blocks from the Prefect UI:
 
-![Prefect blocks generated for the Slurm-based SBD workflow](../images/img-sbd-qfw-prefect-blocks.png)
+![Prefect blocks generated for the Slurm-based SBD workflow](../images/img-sbd-slurm-prefect-blocks.png)
 
 
 ### Step 9. Deploy the SQD workflow
@@ -668,7 +691,7 @@ prefect version
 Check whether port `4200` is published:
 
 ```bash
-podman port slurmctld
+docker port slurmctld
 ```
 
 The output should include:

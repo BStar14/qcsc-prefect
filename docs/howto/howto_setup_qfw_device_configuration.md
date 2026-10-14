@@ -21,25 +21,26 @@ In the QFw-SLURM environment used by this tutorial, the configuration is created
 The configuration used in this tutorial contains an entry similar to:
 
 ```yaml
-ibm_fez:
-  provider: ibm
-  provider-device-id: ibm_fez
-  resource-type: IBMQuantumComputeService
-  url: "https://quantum.cloud.ibm.com/api/v1"
-  service-crn: "REDACTED"
-  credential-db: my-credentials.json
-  libraries: [qrmi]
-  preference: qrmi
-  execution-owner: qrmi
-  caps:
-    get_device_info: [qrmi]
-    get_coupling_graph: [qrmi]
-    get_backend_info: [qrmi]
-    get_dynamic_backend_info: [qrmi]
-    run_circuit: [qrmi]
-    get_task_timing: [qrmi]
-    get_task_metadata: [qrmi]
-    get_calibration_snapshot: [qrmi]
+qpus:
+  ibm_fez:
+    provider: ibm
+    provider-device-id: ibm_fez
+    resource-type: IBMQuantumComputeService
+    url: "https://quantum.cloud.ibm.com/api/v1"
+    service-crn: "REDACTED"
+    credential-db: my-credentials.json
+    libraries: [qrmi]
+    preference: qrmi
+    execution-owner: qrmi
+    caps:
+      get_device_info: [qrmi]
+      get_coupling_graph: [qrmi]
+      get_backend_info: [qrmi]
+      get_dynamic_backend_info: [qrmi]
+      run_circuit: [qrmi]
+      get_task_timing: [qrmi]
+      get_task_metadata: [qrmi]
+      get_calibration_snapshot: [qrmi]
 ```
 
 The important fields for this workflow are:
