@@ -11,7 +11,7 @@ The `qcsc-prefect` repository is installed and executed inside this environment 
 The workflow combines:
 
 - Prefect for end-to-end workflow orchestration
-- QFw and QRMI for quantum resource access and execution
+- [QFw](https://github.com/openQSE/QFw) with the [QRMI](https://github.com/qiskit-community/qrmi) library interface for quantum resource access and execution
 - Slurm for classical HPC job scheduling
 - MPI and SBD for Davidson diagonalization
 
@@ -42,6 +42,10 @@ With `quantum_source="qfw"`, the SQD workflow uses QFw and QRMI for quantum exec
   <em>QFw-SLURM execution architecture for the SQD workflow.</em>
 </p>
 
+For the quantum stage, the SQD workflow uses the QFw QPU front-end and the QRMI library interface to access and execute workloads on the configured quantum device. In this path, the workflow calls QFw/QRMI directly; it does not submit the quantum workload through Slurm or generate an `sbatch` script.
+
+The classical SBD stage uses a separate execution path. `SBDSolverJob` submits the diagonalization workload through Slurm, where `sbatch`/`srun` and MPI are used to launch the SBD solver on the compute nodes.
+
 The workflow obtains the target quantum system through QFw, prepares and transpiles the LUCJ circuit for that target and submits the quantum workload through QFw and QRMI.
 
 The classical stage continues to use the generic Slurm execution support provided by `qcsc-prefect`.
@@ -50,7 +54,7 @@ A typical QFw-SLURM setup contains three execution contexts:
 
 - `slurmctld` container — runs the Prefect server, Prefect workflow logic and QFw/QRMI client-side execution.
 - Slurm compute nodes — run the compiled SBD `diag` executable through MPI.
-- Quantum device — executes quantum sampling through QFw and QRMI.
+- Quantum device — receives sampling workloads through the QFw front-end and QRMI library interface.
 
 The `slurmctld` container acts as the workflow/control environment for this tutorial. The repository and workflow files should be located in a filesystem shared with the Slurm compute nodes.
 
