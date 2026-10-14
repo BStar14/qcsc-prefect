@@ -32,6 +32,14 @@ Before starting, make sure that:
 
 The tutorial will cover creating and starting the QFw-SLURM environment, configuring QFw access to the quantum device, setting up Prefect and running the SQD workflow.
 
+> **Validated environments**
+>
+> This tutorial has been validated with QFw-SLURM commit `c05469901d7efc46bdf98ba8b5944f63df4c560c` in the following environments:
+>
+> - macOS host with ARM64/AArch64
+> - Linux/x86_64
+
+
 ## Workflow architecture
 
 With `quantum_source="qfw"`, the SQD workflow uses QFw and QRMI for quantum execution and Slurm/MPI for the classical SBD stage.
@@ -118,7 +126,7 @@ Differential Evolution loop
              Final best energy
 ```
 
-The key feedback path is the energy returned by the SBD solver. After all walker results are collected, differential-evolution selection uses these energies to update the LUCJ population for the next iteration. In this way, the quantum sampling and classical SBD stages form a closed optimization loop rather a sequence of independent workflow steps.
+The key feedback path is the energy returned by the SBD solver. After all walker results are collected, differential-evolution selection uses these energies to update the LUCJ population for the next iteration. In this way, the quantum sampling and classical SBD stages form a closed optimization loop rather than a sequence of independent workflow steps.
 
 ## 2. Tutorial steps
 
@@ -613,8 +621,6 @@ After the workflow completes, inspect the `sqd-telemetry` artifact in the Prefec
   <em>SQD telemetry generated after successful QFw-SLURM workflow execution.</em>
 </p>
 
-*SQD telemetry generated after successful QFw-SLURM workflow execution.*
-
 The `sqd-telemetry` artifact records the energy computed for each walker across differential-evolution trials. With a single differential-evolution iteration, only the first trial is expected. Increase the number of differential-evolution iterations to run additional closed-loop trials and observe the evolution of the energy values.
 
 
@@ -783,6 +789,3 @@ If this occurs, rebuild the same `ffsim` version from source inside the QFw envi
 
 This is an environment compatibility issue rather than an SQD or QFw workflow requirement.
 
-------------------------------------------------------------------------
-
-END OF TUTORIAL
