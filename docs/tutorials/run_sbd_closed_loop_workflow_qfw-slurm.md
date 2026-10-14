@@ -441,7 +441,7 @@ The output should include the following blocks:
 ```
 You can also verify the generated blocks from the Prefect UI:
 
-![Prefect blocks generated for the Slurm-based SBD workflow](../images/img-sbd-slurm-prefect-blocks.png)
+![Prefect blocks generated for the Slurm-based SBD workflow](../images/img-sbd-qfw-prefect-blocks.png)
 
 
 ### Step 9. Deploy the SQD workflow
@@ -518,6 +518,12 @@ Example:
 | Random Seed | `24` |
 | Solver Block Ref | `sbd_solver_job/davidson-solver` |
 
+
+> **Note**
+>
+> If a quantum device is not immediately available, you can set **Quantum Source** to `random` instead of `qfw`. The `random` option generates sampling data without submitting a job to a quantum device, allowing you to experiment with the SQD workflow and exercise the classical SBD execution path.
+>
+> Use `qfw` when you want to validate the complete QFw/QRMI quantum execution path on a configured quantum device.
 
 ### Step 11. Execute and monitor the workflow
 
