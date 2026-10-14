@@ -521,9 +521,11 @@ Example:
 | Quantum Source | `qfw` |
 | Random Seed | `24` |
 | Solver Block Ref | `sbd_solver_job/davidson-solver` |
-
+| Reset Mitigation | `false` for direct-access systems where reset-check measurements are unavailable |
 
 > **Note**
+>
+> Reset mitigation requires meaningful reset-check measurements from the target quantum system. For direct-access `IBMQuantumSystem` resources where this behavior is not supported or available, set `use_reset_mitigation=false`. Quantum execution through QFw/QRMI is otherwise unaffected.
 >
 > If a quantum device is not immediately available, you can set **Quantum Source** to `random` instead of `qfw`. The `random` option generates sampling data without submitting a job to a quantum device, allowing you to experiment with the SQD workflow and exercise the classical SBD execution path.
 >
