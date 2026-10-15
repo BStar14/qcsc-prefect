@@ -89,6 +89,11 @@ class QFwResource(Block):
                 if int(test_bits, 2).bit_count() == 0:
                     samples.extend([meas_bits] * count)
 
+            if not samples:
+                raise RuntimeError(
+                    "Reset mitigation removed all samples from the QFw sampler result."
+                )
+
             return BitArray.from_samples(samples)
 
         samples = []
