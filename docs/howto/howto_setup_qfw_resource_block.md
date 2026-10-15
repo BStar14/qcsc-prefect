@@ -31,7 +31,7 @@ The block implementation is located at:
 ```text
 /path/to/qcsc-prefect/algorithms/sbd/sbd/qfw_resource.py
 ```
-Register the block type with Prefect from the `qcsc-prefect` repository root::
+Register the block type with Prefect from the `qcsc-prefect` repository root:
 
 ```bash
 python - <<'PY'
@@ -63,20 +63,48 @@ The output should include `QFwResource`.
 
 ## 3. Create the QFw Resource Block Instance
 
-Create and save the `qfw-runner` block instance using:
+Create the `qfw-runner` block instance by specifying the QFw device ID and the device-access configuration file.
+
+From the `qcsc-prefect` repository root, run:
 
 ```bash
-python /path/to/qcsc-prefect/algorithms/sbd/create_qfw_block.py
+python algorithms/sbd/create_qfw_block.py \
+  --device-id <device-id> \
+  --device-access-config <path-to-device-access.yaml>
 ```
-The default QFw resource configuration is:
 
-| Parameter | Default value |
-|---|---|
-| `device_id` | `ibm_fez` |
-| `device_access_config` | `/workspace/qfw-container-base/device-access.yaml` |
-| `interface` | `qrmi` |
+For example:
 
-Update these values if your QFw-SLURM environment uses a different device, configuration path or interface library.
+```bash
+python algorithms/sbd/create_qfw_block.py \
+  --device-id ibm_fez \
+  --device-access-config /workspace/qfw-container-base/device-access.yaml
+```
+
+The value passed to `--device-id` must correspond to a device configured under `qpus` in the specified `device-access.yaml` file.
+
+If `--device-access-config` is omitted, the script uses the following default path:
+
+```text
+/workspace/qfw-container-base/device-access.yaml
+```
+
+For example, when using the default configuration path:
+
+```bash
+python algorithms/sbd/create_qfw_block.py \
+  --device-id ibm_fez
+```
+
+A successful creation prints output similar to:
+
+```text
+Created QFwResource block: qfw-runner
+Device ID: ibm_fez
+```
+
+The created block uses the QRMI interface for QFw device access and quantum execution.
+
 
 ## 4. Verify the Block Instance
 
@@ -85,7 +113,7 @@ Check that the named block instance was created:
 ```bash
 prefect block ls
 ```
-The block should appear with the name `qfw-runner`.
+The block should appear with the name `qfw-runner`:
 
 ```text
                                            Blocks
@@ -95,11 +123,31 @@ The block should appear with the name `qfw-runner`.
 │ <block_id>                           │ QFwResource │ qfw-runner │ qfwresource/qfw-runner │
 └──────────────────────────────────────┴─────────────┴────────────┴────────────────────────┘
 ```
-You can see it on the Prefect UI under `Blocks`
+
+Inspect the block instance:
+
+```bash
+prefect block inspect qfwresource/qfw-runner
+```
+
+The output should look similar to:
+
+```text
+                                                        qfwresource/qfw-runner
+┌─────────────────────────────────────────┬──────────────────────────────────────────────────────────────────────────────────────────┐
+│ Block Type                              │ QFwResource                                                                              │
+│ Block id                                │ <block_id>                                                                               │
+├─────────────────────────────────────────┼──────────────────────────────────────────────────────────────────────────────────────────┤
+│ device_id                               │ ibm_fez                                                                                  │
+│ device_access_config                    │ /workspace/qfw-container-base/device-access.yaml                                         │
+│ interface                               │ qrmi                                                                                     │
+└─────────────────────────────────────────┴──────────────────────────────────────────────────────────────────────────────────────────┘
+
+```
+
+The block details should show the configured device ID, device-access configuration path and interface.
+
+You can also view and edit the block configuration from the Prefect UI under `Blocks`.
 
 ![QFwResource block in the Prefect UI](../images/img-qfw-resource-block.png)
-
-The block details should show the configured device ID, device-access configuration path and interface.You can also edit the block configuration from the Prefect UI by selecting the three-dot menu on the right.
-
-
 
