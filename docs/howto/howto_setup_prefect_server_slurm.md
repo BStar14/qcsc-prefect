@@ -135,85 +135,64 @@ curl http://127.0.0.1:4200/api/health
 
 A successful response indicates that the Prefect server is running and accessible from the login node or container.
 
-## Step 4. Access the Prefect UI from your local computer
+## Step 4. Access and verify the Prefect server
 
 The Prefect UI is served on port `4200`.
 
 ### Generic Slurm environment
 
-If the Prefect server is running directly on the Slurm login node, open a new terminal on your local computer and run:
+If the Prefect server is running directly on the Slurm login node, create an SSH tunnel from your local computer:
 
 ```bash
 ssh -L 4200:127.0.0.1:4200 <username>@<login-node>
 ```
 
-Keep this SSH connection open while using the Prefect UI.
-
-Then open:
-
-```text
-http://127.0.0.1:4200
-```
-
-in your local web browser.
+Keep the SSH connection open while using the Prefect UI.
 
 ### QFw-SLURM environment
 
-If the QFw-SLURM environment is running locally, for example on your laptop and port `4200` is exposed from the `slurmctld` container, open the Prefect UI directly in your local web browser:
+If QFw-SLURM is running locally and port `4200` is exposed from the `slurmctld` container, no SSH tunnel is required.
 
-```text
-http://127.0.0.1:4200
-```
-
-You can verify access first with:
-
-```bash
-curl http://127.0.0.1:4200/api/health
-```
-
-If the QFw-SLURM environment is running on a remote machine, create an SSH tunnel from your local computer to port `4200` on the remote host:
+If QFw-SLURM is running on a remote host, create an SSH tunnel:
 
 ```bash
 ssh -L 4200:127.0.0.1:4200 <username>@<remote-host>
 ```
 
-Keep the SSH connection open while using the Prefect UI.
-
 Then open:
 
 ```text
 http://127.0.0.1:4200
 ```
 
-in your local web browser.
-
-## Step 5. Verify Prefect from the workflow environment
-
-Before creating Prefect blocks or running the SQD workflow, verify that the active environment is connected to the expected Prefect server:
+From the workflow environment, verify that Prefect is connected to the expected server:
 
 ```bash
 prefect profile inspect
+curl http://127.0.0.1:4200/api/health
 ```
 
-and:
+For QFw-SLURM, run these commands inside the `slurmctld` container after activating the QFw environment.
+
+A successful health check confirms that the server is running and accessible.
+
+## Step 5. Keep the Prefect server running
+
+Leave the Prefect server running for the remainder of the tutorial. It is required later for creating blocks, serving the deployment, submitting workflow runs and monitoring execution from the Prefect UI.
+
+If the server was started in the background, you can verify that it is still available with:
 
 ```bash
 curl http://127.0.0.1:4200/api/health
 ```
 
-For QFw-SLURM, these commands should be run inside the `slurmctld` container after activating the QFw environment.
+## Step 6. Stop the Prefect server when finished
 
-
-## Step 6. Stop the Prefect server
-
-When the server is no longer needed, stop it in the environment where it was started:
+After completing the tutorial and any workflow runs, you can stop the Prefect server with:
 
 ```bash
 prefect server stop
 ```
 
-You can start it again later with:
+This cleanup step is optional if you intend to continue using the same Prefect server for additional workflow runs.
 
-```bash
-prefect server start --host 0.0.0.0 --background
-```
