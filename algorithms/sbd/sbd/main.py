@@ -356,8 +356,6 @@ def deploy():
     """Deploy workflow with a local worker."""
     # Prefect deploys with relative path.
     # Workflow is now installed in site-packages.
-    print('HERE!!!! Deployment EK')
-    os.environ['RAY_AUTH_MODE'] = 'disabled'
     os.chdir(pathlib.Path(__file__).parent)
 
     riken_sqd_de.serve(
