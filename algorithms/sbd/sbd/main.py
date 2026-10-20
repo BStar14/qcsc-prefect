@@ -1,5 +1,6 @@
 # Workflow for observability demo on Miyabi
 
+import logging
 import os
 import pathlib
 from typing import Self
@@ -9,8 +10,7 @@ from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_table_artifact
 from prefect.cache_policies import RUN_ID, Inputs
 from prefect.futures import PrefectFutureList
-from prefect.task_runners import ConcurrentTaskRunner
-from prefect_ray import RayTaskRunner
+from prefect.task_runners import ConcurrentTaskRunner, ProcessPoolTaskRunner
 from pydantic import BaseModel, Field
 from qcsc_workflow_utility.chem import (
     ElectronicProperties,
@@ -40,11 +40,26 @@ def _build_task_runner():
     mode = os.getenv("SBD_TASK_RUNNER", "ray").strip().lower()
     if mode == "concurrent":
         return ConcurrentTaskRunner()
+    if mode == "process":
+        return ProcessPoolTaskRunner()
+
+    # Ray is an optional dependency. Import it lazily so the flow can still be
+    # imported and run (via the ProcessPoolTaskRunner fallback) when prefect_ray
+    # or Ray itself is not installed.
+    try:
+        from prefect_ray import RayTaskRunner
+    except ImportError:
+        logging.getLogger(__name__).warning(
+            "SBD_TASK_RUNNER=%s requested but prefect_ray is not installed; "
+            "falling back to ProcessPoolTaskRunner.",
+            mode,
+        )
+        return ProcessPoolTaskRunner()
 
     # Keep legacy behavior when PREFECT_RAY_NUM_CPUS is not explicitly set.
     ray_cpus_raw = os.getenv("PREFECT_RAY_NUM_CPUS", "").strip()
     if not ray_cpus_raw:
-        return RayTaskRunner
+        return RayTaskRunner()
 
     for key, value in THREAD_ENV.items():
         os.environ.setdefault(key, value)
@@ -341,6 +356,8 @@ def deploy():
     """Deploy workflow with a local worker."""
     # Prefect deploys with relative path.
     # Workflow is now installed in site-packages.
+    print('HERE!!!! Deployment EK')
+    os.environ['RAY_AUTH_MODE'] = 'disabled'
     os.chdir(pathlib.Path(__file__).parent)
 
     riken_sqd_de.serve(
