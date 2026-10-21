@@ -17,7 +17,7 @@ dependencies = [
     "ffsim",
     "qiskit-addon-sqd",
     "prefect-qiskit",
-    "prefect[aws]",
+    "prefect[aws]>=3.4.14",
     "pydantic_numpy",
     "qcsc_workflow_utility",
 ]
