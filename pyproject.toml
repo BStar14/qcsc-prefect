@@ -97,6 +97,7 @@ addopts = "-ra"
 markers = [
     "miyabi_integration: tests that require Miyabi login node and real qsub/qstat",
     "fugaku_integration: tests that require Fugaku login node and real pjsub/pjstat",
+    "slurm_integration: tests that require a Slurm login node and real sbatch/sacct",
 ]
 
 [tool.ruff]

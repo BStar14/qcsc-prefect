@@ -1,0 +1,47 @@
+# SQD fulqrum workflow on a Slurm cluster.
+# Copy to sqd_fulqrum_blocks.slurm.toml and run:
+#   sqd-fulqrum-create-blocks --config algorithms/sqd/sqd_fulqrum_blocks.slurm.toml
+# Add --dry-run to print the resolved settings without saving anything.
+# The values below match the native/docker testbed of qcsc-prefect-fulqrum.
+
+# Required for Slurm
+hpc_target = "slurm"
+queue = "normal"                    # Slurm partition
+# project = "YOUR_SLURM_ACCOUNT"    # Optional: #SBATCH --account
+work_dir = "/data/sqd-fulqrum"      # Shared between the submit host and compute nodes
+# qcsc-fulqrum-solve of the compute-node environment that has fulqrum built
+fulqrum_executable = "/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve"
+
+# Execution profile. fulqrum runs as one OpenMP process per subspace.
+launcher = "single"
+walltime = "01:00:00"
+num_nodes = 1
+mpiprocs = 1
+ompthreads = 4                      # --cpus-per-task and OMP_NUM_THREADS
+modules = []
+pre_commands = []
+# slurm_memory = "8G"               # Optional: #SBATCH --mem
+# [environments]
+# OPENBLAS_NUM_THREADS = "1"
+
+# Block and variable names (these are the defaults)
+command_block_name = "cmd-sqd-fulqrum-solver"
+execution_profile_block_name = "exec-sqd-fulqrum-slurm"
+hpc_profile_block_name = "hpc-slurm-sqd-fulqrum"
+solver_block_name = "sqd-fulqrum-solver"
+options_variable_name = "sampler_options"
+script_filename = "fulqrum_solver.slurm"
+metrics_artifact_key = "slurm-sqd-fulqrum-metrics"
+timeout_seconds = 7200
+
+# Solver options
+eigensolver = "scipy"               # "primme" needs primme on the compute node
+hamiltonian_format = "csr"          # "matrix_free" saves memory
+tol = 1e-8
+# max_iter = 1000                   # Default: solver default
+dense_max_dim = 64
+return_sci_state = false            # The workflow only needs energies and occupancies
+
+# Sampler options variable. Default: {"params": {"shots": 100000}}
+shots = 100000
+# sampler_options_json = '{"params": {"shots": 50000}}'

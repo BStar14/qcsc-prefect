@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=77.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qcsc-prefect-fulqrum"
+version = "0.2.5"
+description = "Fulqrum subspace eigensolver integration for qcsc-prefect"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+    { name = "QCSC Prefect Contributors" },
+]
+maintainers = [
+    { name = "QCSC Prefect Maintainers" },
+]
+dependencies = [
+    "numpy",
+    "prefect>=2.19",
+    "pydantic>=2",
+    "qiskit-addon-sqd==0.11.0",
+    "qcsc-prefect-blocks==0.2.5",
+    "qcsc-prefect-core==0.2.5",
+    "qcsc-prefect-executor==0.2.5",
+]
+
+[project.optional-dependencies]
+# Compute-node solver. fulqrum>=0.5 is not on PyPI yet; build it per site with
+# native/build_fulqrum.sh and install this package there with --no-deps.
+solver = [
+    "fulqrum>=0.5.0",
+    "scipy>=1.14.1",
+]
+# Optional PRIMME eigensolver (eigensolver="primme"). Source-only on PyPI; needs
+# BLAS/LAPACK at build time (native/build_fulqrum.sh with FULQRUM_WITH_PRIMME=1).
+primme = [
+    "primme>=3.2",
+]
+
+[project.scripts]
+# Compute-node entry point; needs only numpy, scipy and fulqrum at runtime.
+qcsc-fulqrum-solve = "qcsc_prefect_fulqrum.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/qiskit-community/qcsc-prefect"
+Repository = "https://github.com/qiskit-community/qcsc-prefect"
+Documentation = "https://qiskit-community.github.io/qcsc-prefect/"
+Issues = "https://github.com/qiskit-community/qcsc-prefect/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]

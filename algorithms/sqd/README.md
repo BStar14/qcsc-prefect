@@ -66,6 +66,92 @@ compute nodes can read, for example a `/vol...` location.
 
 See the [Run Hybrid Workflow](../../docs/tutorials/run_sqd_workflow.md) tutorial for the end-to-end steps.
 
+## ⚛️ SQD with the fulqrum eigensolver
+
+`sqd_fulqrum` runs the same experiment, but diagonalizes each subspace with
+[fulqrum](https://github.com/qiskit-community/fulqrum) through the
+`FulqrumSolverJob` block of `packages/qcsc-prefect-fulqrum`. The quantum stage
+(LUCJ ansatz, transpilation, `real-device` or `random` sampling) and the
+configuration recovery loop are the same as in `sqd_dice`. `sqd_dice` is not
+changed or imported.
+
+Differences from `sqd_dice`:
+
+- Each batch is one scheduler job running `qcsc-fulqrum-solve` (one OpenMP
+  process). The batches of a recovery round are submitted concurrently.
+- The default target is a generic Slurm cluster. `local`, `miyabi` and `fugaku`
+  also work, given a fulqrum build on that system.
+- fulqrum applies no spin penalty, so `spin_sq` is ignored (the flow logs a
+  warning when it is nonzero).
+- The flow is `sqd_2405_05068_fulqrum`, its solver block defaults to
+  `sqd-fulqrum-solver`, and its artifact key is
+  `sqd-fulqrum-configuration-recovery`.
+
+### Runbook (Prefect Cloud)
+
+1. **Compute nodes:** build fulqrum with
+   `packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`, then install
+   `qcsc-prefect-fulqrum` into that environment with `--no-deps`. Note the path
+   of its `qcsc-fulqrum-solve` entry point. The compute environment needs no
+   Prefect.
+2. **Submit host** (where the Prefect process runs and `sbatch` works): install
+   the workflow with the `fulqrum` extra:
+
+   ```bash
+   uv pip install --no-deps \
+     -e packages/qcsc-prefect-core -e packages/qcsc-prefect-adapters \
+     -e packages/qcsc-prefect-blocks -e packages/qcsc-prefect-executor \
+     -e packages/qcsc-prefect-dice -e packages/qcsc-prefect-fulqrum
+   uv pip install -e algorithms/qcsc_workflow_utility
+   uv pip install -e "algorithms/sqd[fulqrum]"
+   ```
+
+3. Log in to Prefect Cloud on the submit host (`prefect cloud login`, or set
+   `PREFECT_API_URL` and `PREFECT_API_KEY`).
+4. Create the blocks and the `sampler_options` variable:
+
+   ```bash
+   cp algorithms/sqd/sqd_fulqrum_blocks.slurm.example.toml algorithms/sqd/sqd_fulqrum_blocks.slurm.toml
+   # edit queue, work_dir, fulqrum_executable, ompthreads
+   sqd-fulqrum-create-blocks --config algorithms/sqd/sqd_fulqrum_blocks.slurm.toml --dry-run
+   sqd-fulqrum-create-blocks --config algorithms/sqd/sqd_fulqrum_blocks.slurm.toml
+   ```
+
+   `--dry-run` prints the resolved settings without contacting Prefect.
+   `work_dir` must be on a file system that both the submit host and the compute
+   nodes see.
+5. Serve the deployment: `sqd-fulqrum-deploy`.
+6. Start a run from the Prefect UI. Use `quantum_source = "random"` first, then
+   `real-device` with the `ibm-runner` `QuantumRuntime` block. For example:
+
+   ```json
+   {
+     "molecule": {"atom": "N 0 0 0; N 0 0 1.1", "basis": "sto-3g"},
+     "sqd": {"subspace_dim": 400, "num_batches": 2, "max_iterations": 2},
+     "quantum_source": "random"
+   }
+   ```
+
+Each solve leaves a `job_*` directory under `work_dir` with the rendered script,
+`input.npz`, `solver.json`, `output.npz`, `result.json` (or `error.json`) and the
+scheduler output.
+
+### Tests
+
+The tests in `algorithms/sqd/tests` cover only `sqd_fulqrum`. Run them from the
+repository root:
+
+```bash
+uv run pytest algorithms/sqd/tests
+```
+
+Tests skip when their dependencies are missing. The flow tests need `ffsim`,
+`prefect-qiskit` and `qcsc_workflow_utility`. The fulqrum comparison needs a
+fulqrum build. `test_sqd_fulqrum_slurm_integration.py` needs
+`SLURM_INTEGRATION=1` and `sbatch`. See
+`packages/qcsc-prefect-fulqrum/native/docker/RUNBOOK.md` for the testbed
+commands. No test contacts a Prefect server.
+
 ## 🧭 MPI Parameter Tuning
 
 The [perf](./perf/) module also includes example code for implementing a meta workflow.

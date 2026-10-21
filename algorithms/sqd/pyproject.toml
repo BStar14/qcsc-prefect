@@ -24,19 +24,27 @@ dependencies = [
     "qcsc_workflow_utility",
 ]
 
+[project.optional-dependencies]
+# sqd_fulqrum workflow. The compute node needs the fulqrum build separately
+# (packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh).
+fulqrum = ["qcsc-prefect-fulqrum"]
+
 [tool.uv.sources]
 qcsc-prefect-core = { path = "../../packages/qcsc-prefect-core", editable = true }
 qcsc-prefect-adapters = { path = "../../packages/qcsc-prefect-adapters", editable = true }
 qcsc-prefect-blocks = { path = "../../packages/qcsc-prefect-blocks", editable = true }
 qcsc-prefect-executor = { path = "../../packages/qcsc-prefect-executor", editable = true }
 qcsc-prefect-dice = { path = "../../packages/qcsc-prefect-dice", editable = true }
+qcsc-prefect-fulqrum = { path = "../../packages/qcsc-prefect-fulqrum", editable = true }
 qcsc_workflow_utility = { path = "../qcsc_workflow_utility", editable = true }
 
 [tool.setuptools]
-packages = ["sqd_dice"]
+packages = ["sqd_dice", "sqd_fulqrum"]
 include-package-data = true
 zip-safe = false
 
 [project.scripts]
 sqd-deploy = "sqd_dice.main:deploy"
 sqd-create-blocks = "sqd_dice.create_blocks:main"
+sqd-fulqrum-deploy = "sqd_fulqrum.main:deploy"
+sqd-fulqrum-create-blocks = "sqd_fulqrum.create_blocks:main"
