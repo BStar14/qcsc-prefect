@@ -29,6 +29,7 @@ class SlurmJobRequest:
     qpu: str | None = None
     memory: str | None = None
     ntasks: int | None = None
+    extra_directives: tuple[str, ...] = ()
 
 
 def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobRequest) -> dict:
@@ -56,6 +57,8 @@ def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobReq
         kw["memory"] = req.memory
     if req.ntasks is not None:
         kw["ntasks"] = req.ntasks
+    if req.extra_directives:
+        kw["extra_directives"] = list(req.extra_directives)
     if exec_profile.mpiprocs is not None:
         kw["mpiprocs"] = exec_profile.mpiprocs
     if exec_profile.ompthreads is not None:

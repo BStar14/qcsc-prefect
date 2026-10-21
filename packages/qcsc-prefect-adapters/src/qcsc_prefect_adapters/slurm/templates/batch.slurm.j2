@@ -24,6 +24,11 @@
 {%- if qpu is defined %}
 #SBATCH --qpu={{ qpu }}
 {%- endif %}
+{%- if extra_directives is defined %}
+{% for directive in extra_directives %}
+#SBATCH {{ directive }}
+{%- endfor %}
+{%- endif %}
 
 {%- if modules is defined %}
 {% for module in modules %}
