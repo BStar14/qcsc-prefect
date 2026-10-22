@@ -124,3 +124,133 @@ def test_compute_side_modules_do_not_import_prefect():
         check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.fixture
+def _clear_rank_env(monkeypatch):
+    for var in cli._PROCESS_INDEX_ENV_VARS + cli._PROCESS_COUNT_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({}, 0),
+        ({"OMPI_COMM_WORLD_RANK": "0"}, 0),
+        ({"OMPI_COMM_WORLD_RANK": "3"}, 3),
+        ({"PMI_RANK": "2"}, 2),
+        ({"PMIX_RANK": "5"}, 5),
+        ({"SLURM_PROCID": "7"}, 7),
+        # An MPI launcher's own variable wins over srun's.
+        ({"OMPI_COMM_WORLD_RANK": "1", "SLURM_PROCID": "4"}, 1),
+        # Unrecognizable values must not silence the process.
+        ({"PMI_RANK": "not-a-rank"}, 0),
+    ],
+)
+def test_process_index_reads_launcher_environment(_clear_rank_env, monkeypatch, env, expected):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert cli.process_index() == expected
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({}, True),
+        ({"OMPI_COMM_WORLD_RANK": "0"}, True),
+        ({"SLURM_PROCID": "0"}, True),
+        ({"OMPI_COMM_WORLD_RANK": "1"}, False),
+        ({"PMIX_RANK": "9"}, False),
+    ],
+)
+def test_is_control_process(_clear_rank_env, monkeypatch, env, expected):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert cli.is_control_process() is expected
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        ({}, 1),
+        ({"OMPI_COMM_WORLD_SIZE": "4"}, 4),
+        ({"PMI_SIZE": "8"}, 8),
+        ({"MPI_LOCALNRANKS": "2"}, 2),
+        ({"SLURM_NTASKS": "16"}, 16),
+        ({"PMI_SIZE": "bogus"}, 1),
+    ],
+)
+def test_process_count_reads_launcher_environment(_clear_rank_env, monkeypatch, env, expected):
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert cli.process_count() == expected
+
+
+def test_process_index_needs_no_mpi_library(_clear_rank_env, monkeypatch):
+    monkeypatch.setitem(sys.modules, "mpi4py", None)
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "2")
+    assert cli.process_index() == 2
+
+
+def test_noncontrol_process_solves_but_writes_nothing(
+    _clear_rank_env, monkeypatch, tmp_path, capsys
+):
+    _write_input(tmp_path)
+    calls = []
+    monkeypatch.setattr(cli, "solve_fulqrum", lambda **p: calls.append(p) or _fake_solve(**p))
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
+
+    assert cli.main([str(tmp_path)]) == 0
+    # The solve is collective: a non-control process still has to enter it.
+    assert len(calls) == 1
+    assert not (tmp_path / io_utils.OUTPUT_RESULT).exists()
+    assert not (tmp_path / io_utils.OUTPUT_ARRAYS).exists()
+    assert capsys.readouterr().out == ""
+
+
+def test_noncontrol_process_does_not_delete_control_outputs(_clear_rank_env, monkeypatch, tmp_path):
+    _write_input(tmp_path)
+    monkeypatch.setattr(cli, "solve_fulqrum", _fake_solve)
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "0")
+    assert cli.main([str(tmp_path)]) == 0
+    before = (tmp_path / io_utils.OUTPUT_RESULT).read_bytes()
+
+    # A late-starting peer must leave the control process's result in place.
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "2")
+    assert cli.main([str(tmp_path)]) == 0
+    assert (tmp_path / io_utils.OUTPUT_RESULT).read_bytes() == before
+
+
+def test_every_process_reports_failure(_clear_rank_env, monkeypatch, tmp_path):
+    _write_input(tmp_path)
+
+    def _boom(**_problem):
+        raise RuntimeError("solve exploded")
+
+    monkeypatch.setattr(cli, "solve_fulqrum", _boom)
+
+    # The scheduler may sample any process, so all of them must exit non-zero.
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
+    assert cli.main([str(tmp_path)]) == 1
+    assert io_utils.read_solver_error(tmp_path) is None
+
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "0")
+    assert cli.main([str(tmp_path)]) == 1
+    error = io_utils.read_solver_error(tmp_path)
+    assert error is not None and "solve exploded" in error["message"]
+
+
+def test_simulated_two_process_run_writes_one_result(
+    _clear_rank_env, monkeypatch, tmp_path, capsys
+):
+    _write_input(tmp_path)
+    monkeypatch.setattr(cli, "solve_fulqrum", _fake_solve)
+
+    for index in ("0", "1"):
+        monkeypatch.setenv("OMPI_COMM_WORLD_RANK", index)
+        assert cli.main([str(tmp_path)]) == 0
+
+    solution = io_utils.read_solver_output(tmp_path, norb=2)
+    assert solution.energy == pytest.approx(-0.75)
+    # One summary line, from the control process only.
+    assert capsys.readouterr().out.count("qcsc-fulqrum-solve: energy=") == 1

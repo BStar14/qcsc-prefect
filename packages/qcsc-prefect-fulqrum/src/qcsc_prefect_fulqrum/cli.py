@@ -4,8 +4,23 @@ This is the executable a scheduler job runs on the compute node. It needs only
 numpy, scipy, fulqrum, and this package (no Prefect), and it reads and writes
 the files described in :mod:`qcsc_prefect_fulqrum.io_utils`.
 
+Under a multi-process launcher (``srun``, ``mpirun``) every process runs this
+program. Every process reads the input and calls :func:`solve_fulqrum`, because a
+distributed solve is collective: all of them have to enter it. Only the control
+process (:func:`is_control_process`) touches the job directory or writes to
+stdout, so the processes cannot race on the result files. The process index
+comes from the launcher's environment, so no MPI library is needed to read it
+and the single-process path is unchanged.
+
+The ``process_index`` / ``process_count`` / ``is_control_process`` vocabulary
+follows :mod:`qiskit_addon_sqd.processes`.
+
 Exit codes: ``0`` success, ``1`` the solve failed (details in ``error.json``),
-``2`` usage error.
+``2`` usage error. A failing process returns ``1`` whether or not it is the
+control process, because the scheduler reports the job as failed only if the
+process it samples exited non-zero. A failure that only some processes hit is
+not handled here: one process failing inside a collective leaves the others
+waiting in it, which needs ``MPI_Abort`` or a communicator-wide check.
 """
 
 from __future__ import annotations
@@ -20,6 +35,71 @@ from . import io_utils
 from .solver import solve_fulqrum
 
 logger = logging.getLogger("qcsc_prefect_fulqrum")
+
+
+# Rank variables set by the common launchers. Mirrors the detection in
+# qiskit_addon_sqd.processes, which this module's vocabulary follows
+# (process_index, process_count, is_control_process).
+#
+# SLURM_PROCID is last: srun sets it, but so does sbatch for the batch step
+# itself, where it is 0 and agrees with the single-process default.
+_PROCESS_INDEX_ENV_VARS = (
+    "OMPI_COMM_WORLD_RANK",  # Open MPI
+    "PMI_RANK",  # Intel MPI, MPICH
+    "MPI_LOCALRANKID",  # IBM Spectrum MPI
+    "PMIX_RANK",  # PMIx-based launchers
+    "SLURM_PROCID",  # srun
+)
+
+_PROCESS_COUNT_ENV_VARS = (
+    "OMPI_COMM_WORLD_SIZE",  # Open MPI
+    "PMI_SIZE",  # Intel MPI, MPICH
+    "MPI_LOCALNRANKS",  # IBM Spectrum MPI
+    "SLURM_NTASKS",  # srun
+)
+
+
+def _env_int(names: tuple[str, ...], default: int) -> int:
+    for name in names:
+        value = os.environ.get(name)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except ValueError:
+            logger.warning("Ignoring non-integer %s=%r; assuming %d.", name, value, default)
+            return default
+    return default
+
+
+def process_index() -> int:
+    """Return the index of this process, 0 for the control process.
+
+    Unlike :mod:`qiskit_addon_sqd.processes`, the index is read from the
+    launcher's environment rather than from ``mpi4py``, so that the compute node
+    keeps its minimal dependency set of numpy, scipy and fulqrum. Launched as a
+    single process, or under a launcher none of these variables identify, the
+    index is 0.
+    """
+
+    return _env_int(_PROCESS_INDEX_ENV_VARS, 0)
+
+
+def process_count() -> int:
+    """Return the number of collective processes, 1 if not launched with many."""
+
+    return _env_int(_PROCESS_COUNT_ENV_VARS, 1)
+
+
+def is_control_process() -> bool:
+    """Return whether this process owns the job directory and stdout.
+
+    True for a single process and for index 0 of a multi-process launch. The
+    other processes take part in the solve but leave the result files and the
+    summary line to this one.
+    """
+
+    return process_index() == 0
 
 
 def _default_omp_threads() -> None:
@@ -57,19 +137,30 @@ def main(argv: list[str] | None = None) -> int:
         print(f"qcsc-fulqrum-solve: not a directory: {work_dir}", file=sys.stderr)
         return 2
 
-    # A stale result must never be read as the outcome of this run.
-    for name in (io_utils.OUTPUT_RESULT, io_utils.OUTPUT_ARRAYS, io_utils.OUTPUT_ERROR):
-        (work_dir / name).unlink(missing_ok=True)
+    # Resolved once: every branch below must agree on who is in control.
+    control = is_control_process()
+
+    # A stale result must never be read as the outcome of this run. Only the
+    # control process deletes, and only output files, which nothing reads.
+    if control:
+        for name in (io_utils.OUTPUT_RESULT, io_utils.OUTPUT_ARRAYS, io_utils.OUTPUT_ERROR):
+            (work_dir / name).unlink(missing_ok=True)
 
     _default_omp_threads()
     try:
         problem = io_utils.read_solver_input(work_dir)
         solution = solve_fulqrum(**problem)
-        io_utils.write_solver_output(work_dir, solution)
+        if control:
+            io_utils.write_solver_output(work_dir, solution)
     except Exception as exc:
         logger.exception("fulqrum solve failed in %s", work_dir)
-        io_utils.write_solver_error(work_dir, exc)
+        if control:
+            io_utils.write_solver_error(work_dir, exc)
+        # Every process fails the job: the scheduler may sample any one of them.
         return 1
+
+    if not control:
+        return 0
 
     meta = solution.metadata
     print(
