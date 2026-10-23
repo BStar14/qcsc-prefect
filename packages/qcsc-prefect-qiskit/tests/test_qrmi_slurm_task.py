@@ -8,9 +8,11 @@ import json
 import socket
 from types import SimpleNamespace
 
+import pytest
 from prefect import flow
 from prefect.client.orchestration import get_client
 from prefect.context import TaskRunContext
+from prefect.exceptions import ObjectNotFound
 from prefect.testing.utilities import prefect_test_harness
 from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiSlurmRuntime
 from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod
@@ -20,7 +22,10 @@ from qiskit.primitives.containers import BitArray, DataBin
 from qiskit_ibm_runtime import RuntimeEncoder
 
 
-def test_sampler_runs_as_prefect_task_with_prepare_callable(tmp_path, monkeypatch):
+@pytest.mark.parametrize("initial_not_found", [False, True])
+def test_sampler_runs_as_prefect_task_with_prepare_callable(
+    tmp_path, monkeypatch, initial_not_found
+):
     # The harness overrides the user's API URL and uses an isolated SQLite database.
     monkeypatch.setenv("PREFECT_HOME", str(tmp_path / "prefect"))
     monkeypatch.setenv("PREFECT_SERVER_ANALYTICS_ENABLED", "false")
@@ -104,13 +109,32 @@ def test_sampler_runs_as_prefect_task_with_prepare_callable(tmp_path, monkeypatc
         assert len(task_run_ids) == 1
         # Prefect records task state events asynchronously on the server.
         async with get_client() as client:
+            read_task_run = client.read_task_run
+            attempts = 0
+
+            async def read_after_registration(task_run_id):
+                nonlocal attempts
+                attempts += 1
+                # Reproduce a task that has not yet appeared in the API.
+                if initial_not_found and attempts == 1:
+                    raise ObjectNotFound(http_exc=RuntimeError("Simulated initial API 404"))
+                return await read_task_run(task_run_id)
+
+            monkeypatch.setattr(client, "read_task_run", read_after_registration)
             async with asyncio.timeout(10):
                 while True:
-                    task_run = await client.read_task_run(task_run_ids[0])
+                    try:
+                        task_run = await client.read_task_run(task_run_ids[0])
+                    except ObjectNotFound:
+                        # Registration may lag behind local task completion.
+                        await asyncio.sleep(0.1)
+                        continue
                     if task_run.state is not None and task_run.state.is_final():
                         break
                     await asyncio.sleep(0.1)
         assert task_run.state.is_completed()
+        if initial_not_found:
+            assert attempts >= 2
         return result
 
     with prefect_test_harness():
