@@ -25,7 +25,7 @@ def positive_shots(value) -> int:
 
 
 def resolve_shots(shots, options: Mapping | None) -> int:
-    """Accept the pinned PR's params.shots subset; never ignore other options."""
+    """Resolve explicit shots or options['params']['shots']; reject unsupported options."""
     if options is None:
         options = {}
     if not isinstance(options, Mapping):
@@ -41,7 +41,11 @@ def resolve_shots(shots, options: Mapping | None) -> int:
     explicit = positive_shots(shots) if shots is not None else None
     if explicit is not None and option_shots is not None and explicit != option_shots:
         raise ValueError("shots conflicts with options['params']['shots']")
-    return explicit if explicit is not None else option_shots if option_shots is not None else 100
+    if explicit is not None:
+        return explicit
+    if option_shots is not None:
+        return option_shots
+    return 100
 
 
 def circuit_registers(circuit: QuantumCircuit) -> dict[str, int]:

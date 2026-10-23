@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import socket
 import sys
@@ -17,7 +18,13 @@ from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod  # noqa
 from qcsc_prefect.integrations.qiskit.qrmi import worker  # noqa: E402
 from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
 
-from examples.qrmi_slurm_bell.flow import bell_flow  # noqa: E402
+# Load this source example without requiring the repository root on sys.path.
+_FLOW_PATH = Path(__file__).resolve().parents[3] / "examples" / "qrmi_slurm_bell" / "flow.py"
+_SPEC = importlib.util.spec_from_file_location("qrmi_slurm_bell_flow", _FLOW_PATH)
+assert _SPEC is not None and _SPEC.loader is not None
+_FLOW_MODULE = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_FLOW_MODULE)
+bell_flow = _FLOW_MODULE.bell_flow
 
 
 @pytest.fixture(autouse=True)

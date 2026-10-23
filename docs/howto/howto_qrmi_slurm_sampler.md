@@ -107,7 +107,8 @@ workflow-host Target acquisition or a Qiskit primitive job handle.
 Each call creates a new directory and submits a new job. Sampling-task caching
 and automatic retries are disabled. Calling again after failure submits again.
 `watch_poll_interval` and `timeout_seconds` are passed to the existing executor.
-A monitoring timeout does not guarantee cancellation of the quantum workload.
+`timeout_seconds` limits monitoring: expiry raises `WaitTimeout` without calling
+`scancel`. The Slurm job and quantum workload may continue after the caller times out.
 Single-job monitoring uses the controller while its matching record exists and
 falls back to accounting when necessary; bulk monitoring is unchanged.
 
@@ -155,21 +156,27 @@ Update the workflow and compute-node installations together. The worker accepts
 every eligible node before submitting work. The default CLI executable is
 `task_runner` beside the worker's Python; `--task-runner` can override it.
 
-## Offline tests
+## Local tests
 
 From the repository root, with the workspace dependencies installed:
 
 ```bash
-python -m pytest \
+uv run --no-sync pytest \
   packages/qcsc-prefect-qiskit/tests/test_qrmi_slurm_runtime.py \
+  packages/qcsc-prefect-qiskit/tests/test_qrmi_slurm_task.py \
   packages/qcsc-prefect-executor/tests/test_qrmi_slurm_bell.py \
   packages/qcsc-prefect-adapters/tests/test_slurm_runtime.py -q
 ```
 
-Tests replace Slurm and QRMI service calls and block network access. The Bell
+Unit tests replace Slurm and QRMI service calls and block network access. The Bell
 example test passes the circuit through real QPY serialization, default Target
 compilation, QASM export, a fake CLI process and result decoding. The fake CLI
 checks the compiled Bell state and returns deterministic encoded samples.
 The separate QASM-import boundary test requires the optional
 `qiskit-qasm3-import` package and is skipped when it is not installed.
-These offline tests do not establish hardware fidelity or cluster deployment.
+A separate Prefect integration test starts a temporary local server with
+`prefect_test_harness`. It runs a flow and the real sampling task with a
+`QuantumCircuit` and a runtime containing a preparation callable, then checks the
+completed task state and returned `BitArray`. Only the Slurm submission boundary
+is replaced; the test makes no QRMI or QPU calls and rejects external connections.
+These local tests do not establish hardware fidelity or cluster deployment.

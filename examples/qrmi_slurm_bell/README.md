@@ -90,7 +90,7 @@ a fidelity threshold.
 ## Offline verification
 
 ```bash
-python -m pytest packages/qcsc-prefect-executor/tests/test_qrmi_slurm_bell.py -q
+uv run --no-sync pytest packages/qcsc-prefect-executor/tests/test_qrmi_slurm_bell.py -q
 ```
 
 The test replaces the scheduler and QRMI service, runs the installed worker code,
