@@ -14,7 +14,7 @@ from prefect.client.orchestration import get_client
 from prefect.context import TaskRunContext
 from prefect.exceptions import ObjectNotFound
 from prefect.testing.utilities import prefect_test_harness
-from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiSlurmRuntime
+from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiRuntime
 from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod
 from qiskit import QuantumCircuit, qpy
 from qiskit.primitives import PrimitiveResult, SamplerPubResult
@@ -58,7 +58,7 @@ def test_sampler_runs_as_prefect_task_with_prepare_callable(
         circuit.metadata = {"prepared": True}
         return PreparedCircuit(circuit, {"seed": 24})
 
-    runtime = QrmiSlurmRuntime(
+    runtime = QrmiRuntime(
         root_dir=tmp_path / "jobs",
         command_block_name="test-command",
         execution_profile_block_name="test-execution",

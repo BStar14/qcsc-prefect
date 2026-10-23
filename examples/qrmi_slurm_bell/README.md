@@ -1,7 +1,7 @@
 # Bell sampling with QRMI and Slurm
 
 This example creates a two-qubit Bell circuit, measures both qubits, and submits
-it through `QrmiSlurmRuntime`. It uses the installed compute-node worker and
+it through `QrmiRuntime(scheduler="slurm", ...)`. It uses the installed compute-node worker and
 default compiler. It needs no custom compiler module, test fixture, or source-path
 modification. The Python flow returns a dictionary with width, shots, counts and
 Slurm metadata; the CLI prints it as JSON.

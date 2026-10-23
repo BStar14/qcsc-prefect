@@ -1,10 +1,15 @@
 # QRMI/Slurm Sampler
 
-`qcsc_prefect.integrations.qiskit.qrmi.QrmiSlurmRuntime` samples one bound,
+`qcsc_prefect.integrations.qiskit.qrmi.QrmiRuntime` samples one bound,
 measured circuit through a Slurm allocation and a QRMI IBM Quantum Batch.
 The workflow host writes QPY and JSON to shared storage. The compute node
 acquires the QRMI Target, transpiles the circuit, and launches `task_runner`.
 The caller receives a native `PrimitiveResult`.
+
+Select this execution path with `scheduler="slurm"` (the default).
+Direct QRMI execution without Slurm (`scheduler="iqp"`) is not implemented
+and raises `NotImplementedError` at construction; other scheduler values
+raise `ValueError`.
 
 ## Responsibilities
 
@@ -70,15 +75,16 @@ It does not change the mode or print the token.
 ```python
 from pathlib import Path
 from qiskit import QuantumCircuit
-from qcsc_prefect.integrations.qiskit.qrmi import QrmiSlurmRuntime
+from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime
 
 circuit = QuantumCircuit(2)
 circuit.h(0)
 circuit.cx(0, 1)
 circuit.measure_all()
 
-runtime = QrmiSlurmRuntime(
+runtime = QrmiRuntime(
     root_dir=Path("/shared/quantum-jobs"),
+    scheduler="slurm",
     command_block_name="my-qrmi-command",
     execution_profile_block_name="my-qrmi-execution",
     hpc_profile_block_name="my-qrmi-hpc",

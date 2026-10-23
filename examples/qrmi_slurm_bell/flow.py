@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from prefect import flow
-from qcsc_prefect.integrations.qiskit.qrmi import QrmiSlurmRuntime
+from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime
 from qiskit import QuantumCircuit
 
 
@@ -27,8 +27,9 @@ async def bell_flow(
     circuit.cx(0, 1)
     circuit.measure_all()
 
-    runtime = QrmiSlurmRuntime(
+    runtime = QrmiRuntime(
         root_dir=Path(work_dir),
+        scheduler="slurm",
         command_block_name=command_block_name,
         execution_profile_block_name=execution_profile_block_name,
         hpc_profile_block_name=hpc_profile_block_name,
