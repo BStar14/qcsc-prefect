@@ -3,7 +3,8 @@
 Native Qiskit Runtime integration utilities for QCSC Prefect workflows.
 
 QRMI Batch sampling through Slurm is available as
-`qcsc_prefect.integrations.qiskit.qrmi.QrmiSlurmRuntime`.
+`qcsc_prefect.integrations.qiskit.qrmi.QrmiRuntime`.
+Use `scheduler="slurm"` (the default). `scheduler="iqp"` is not implemented.
 Install the `slurm` extra on the workflow host to include the HPC executor.
 The compute-node entrypoint is `python -m qcsc_prefect.integrations.qiskit.qrmi.worker`
 or `qcsc-qrmi-sampler`.

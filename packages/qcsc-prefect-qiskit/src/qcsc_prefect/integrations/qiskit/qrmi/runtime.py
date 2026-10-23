@@ -6,6 +6,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from prefect import task
@@ -36,8 +37,11 @@ class PreparedCircuit:
 
 
 @dataclass
-class QrmiSlurmRuntime:
-    """Sample one bound, measured circuit in one Slurm/QRMI Batch allocation.
+class QrmiRuntime:
+    """Sample one bound, measured circuit through QRMI.
+
+    Only ``scheduler="slurm"`` is currently supported. Direct QRMI execution
+    without Slurm (``scheduler="iqp"``) is not implemented.
 
     ``prepare`` runs before QPY serialization. ``transpiler`` is an importable
     ``module:function(circuit, target, config)`` on the compute node. Both hosts
@@ -55,10 +59,21 @@ class QrmiSlurmRuntime:
     transpile_config: dict = field(default_factory=dict)
     watch_poll_interval: float = 2.0
     timeout_seconds: float | None = None
+    scheduler: Literal["slurm"] = field(default="slurm", kw_only=True)
+
+    def __post_init__(self) -> None:
+        self._validate_scheduler()
+
+    def _validate_scheduler(self) -> None:
+        if self.scheduler == "iqp":
+            raise NotImplementedError('scheduler="iqp" is not implemented; use scheduler="slurm"')
+        if self.scheduler != "slurm":
+            raise ValueError(f"Unsupported scheduler: {self.scheduler!r}; expected 'slurm'")
 
     async def sampler(
         self, sampler_pubs, *, shots: int | None = None, options: Mapping | None = None
     ) -> PrimitiveResult:
+        self._validate_scheduler()
         shots = resolve_shots(shots, options)
         pubs = list(sampler_pubs)
         if len(pubs) != 1 or not isinstance(pubs[0], (tuple, list)) or len(pubs[0]) != 1:

@@ -6,11 +6,12 @@ import asyncio
 import json
 import socket
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
 import pytest
-from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiSlurmRuntime, worker
+from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiRuntime, worker
 from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod
 from qiskit import ClassicalRegister, QuantumCircuit, qpy
 from qiskit.circuit import Parameter
@@ -65,7 +66,7 @@ def offline(monkeypatch):
 
 @pytest.fixture
 def runtime(tmp_path):
-    return QrmiSlurmRuntime(
+    return QrmiRuntime(
         root_dir=tmp_path / "jobs",
         command_block_name="sampler-command",
         execution_profile_block_name="quantum-execution",
@@ -89,6 +90,36 @@ def submitted(monkeypatch):
 
     monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
     return calls
+
+
+def test_explicit_slurm_scheduler_submits_and_decodes_result(runtime, submitted):
+    assert runtime.scheduler == "slurm"
+    explicit = replace(runtime, scheduler="slurm")
+    result = asyncio.run(explicit.sampler([(measured_circuit(),)], shots=4))
+    assert len(submitted) == 1
+    assert submitted[0]["script_filename"] == "sampler.slurm"
+    assert result[0].data.readout.num_shots == 4
+
+
+@pytest.mark.parametrize(
+    "scheduler,exception,message",
+    [
+        ("iqp", NotImplementedError, 'scheduler="iqp" is not implemented'),
+        ("unknown", ValueError, "Unsupported scheduler"),
+        (None, ValueError, "Unsupported scheduler"),
+    ],
+)
+def test_unsupported_scheduler_fails_before_submission(
+    runtime, submitted, scheduler, exception, message
+):
+    with pytest.raises(exception, match=message):
+        replace(runtime, scheduler=scheduler)
+    # The mutable runtime must also reject a scheduler changed after construction.
+    runtime.scheduler = scheduler
+    with pytest.raises(exception, match=message):
+        asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    assert submitted == []
+    assert not runtime.root_dir.exists()
 
 
 @pytest.mark.parametrize(
@@ -354,7 +385,7 @@ class Reject(importlib.abc.MetaPathFinder):
         if fullname.split('.')[0] in {'examples', 'qrmi', 'qcsc_prefect_executor'}:
             raise AssertionError(fullname)
 sys.meta_path.insert(0, Reject())
-from qcsc_prefect.integrations.qiskit.qrmi import QrmiSlurmRuntime
+from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime
 from qcsc_prefect.integrations.qiskit.qrmi.worker import main
 """
     # Test source packages in a fresh interpreter, without inherited imports.
