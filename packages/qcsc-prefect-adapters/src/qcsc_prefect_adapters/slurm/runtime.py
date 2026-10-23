@@ -82,8 +82,8 @@ def _is_terminal_state(state: str) -> bool:
 class SlurmRuntime:
     """Async runtime wrapper for Slurm scheduler commands.
 
-    This class is the low-level boundary around ``sbatch``, ``sacct``, and
-    ``scancel``. Workflow code usually calls
+    This class is the low-level boundary around ``sbatch``, ``scontrol``,
+    ``sacct``, and ``scancel``. Workflow code usually calls
     `qcsc_prefect_executor.slurm.run.run_slurm_job` or
     `qcsc_prefect_executor.from_blocks.run_job_from_blocks` instead.
     """
@@ -126,30 +126,35 @@ class SlurmRuntime:
         watch_poll_interval: float = 10.0,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
-        """Poll ``sacct`` until the job reaches a terminal state.
+        """Poll ``scontrol``, falling back to ``sacct`` when no job is available.
 
-        The returned dictionary is normalized to the fields requested from
-        ``sacct``: ``JobID``, ``State``, ``ExitCode``, ``Elapsed``,
+        A matching controller record is sufficient while a job is pending or
+        running, so Slurm accounting is not required during normal execution.
+        Scheduler query failures retain the existing retry/fallback behavior.
+        The returned fields are ``JobID``, ``State``, ``ExitCode``, ``Elapsed``,
         ``AllocCPUS``, and ``NodeList``.
 
         Args:
             job_id: Slurm job id to watch.
-            watch_poll_interval: Seconds to wait between ``sacct`` calls.
+            watch_poll_interval: Seconds to wait between scheduler queries.
             timeout_seconds: Optional maximum wait time.
 
         Returns:
-            Parsed terminal ``sacct`` row for the batch job.
+            Normalized terminal status for the batch job.
 
         Raises:
             WaitTimeout: If ``timeout_seconds`` elapses before a terminal state.
-            RuntimeError: If an underlying ``sacct`` command fails.
         """
 
+        start = asyncio.get_running_loop().time()
         try:
             while True:
+                if timeout_seconds is not None:
+                    if asyncio.get_running_loop().time() - start > timeout_seconds:
+                        raise WaitTimeout(f"timeout waiting for job_id={job_id}")
                 try:
                     stdout = await run_command("scontrol", "show", "job", "-o", job_id)
-
+                    found_job = False
                     if stdout.strip():
                         # scontrol -o gives a single line of space-separated key=value pairs per job
                         for line in stdout.strip().split("\n"):
@@ -160,6 +165,10 @@ class SlurmRuntime:
                                 if "=" in token:
                                     k, v = token.split("=", 1)
                                     job_data[k] = v
+
+                            if job_data.get("JobId") != job_id or not job_data.get("JobState"):
+                                continue
+                            found_job = True
 
                             # Map scontrol fields to your required dictionary keys
                             # Note: scontrol uses 'JobId', 'JobState',
@@ -176,24 +185,16 @@ class SlurmRuntime:
                             }
 
                             # Check if job finished
-                            final_states = [
-                                "BOOT_FAIL",
-                                "COMPLETED",
-                                "FAILED",
-                                "CANCELLED",
-                                "DEADLINE",
-                                "TIMEOUT",
-                                "NODE_FAIL",
-                                "OUT_OF_MEMORY",
-                                "PREEMPTED",
-                            ]
-                            if out["State"] in final_states:
+                            if _is_terminal_state(out["State"]):
                                 exit_code = out["ExitCode"].split(":")[0]
                                 self.logger.info(
                                     f"Job {job_id} finished with state {out['State']} "
                                     f"and exit code {exit_code}"
                                 )
                                 return out
+                    if found_job:
+                        await asyncio.sleep(watch_poll_interval)
+                        continue
                 except Exception as e:
                     self.logger.warning(f"scontrol command failed for job {job_id}: {e}")
 
@@ -210,10 +211,9 @@ class SlurmRuntime:
                     if stdout.strip():
                         for line in stdout.strip().split("\n"):
                             fields = line.split("|")
-                            job_id_field = fields[0]
-
-                            # Skip job steps (.batch, .extern)
-                            if "." in job_id_field or "+" in job_id_field:
+                            if len(fields) < 6 or fields[0].strip() != job_id:
+                                continue
+                            if not fields[1].strip():
                                 continue
 
                             out = {
@@ -226,14 +226,7 @@ class SlurmRuntime:
                             }
 
                             # Check if job finished
-                            final_states = [
-                                "COMPLETED",
-                                "FAILED",
-                                "CANCELLED",
-                                "TIMEOUT",
-                                "NODE_FAIL",
-                            ]
-                            if out["State"] in final_states:
+                            if _is_terminal_state(out["State"]):
                                 exit_code = out["ExitCode"].split(":")[0]
                                 self.logger.info(
                                     f"Job {job_id} finished with state {out['State']} "
