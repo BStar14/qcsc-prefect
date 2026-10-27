@@ -56,7 +56,7 @@ def test_sampler_runs_as_prefect_task_with_prepare_callable(
     def prepare(circuit):
         prepared.append(circuit)
         circuit.metadata = {"prepared": True}
-        return PreparedCircuit(circuit, {"seed": 24})
+        return PreparedCircuit(circuit, {"seed_transpiler": 24})
 
     runtime = QrmiRuntime(
         root_dir=tmp_path / "jobs",
@@ -82,7 +82,9 @@ def test_sampler_runs_as_prefect_task_with_prepare_callable(
         with (work_dir / "circuit.qpy").open("rb") as stream:
             (restored,) = qpy.load(stream)
         assert restored.metadata == {"prepared": True}
-        assert json.loads((work_dir / "transpile_config.json").read_text()) == {"seed": 24}
+        assert json.loads((work_dir / "transpile_config.json").read_text()) == {
+            "seed_transpiler": 24
+        }
         request = json.loads((work_dir / "sampler_request.json").read_text())
         assert request["shots"] == 100
         assert request["registers"] == {"meas": 2}
