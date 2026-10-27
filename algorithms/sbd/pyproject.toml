@@ -17,10 +17,15 @@ dependencies = [
     "ffsim",
     "qiskit-addon-sqd",
     "prefect-qiskit",
-    "prefect[aws,ray]",
+    "prefect[aws]>=3.4.14",
     "pydantic_numpy",
     "qcsc_workflow_utility",
 ]
+
+[project.optional-dependencies]
+# Ray is an optional task runner backend. Without it, the flow uses the
+# ProcessPoolTaskRunner / ConcurrentTaskRunner (see SBD_TASK_RUNNER).
+ray = ["prefect-ray"]
 
 [tool.uv.sources]
 qcsc_workflow_utility = { path = "../qcsc_workflow_utility", editable = true }

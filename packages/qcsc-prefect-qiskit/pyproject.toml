@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qcsc-prefect-qiskit"
-version = "0.2.5"
+version = "0.3.0"
 description = "Native Qiskit integration utilities for QCSC Prefect workflows"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,12 @@ dependencies = [
     "pydantic>=2",
     "qiskit-ibm-runtime>=0.46",
 ]
+
+[project.optional-dependencies]
+slurm = ["qcsc-prefect-executor==0.3.0"]
+
+[project.scripts]
+qcsc-qrmi-sampler = "qcsc_prefect.integrations.qiskit.qrmi.worker:main"
 
 [project.urls]
 Homepage = "https://github.com/qiskit-community/qcsc-prefect"

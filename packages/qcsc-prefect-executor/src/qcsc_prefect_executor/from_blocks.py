@@ -590,6 +590,7 @@ async def _prepare_job_from_blocks(
             qpu=hpc_block.slurm_qpu,
             memory=getattr(hpc_block, "slurm_memory", None),
             ntasks=getattr(hpc_block, "slurm_ntasks", None),
+            extra_directives=tuple(hpc_block.slurm_extra_directives),
         )
     else:
         raise NotImplementedError(

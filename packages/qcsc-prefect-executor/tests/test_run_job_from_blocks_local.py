@@ -61,6 +61,7 @@ class _HPCProfileBlockStub:
         slurm_qpu: str | None = None,
         slurm_memory: str | None = None,
         slurm_ntasks: int | None = None,
+        slurm_extra_directives: list[str] | None = None,
     ) -> None:
         self.hpc_target = hpc_target
         self.executable_map = executable_map
@@ -75,6 +76,7 @@ class _HPCProfileBlockStub:
         self.slurm_qpu = slurm_qpu
         self.slurm_memory = slurm_memory
         self.slurm_ntasks = slurm_ntasks
+        self.slurm_extra_directives = slurm_extra_directives or []
 
 
 def _patch_block_loading(monkeypatch, command, profile, hpc):
@@ -349,6 +351,11 @@ def test_run_job_from_blocks_dispatches_to_slurm(monkeypatch, tmp_path: Path):
         slurm_qpu="a100",
         slurm_memory="5001G",
         slurm_ntasks=8,
+        slurm_extra_directives=[
+            "--workload-kind=quantum",
+            "--circ-count=1",
+            "--max-qubits=20",
+        ],
     )
     _patch_block_loading(monkeypatch, command, profile, hpc)
 
@@ -393,6 +400,11 @@ def test_run_job_from_blocks_dispatches_to_slurm(monkeypatch, tmp_path: Path):
     assert captured["req"].qpu == "a100"
     assert captured["req"].memory == "5001G"
     assert captured["req"].ntasks == 8
+    assert captured["req"].extra_directives == (
+        "--workload-kind=quantum",
+        "--circ-count=1",
+        "--max-qubits=20",
+    )
     assert captured["metrics_artifact_key"] == "slurm-metrics"
     assert captured["exec_profile"].launcher == "srun"
     assert captured["exec_profile"].mpi_options == ["--cpu-bind=cores"]
