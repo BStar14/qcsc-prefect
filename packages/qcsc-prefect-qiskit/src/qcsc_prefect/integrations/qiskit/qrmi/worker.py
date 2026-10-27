@@ -36,7 +36,7 @@ def require_batch_environment(resource: str) -> None:
 
 def generic_transpile(circuit, target, config):
     """Configure a preset pass manager using JSON options and the actual Target."""
-    options = preset_pass_manager_options(config)
+    options = preset_pass_manager_options(config, num_qubits=circuit.num_qubits)
     return generate_preset_pass_manager(target=target, **options).run(circuit)
 
 

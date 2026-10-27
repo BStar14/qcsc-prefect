@@ -21,7 +21,7 @@ PRESET_OPTIONS = frozenset(
 )
 
 
-def preset_pass_manager_options(config: dict) -> dict:
+def preset_pass_manager_options(config: dict, *, num_qubits: int) -> dict:
     """Validate portable preset options without acquiring a Target on the host.
 
     Qiskit validates target-dependent constraints and plugin settings on the node.
@@ -45,4 +45,29 @@ def preset_pass_manager_options(config: dict) -> dict:
             raise ValueError("initial_layout must be a list of nonnegative physical qubit indices")
         if len(set(layout)) != len(layout):
             raise ValueError("initial_layout must not contain duplicate physical qubit indices")
+        if len(layout) != num_qubits:
+            raise ValueError(
+                "initial_layout must have exactly one entry per circuit qubit "
+                f"(expected {num_qubits}, got {len(layout)})"
+            )
+    for name in (
+        "layout_method",
+        "routing_method",
+        "translation_method",
+        "scheduling_method",
+        "init_method",
+        "optimization_method",
+        "unitary_synthesis_method",
+    ):
+        method = options.get(name)
+        if method is not None and not isinstance(method, str):
+            raise ValueError(f"{name} must be a string or None")
+    degree = options.get("approximation_degree")
+    if degree is not None and (type(degree) not in (int, float) or not 0 <= degree <= 1):
+        raise ValueError("approximation_degree must be a number from 0 to 1 or None")
+    if "qubits_initially_zero" in options and type(options["qubits_initially_zero"]) is not bool:
+        raise ValueError("qubits_initially_zero must be a bool")
+    plugin_config = options.get("unitary_synthesis_plugin_config")
+    if plugin_config is not None and not isinstance(plugin_config, dict):
+        raise ValueError("unitary_synthesis_plugin_config must be a dict or None")
     return options

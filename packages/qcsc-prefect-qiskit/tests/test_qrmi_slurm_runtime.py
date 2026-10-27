@@ -13,7 +13,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiRuntime, worker
 from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod
-from qiskit import ClassicalRegister, QuantumCircuit, qpy
+from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister, qpy
 from qiskit.circuit import Parameter
 from qiskit.primitives import PrimitiveResult, SamplerPubResult
 from qiskit.primitives.containers import BitArray, DataBin
@@ -214,6 +214,44 @@ def test_prepare_config_and_qpy_handoff_does_not_mutate_input(runtime, submitted
     assert result.metadata["qcsc_slurm"]["job_id"] == "73"
 
 
+@pytest.mark.parametrize("layout", [[2, 0], [2, 0, 1]])
+def test_prepared_layout_overrides_runtime_config_and_matches_prepared_circuit(
+    runtime, submitted, layout
+):
+    def prepare(circuit):
+        if len(layout) == 3:
+            circuit.add_register(QuantumRegister(1, "extra"))
+        return PreparedCircuit(circuit, {"initial_layout": layout})
+
+    runtime.prepare = prepare
+    runtime.transpile_config = {"initial_layout": [0]}
+    original = measured_circuit()
+    asyncio.run(runtime.sampler([(original,)], shots=4))
+    work_dir = submitted[0]["work_dir"]
+    assert json.loads((work_dir / "transpile_config.json").read_text()) == {
+        "initial_layout": layout
+    }
+    with (work_dir / "circuit.qpy").open("rb") as stream:
+        (restored,) = qpy.load(stream)
+    assert restored.num_qubits == len(layout)
+    assert original.num_qubits == 2
+
+
+@pytest.mark.parametrize("layout,num_qubits", [([0], 2), ([0, 1, 2], 2), ([0, 1], 3)])
+def test_invalid_prepared_layout_fails_before_submission(runtime, submitted, layout, num_qubits):
+    def prepare(circuit):
+        if num_qubits == 3:
+            circuit.add_register(QuantumRegister(1, "extra"))
+        return PreparedCircuit(circuit, {"initial_layout": layout})
+
+    runtime.prepare = prepare
+    runtime.transpile_config = {"initial_layout": [0, 1]}
+    with pytest.raises(ValueError, match=f"expected {num_qubits}, got {len(layout)}"):
+        asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    assert submitted == []
+    assert not runtime.root_dir.exists()
+
+
 @pytest.mark.parametrize(
     "config",
     [
@@ -221,6 +259,9 @@ def test_prepare_config_and_qpy_handoff_does_not_mutate_input(runtime, submitted
         {"initial_layout": [True, 1]},
         {"initial_layout": [-1, 1]},
         {"initial_layout": {"0": 1}},
+        {"initial_layout": []},
+        {"initial_layout": [0]},
+        {"initial_layout": [0, 1, 2]},
         {"optimization_level": True},
         {"optimization_level": 4},
         {"optimization_level": 1.0},
@@ -232,6 +273,33 @@ def test_prepare_config_and_qpy_handoff_does_not_mutate_input(runtime, submitted
         {"backend": None},
         {"coupling_map": [[0, 1]]},
         {"basis_gates": ["cx"]},
+        {"approximation_degree": -0.1},
+        {"approximation_degree": 1.1},
+        {"approximation_degree": True},
+        {"approximation_degree": "0.5"},
+        {"approximation_degree": []},
+        {"approximation_degree": float("nan")},
+        {"approximation_degree": float("inf")},
+        {"qubits_initially_zero": 0},
+        {"qubits_initially_zero": 1},
+        {"qubits_initially_zero": None},
+        {"qubits_initially_zero": "true"},
+        {"unitary_synthesis_plugin_config": []},
+        {"unitary_synthesis_plugin_config": "config"},
+        {"unitary_synthesis_plugin_config": False},
+        *[
+            {method: value}
+            for method in (
+                "layout_method",
+                "routing_method",
+                "translation_method",
+                "scheduling_method",
+                "init_method",
+                "optimization_method",
+                "unitary_synthesis_method",
+            )
+            for value in (1, [], {})
+        ],
     ],
 )
 def test_invalid_preset_options_fail_before_submission(runtime, submitted, config):
@@ -243,6 +311,40 @@ def test_invalid_preset_options_fail_before_submission(runtime, submitted, confi
     # The compute node also validates files independently of the workflow host.
     with pytest.raises(ValueError):
         worker.generic_transpile(measured_circuit(), None, config)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"initial_layout": None},
+        {"approximation_degree": None},
+        {"approximation_degree": 0},
+        {"approximation_degree": 1},
+        {"approximation_degree": 0.5},
+        {"qubits_initially_zero": True},
+        {"qubits_initially_zero": False},
+        {"unitary_synthesis_plugin_config": None},
+        {"unitary_synthesis_plugin_config": {"plugin_option": [1, "value"]}},
+        *[
+            {method: value}
+            for method in (
+                "layout_method",
+                "routing_method",
+                "translation_method",
+                "scheduling_method",
+                "init_method",
+                "optimization_method",
+                "unitary_synthesis_method",
+            )
+            for value in (None, "node_plugin")
+        ],
+    ],
+)
+def test_valid_preset_types_and_boundaries_are_forwarded(runtime, submitted, config):
+    # Plugin existence and plugin-specific configuration remain compute-node checks.
+    runtime.transpile_config = config
+    asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    assert json.loads((submitted[0]["work_dir"] / "transpile_config.json").read_text()) == config
 
 
 def test_generic_transpile_applies_physical_layout_and_preserves_registers():

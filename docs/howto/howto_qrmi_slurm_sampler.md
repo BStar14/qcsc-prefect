@@ -143,8 +143,9 @@ result = await runtime.sampler([(circuit,)], shots=100)
 `initial_layout[i]` is the physical qubit index for logical qubit `i` in the
 prepared circuit. Use a list of distinct nonnegative integers, rather than a
 Qiskit `Layout` object, so the setting can cross the JSON/QPY boundary. The list
-must cover the circuit's qubits and fit the compute-node Target. Routing can
-change the final placement; the compiled circuit's layout is retained in `isa.qpy`.
+must have exactly one entry per prepared circuit qubit and fit the compute-node
+Target. Routing can change the final placement; the compiled circuit's layout is
+retained in `isa.qpy`.
 
 The supported keys match the corresponding Qiskit preset pass manager arguments:
 
@@ -154,7 +155,12 @@ The supported keys match the corresponding Qiskit preset pass manager arguments:
 - `unitary_synthesis_method`, `unitary_synthesis_plugin_config`, `qubits_initially_zero`.
 
 All values must be JSON serializable. Unknown keys, invalid optimization levels
-and seeds, and malformed or duplicate layout indices fail before submission.
+and seeds, and malformed, duplicate or incorrectly sized layouts fail before
+submission. Method options must be strings or `None`; `approximation_degree`
+must be a number in [0, 1] or `None` (booleans are rejected).
+`qubits_initially_zero` must be a boolean, and `unitary_synthesis_plugin_config`
+must be a dictionary or `None`. Validation uses the prepared circuit and merged
+configuration, including any overrides from `PreparedCircuit.config`.
 Qiskit validates target-dependent constraints and installed plugin names on the
 compute node. Target/backend, basis-gate and coupling-map overrides are excluded:
 the compiler always uses the actual Target acquired inside the Slurm allocation.

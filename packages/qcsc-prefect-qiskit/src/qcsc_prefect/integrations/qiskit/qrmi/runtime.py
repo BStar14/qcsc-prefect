@@ -97,7 +97,7 @@ class QrmiRuntime:
         # Validate JSON before creating a job directory or starting any task.
         json.dumps(config, allow_nan=False)
         if self.transpiler == DEFAULT_TRANSPILER:
-            preset_pass_manager_options(config)
+            preset_pass_manager_options(config, num_qubits=prepared.circuit.num_qubits)
         return await _sample_on_slurm(prepared.circuit, shots, registers, config, self)
 
 
