@@ -20,6 +20,7 @@ from .contract import (
     decode_result,
     positive_shots,
 )
+from .transpilation import preset_pass_manager_options
 
 
 def require_batch_environment(resource: str) -> None:
@@ -34,10 +35,9 @@ def require_batch_environment(resource: str) -> None:
 
 
 def generic_transpile(circuit, target, config):
-    """Default compilation; algorithm-specific passes belong in external hooks."""
-    if config:
-        raise ValueError("generic_transpile does not accept algorithm-specific config")
-    return generate_preset_pass_manager(optimization_level=1, target=target).run(circuit)
+    """Configure a preset pass manager using JSON options and the actual Target."""
+    options = preset_pass_manager_options(config, num_qubits=circuit.num_qubits)
+    return generate_preset_pass_manager(target=target, **options).run(circuit)
 
 
 def validate_isa(circuit, target) -> None:

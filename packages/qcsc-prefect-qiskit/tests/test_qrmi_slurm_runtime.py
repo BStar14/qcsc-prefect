@@ -13,7 +13,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiRuntime, worker
 from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod
-from qiskit import ClassicalRegister, QuantumCircuit, qpy
+from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister, qpy
 from qiskit.circuit import Parameter
 from qiskit.primitives import PrimitiveResult, SamplerPubResult
 from qiskit.primitives.containers import BitArray, DataBin
@@ -197,17 +197,231 @@ def test_prepare_config_and_qpy_handoff_does_not_mutate_input(runtime, submitted
 
     def prepare(circuit):
         circuit.x(1)
-        return PreparedCircuit(circuit, {"seed": 24})
+        return PreparedCircuit(circuit, {"seed_transpiler": 24})
 
     runtime.prepare = prepare
+    runtime.transpile_config = {"seed_transpiler": 1, "initial_layout": [2, 0]}
     result = asyncio.run(runtime.sampler([(original,)], shots=4))
     work_dir = Path(result.metadata["qcsc_slurm"]["work_dir"])
     with (work_dir / "circuit.qpy").open("rb") as stream:
         (restored,) = qpy.load(stream)
     assert "x" not in original.count_ops()
     assert restored.count_ops()["x"] == 1
-    assert json.loads((work_dir / "transpile_config.json").read_text()) == {"seed": 24}
+    assert json.loads((work_dir / "transpile_config.json").read_text()) == {
+        "seed_transpiler": 24,
+        "initial_layout": [2, 0],
+    }
     assert result.metadata["qcsc_slurm"]["job_id"] == "73"
+
+
+@pytest.mark.parametrize("layout", [[2, 0], [2, 0, 1]])
+def test_prepared_layout_overrides_runtime_config_and_matches_prepared_circuit(
+    runtime, submitted, layout
+):
+    def prepare(circuit):
+        if len(layout) == 3:
+            circuit.add_register(QuantumRegister(1, "extra"))
+        return PreparedCircuit(circuit, {"initial_layout": layout})
+
+    runtime.prepare = prepare
+    runtime.transpile_config = {"initial_layout": [0]}
+    original = measured_circuit()
+    asyncio.run(runtime.sampler([(original,)], shots=4))
+    work_dir = submitted[0]["work_dir"]
+    assert json.loads((work_dir / "transpile_config.json").read_text()) == {
+        "initial_layout": layout
+    }
+    with (work_dir / "circuit.qpy").open("rb") as stream:
+        (restored,) = qpy.load(stream)
+    assert restored.num_qubits == len(layout)
+    assert original.num_qubits == 2
+
+
+@pytest.mark.parametrize("layout,num_qubits", [([0], 2), ([0, 1, 2], 2), ([0, 1], 3)])
+def test_invalid_prepared_layout_fails_before_submission(runtime, submitted, layout, num_qubits):
+    def prepare(circuit):
+        if num_qubits == 3:
+            circuit.add_register(QuantumRegister(1, "extra"))
+        return PreparedCircuit(circuit, {"initial_layout": layout})
+
+    runtime.prepare = prepare
+    runtime.transpile_config = {"initial_layout": [0, 1]}
+    with pytest.raises(ValueError, match=f"expected {num_qubits}, got {len(layout)}"):
+        asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    assert submitted == []
+    assert not runtime.root_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"initial_layout": [0, 0]},
+        {"initial_layout": [True, 1]},
+        {"initial_layout": [-1, 1]},
+        {"initial_layout": {"0": 1}},
+        {"initial_layout": []},
+        {"initial_layout": [0]},
+        {"initial_layout": [0, 1, 2]},
+        {"optimization_level": True},
+        {"optimization_level": 4},
+        {"optimization_level": 1.0},
+        {"seed_transpiler": -1},
+        {"seed_transpiler": True},
+        {"seed_transpiler": 1.5},
+        {"initial_layot": [0, 1]},
+        {"target": None},
+        {"backend": None},
+        {"coupling_map": [[0, 1]]},
+        {"basis_gates": ["cx"]},
+        {"approximation_degree": -0.1},
+        {"approximation_degree": 1.1},
+        {"approximation_degree": True},
+        {"approximation_degree": "0.5"},
+        {"approximation_degree": []},
+        {"approximation_degree": float("nan")},
+        {"approximation_degree": float("inf")},
+        {"qubits_initially_zero": 0},
+        {"qubits_initially_zero": 1},
+        {"qubits_initially_zero": None},
+        {"qubits_initially_zero": "true"},
+        {"unitary_synthesis_plugin_config": []},
+        {"unitary_synthesis_plugin_config": "config"},
+        {"unitary_synthesis_plugin_config": False},
+        *[
+            {method: value}
+            for method in (
+                "layout_method",
+                "routing_method",
+                "translation_method",
+                "scheduling_method",
+                "init_method",
+                "optimization_method",
+                "unitary_synthesis_method",
+            )
+            for value in (1, [], {})
+        ],
+    ],
+)
+def test_invalid_preset_options_fail_before_submission(runtime, submitted, config):
+    runtime.transpile_config = config
+    with pytest.raises(ValueError):
+        asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    assert submitted == []
+    assert not runtime.root_dir.exists()
+    # The compute node also validates files independently of the workflow host.
+    with pytest.raises(ValueError):
+        worker.generic_transpile(measured_circuit(), None, config)
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"initial_layout": None},
+        {"approximation_degree": None},
+        {"approximation_degree": 0},
+        {"approximation_degree": 1},
+        {"approximation_degree": 0.5},
+        {"qubits_initially_zero": True},
+        {"qubits_initially_zero": False},
+        {"unitary_synthesis_plugin_config": None},
+        {"unitary_synthesis_plugin_config": {"plugin_option": [1, "value"]}},
+        *[
+            {method: value}
+            for method in (
+                "layout_method",
+                "routing_method",
+                "translation_method",
+                "scheduling_method",
+                "init_method",
+                "optimization_method",
+                "unitary_synthesis_method",
+            )
+            for value in (None, "node_plugin")
+        ],
+    ],
+)
+def test_valid_preset_types_and_boundaries_are_forwarded(runtime, submitted, config):
+    # Plugin existence and plugin-specific configuration remain compute-node checks.
+    runtime.transpile_config = config
+    asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    assert json.loads((submitted[0]["work_dir"] / "transpile_config.json").read_text()) == config
+
+
+def test_generic_transpile_applies_physical_layout_and_preserves_registers():
+    target = GenericBackendV2(num_qubits=3, basis_gates=["rz", "sx", "x", "cx"]).target
+    circuit = measured_circuit()
+    config = {"initial_layout": [2, 0], "optimization_level": 0, "seed_transpiler": 24}
+    isa = worker.generic_transpile(circuit, target, config)
+    worker.validate_isa(isa, target)
+    assert isa.layout.initial_index_layout(filter_ancillas=True) == [2, 0]
+    assert [(reg.name, len(reg)) for reg in isa.cregs] == [("readout", 2), ("test", 1)]
+    measurements = {
+        isa.find_bit(inst.clbits[0]).index: isa.find_bit(inst.qubits[0]).index
+        for inst in isa.data
+        if inst.name == "measure"
+    }
+    assert measurements == {0: 2, 1: 0, 2: 2}
+    assert circuit.num_qubits == 2
+    assert config == {"initial_layout": [2, 0], "optimization_level": 0, "seed_transpiler": 24}
+
+
+@pytest.mark.parametrize("custom", [False, True])
+def test_configured_compilation_through_worker(runtime, monkeypatch, custom):
+    target = GenericBackendV2(num_qubits=3, basis_gates=["rz", "sx", "x", "cx"]).target
+    resource = SimpleNamespace(resource_id=lambda: runtime.resource)
+    qrmi = ModuleType("qrmi")
+    qrmi.QRMIService = lambda: SimpleNamespace(resources=lambda: [resource])
+    ibm = ModuleType("qrmi.primitives.ibm")
+    ibm.get_target = lambda acquired: target if acquired is resource else None
+    monkeypatch.setitem(sys.modules, "qrmi", qrmi)
+    monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
+    monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)
+    monkeypatch.setenv(f"{runtime.resource}_QRMI_IBM_QCS_SESSION_MODE", "batch")
+    monkeypatch.setenv(f"{runtime.resource}_QRMI_JOB_ACQUISITION_TOKEN", "test-token")
+    runtime.transpile_config = {"initial_layout": [2, 0], "seed_transpiler": 24}
+    if custom:
+        hook = ModuleType("custom_compilation")
+
+        def transpile(circuit, actual_target, config):
+            from qiskit.transpiler import PassManager
+            from qiskit.transpiler.passes import RemoveBarriers
+
+            assert actual_target is target
+            config = dict(config)
+            assert config.pop("algorithm_option") == "custom"
+            pm = worker.generate_preset_pass_manager(target=actual_target, **config)
+            pm.pre_init = PassManager([RemoveBarriers()])
+            return pm.run(circuit)
+
+        hook.transpile = transpile
+        monkeypatch.setitem(sys.modules, "custom_compilation", hook)
+        runtime.transpiler = "custom_compilation:transpile"
+        runtime.transpile_config["algorithm_option"] = "custom"
+
+    def execute(isa, shots, executable, resource_id):
+        assert resource_id == runtime.resource
+        assert isa.layout.initial_index_layout(filter_ancillas=True) == [2, 0]
+        if custom:
+            assert "barrier" not in isa.count_ops()
+        Path("result.json").write_text(json.dumps(make_result(shots), cls=RuntimeEncoder))
+
+    async def submit(**kwargs):
+        monkeypatch.chdir(kwargs["work_dir"])
+        worker.main(kwargs["user_args"])
+        return SimpleNamespace(job_id="73", state="COMPLETED", exit_status=0)
+
+    monkeypatch.setattr(worker, "execute_task_runner", execute)
+    monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
+    circuit = measured_circuit()
+    circuit.barrier()
+    result = asyncio.run(runtime.sampler([(circuit,)], shots=4))
+    assert result[0].data.readout.num_shots == 4
+    work_dir = Path(result.metadata["qcsc_slurm"]["work_dir"])
+    report = json.loads((work_dir / "transpile_report.json").read_text())
+    assert report["initial_layout"] == [2, 0]
+    assert report["transpiler"] == runtime.transpiler
+    if custom:
+        assert report["algorithm_option"] == "custom"
 
 
 def test_prepare_cannot_change_registers(runtime, submitted):

@@ -118,11 +118,58 @@ and automatic retries are disabled. Calling again after failure submits again.
 Single-job monitoring uses the controller while its matching record exists and
 falls back to accounting when necessary; bulk monitoring is unchanged.
 
-## Optional compilation hooks
+## Compilation options
 
 The default compiler uses optimization level 1 and needs no configuration.
+Pass preset pass manager options through `transpile_config` on the runtime:
+
+```python
+runtime = QrmiRuntime(
+    root_dir=Path("/shared/quantum-jobs"),
+    command_block_name="my-qrmi-command",
+    execution_profile_block_name="my-qrmi-execution",
+    hpc_profile_block_name="my-qrmi-hpc",
+    resource="test_heron",
+    transpile_config={
+        "initial_layout": [12, 13],
+        "optimization_level": 3,
+        "seed_transpiler": 42,
+        "routing_method": "sabre",
+    },
+)
+result = await runtime.sampler([(circuit,)], shots=100)
+```
+
+`initial_layout[i]` is the physical qubit index for logical qubit `i` in the
+prepared circuit. Use a list of distinct nonnegative integers, rather than a
+Qiskit `Layout` object, so the setting can cross the JSON/QPY boundary. The list
+must have exactly one entry per prepared circuit qubit and fit the compute-node
+Target. Routing can change the final placement; the compiled circuit's layout is
+retained in `isa.qpy`.
+
+The supported keys match the corresponding Qiskit preset pass manager arguments:
+
+- `initial_layout`, `optimization_level` (0–3), `seed_transpiler`.
+- `layout_method`, `routing_method`, `translation_method`, `scheduling_method`.
+- `init_method`, `optimization_method`, `approximation_degree`.
+- `unitary_synthesis_method`, `unitary_synthesis_plugin_config`, `qubits_initially_zero`.
+
+All values must be JSON serializable. Unknown keys, invalid optimization levels
+and seeds, and malformed, duplicate or incorrectly sized layouts fail before
+submission. Method options must be strings or `None`; `approximation_degree`
+must be a number in [0, 1] or `None` (booleans are rejected).
+`qubits_initially_zero` must be a boolean, and `unitary_synthesis_plugin_config`
+must be a dictionary or `None`. Validation uses the prepared circuit and merged
+configuration, including any overrides from `PreparedCircuit.config`.
+Qiskit validates target-dependent constraints and installed plugin names on the
+compute node. Target/backend, basis-gate and coupling-map overrides are excluded:
+the compiler always uses the actual Target acquired inside the Slurm allocation.
+`sampler(options=...)` continues to configure shots only.
+
 Every resulting non-barrier instruction is checked against the actual Target
 before `task_runner` is called.
+
+## Optional compilation hooks
 
 For application-specific preparation, supply
 `prepare(circuit) -> PreparedCircuit`. This function runs before serialization
@@ -136,7 +183,44 @@ The installed function is called as `function(circuit, target, config)` and must
 return a bound, measured `QuantumCircuit`. The module must be importable in the
 compute-node Python environment. Both hooks must preserve classical register
 names and widths. `PreparedCircuit.config` overrides matching `transpile_config`
-keys. The default compiler rejects nonempty configuration.
+keys. This applies to both the default compiler's preset options and a custom
+compiler's application-specific configuration.
+
+To customize a PassManager, build and run it inside the hook using the supplied
+Target. For example, install this module on both hosts as
+`my_algorithm/transpilation.py`:
+
+```python
+from qiskit.transpiler import PassManager, generate_preset_pass_manager
+from qiskit.transpiler.passes import RemoveBarriers
+
+
+def transpile(circuit, target, config):
+    pm = generate_preset_pass_manager(
+        target=target, **{"optimization_level": 1, **config}
+    )
+    pm.pre_init = PassManager([RemoveBarriers()])
+    return pm.run(circuit)
+```
+
+Select it when constructing the runtime:
+
+```python
+runtime = QrmiRuntime(
+    root_dir=Path("/shared/quantum-jobs"),
+    command_block_name="my-qrmi-command",
+    execution_profile_block_name="my-qrmi-execution",
+    hpc_profile_block_name="my-qrmi-hpc",
+    resource="test_heron",
+    transpiler="my_algorithm.transpilation:transpile",
+    transpile_config={"initial_layout": [12, 13], "seed_transpiler": 42},
+)
+```
+
+The custom hook owns its configuration validation; it can also consume its own
+keys. A PassManager instance or local callable is not transported to the compute
+node. Use `prepare` for workflow-host circuit preparation and the importable
+`transpiler` hook for Target-dependent compilation.
 
 Treat request and configuration JSON as trusted workflow-generated input.
 Applications own their hook implementations and interpretation of results.

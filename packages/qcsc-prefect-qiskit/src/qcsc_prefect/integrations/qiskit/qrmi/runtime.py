@@ -17,6 +17,7 @@ from qiskit import QuantumCircuit, qpy
 from qiskit.primitives import PrimitiveResult
 
 from .contract import SCHEMA_VERSION, circuit_registers, decode_result, resolve_shots
+from .transpilation import preset_pass_manager_options
 
 DEFAULT_TRANSPILER = "qcsc_prefect.integrations.qiskit.qrmi.worker:generic_transpile"
 
@@ -47,6 +48,11 @@ class QrmiRuntime:
     ``module:function(circuit, target, config)`` on the compute node. Both hosts
     must have that module installed. No target is acquired on the workflow host;
     this facade is not a drop-in ``prefect_qiskit.QuantumRuntime`` Block.
+
+    The default transpiler accepts JSON-safe preset pass manager options in
+    ``transpile_config``, including ``initial_layout`` (physical qubit indices),
+    ``optimization_level`` (default 1), and ``seed_transpiler``. Custom pass
+    managers can be constructed and run inside a ``transpiler`` hook.
     """
 
     root_dir: Path
@@ -90,6 +96,8 @@ class QrmiRuntime:
         config = {**self.transpile_config, **prepared.config}
         # Validate JSON before creating a job directory or starting any task.
         json.dumps(config, allow_nan=False)
+        if self.transpiler == DEFAULT_TRANSPILER:
+            preset_pass_manager_options(config, num_qubits=prepared.circuit.num_qubits)
         return await _sample_on_slurm(prepared.circuit, shots, registers, config, self)
 
 
