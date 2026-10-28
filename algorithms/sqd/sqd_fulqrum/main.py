@@ -7,6 +7,7 @@ The quantum stage (LUCJ ansatz, transpilation, sampling) is the same as in
 
 import os
 import pathlib
+from functools import partial
 from typing import Any, Literal
 
 import ffsim
@@ -248,6 +249,7 @@ async def sqd_2405_05068_fulqrum(
     option_name: str = "sampler_options",
     cache_compute_integrals: bool = False,
     cache_sampling: bool = False,
+    qrmi_runtime_config: dict[str, Any] | None = None,
 ) -> float:
     """SQD Experiment from arXiv2405.05068, diagonalized with fulqrum.
 
@@ -258,6 +260,8 @@ async def sqd_2405_05068_fulqrum(
         option_name: Name of Variable storing sampler primitive options to load.
         cache_compute_integrals: Set True to cache compute_molecular_integrals task.
         cache_sampling: Set True to cache sample_bitstrings task.
+        qrmi_runtime_config: Optional QrmiRuntime settings for QRMI/Slurm sampling.
+            When provided, runner_name is not used.
 
     Returns:
         Minimum ground state energy solved by SQD.
@@ -299,6 +303,7 @@ async def sqd_2405_05068_fulqrum(
         option_name=option_name,
         quantum_source=parameters.quantum_source,
         random_seed=parameters.random_seed,
+        qrmi_runtime_config=qrmi_runtime_config,
     )
 
     # Convert BitArray into bitstring and probability arrays
@@ -469,6 +474,7 @@ async def sample_bitstrings(
     option_name: str,
     quantum_source: Literal["real-device", "random"],
     random_seed: int,
+    qrmi_runtime_config: dict[str, Any] | None = None,
 ) -> BitArray:
     """Sample bitstring with quantum computer.
 
@@ -479,6 +485,7 @@ async def sample_bitstrings(
         option_name: Name of Variable storing sampler primitive options to load.
         quantum_source: ``"real-device"`` or ``"random"``.
         random_seed: Seed for ``"random"`` sampling.
+        qrmi_runtime_config: Optional QrmiRuntime settings; bypasses the Runtime block.
 
     Returns:
         Sampled bitstrings representing determinants.
@@ -500,14 +507,29 @@ async def sample_bitstrings(
             rand_seed=random_seed,
         )
 
-    try:
-        runtime = await QuantumRuntime.load(runner_name)
-    except ValueError as exc:
-        raise RuntimeError(
-            f"Quantum source 'real-device' requested but QuantumRuntime block "
-            f"'{runner_name}' is not defined. Set quantum_source='random' to use "
-            "deterministic random sampling instead."
-        ) from exc
+    if qrmi_runtime_config is not None:
+        from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime
+
+        from sqd_fulqrum.qrmi import prepare_sampler_circuit
+
+        runtime = QrmiRuntime(
+            **{
+                **qrmi_runtime_config,
+                "prepare": partial(
+                    prepare_sampler_circuit, circuit_parameters=circuit_params.model_dump()
+                ),
+                "transpiler": "sqd_fulqrum.qrmi:transpile_for_target",
+            }
+        )
+    else:
+        try:
+            runtime = await QuantumRuntime.load(runner_name)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Quantum source 'real-device' requested but QuantumRuntime block "
+                f"'{runner_name}' is not defined. Set quantum_source='random' to use "
+                "deterministic random sampling instead."
+            ) from exc
 
     # Create ansatz circuits
     lucj_circ = create_ansatz_circuits(
@@ -515,18 +537,19 @@ async def sample_bitstrings(
         elec_props=elec_props,
     )
 
-    # Transpile
-    target = await runtime.get_target()
-    isa_circuit = transpile_circuit(
-        circuit=lucj_circ,
-        target=target,
-        circuit_params=circuit_params,
-        seed=rng,
-    )
+    if qrmi_runtime_config is None:
+        # IBM Runtime compiles on the workflow host; QRMI compiles inside Slurm.
+        target = await runtime.get_target()
+        lucj_circ = transpile_circuit(
+            circuit=lucj_circ,
+            target=target,
+            circuit_params=circuit_params,
+            seed=rng,
+        )
 
     # Run primitive
     pub_result = await runtime.sampler(
-        sampler_pubs=[(isa_circuit,)],
+        sampler_pubs=[(lucj_circ,)],
         options=options,
     )
 
