@@ -19,7 +19,7 @@ dependencies = [
     "numpy",
     "prefect>=2.19",
     "pydantic>=2",
-    "qiskit-addon-sqd==0.11.0",
+    "qiskit-addon-sqd>=0.12.0",
     "qcsc-prefect-blocks==0.3.0",
     "qcsc-prefect-core==0.3.0",
     "qcsc-prefect-executor==0.3.0",

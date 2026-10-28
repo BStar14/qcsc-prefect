@@ -1,10 +1,10 @@
 """Post-selection and subsampling with precise control of the subspace dimension.
 
-Ported from the DICE workflow so both solvers see the same subspaces for the same
-RNG state. Differences:
+Subsampling follows ``sqd_dice`` so both solvers see the same subspaces for the
+same RNG state. Differences:
 
 - CI strings use Python ints (``object`` dtype) when ``norb >= 64``, which the
-  fulqrum solver accepts. Below that they are ``int64`` as before.
+  fulqrum solver accepts. Below that they are ``int64``, as in ``sqd_dice``.
 - Open-shell batches keep at least one string per spin, so a very small
   ``subspace_dim`` cannot produce an empty subspace.
 """
@@ -12,7 +12,7 @@ RNG state. Differences:
 from typing import Iterator
 
 import numpy as np
-from qiskit_addon_sqd.configuration_recovery import post_select_by_hamming_weight
+from qiskit_addon_sqd.subsampling import postselect_by_hamming_right_and_left
 
 
 def postselect(
@@ -31,16 +31,12 @@ def postselect(
         hamming_right: The target hamming weight for the right half of sampled bitstrings.
         hamming_left: The target hamming weight for the left half of sampled bitstrings.
     """
-    mask_postsel = post_select_by_hamming_weight(
+    return postselect_by_hamming_right_and_left(
         bitstring_matrix,
+        probabilities,
         hamming_right=hamming_right,
         hamming_left=hamming_left,
     )
-    bs_mat_postsel = bitstring_matrix[mask_postsel]
-    probs_postsel = probabilities[mask_postsel]
-    probs_postsel = np.abs(probs_postsel) / np.sum(np.abs(probs_postsel))
-
-    return bs_mat_postsel, probs_postsel
 
 
 def bitstrings_to_ci_strs(bitstring_matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

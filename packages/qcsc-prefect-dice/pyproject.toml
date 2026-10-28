@@ -21,7 +21,7 @@ dependencies = [
     "prefect>=2.19",
     "pydantic>=2",
     "pyscf",
-    "qiskit-addon-sqd==0.11.0",
+    "qiskit-addon-sqd==0.14.0",
     "qcsc-prefect-blocks==0.3.0",
     "qcsc-prefect-core==0.3.0",
     "qcsc-prefect-executor==0.3.0",

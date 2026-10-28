@@ -11,6 +11,15 @@ from qcsc_prefect_fulqrum import cli, io_utils
 from qcsc_prefect_fulqrum.solver import FulqrumSolution
 
 
+@pytest.fixture(autouse=True)
+def _clear_rank_env(monkeypatch):
+    # Every test starts as a single process, even when pytest itself runs under
+    # srun or mpirun. MPI_LOCALRANKID is cleared too, so the tests that check it
+    # is ignored do not depend on the caller's environment.
+    for var in (*cli._PROCESS_INDEX_ENV_VARS, "MPI_LOCALRANKID"):
+        monkeypatch.delenv(var, raising=False)
+
+
 def _write_input(work_dir: Path, **kwargs) -> None:
     io_utils.write_solver_input(
         work_dir=work_dir,
@@ -117,19 +126,15 @@ def test_compute_side_modules_do_not_import_prefect():
     )
     src = Path(cli.__file__).resolve().parents[1]
     proc = subprocess.run(
-        [sys.executable, "-c", code],
+        # -B: do not write __pycache__ into the source tree, which may be
+        # shared with other machines.
+        [sys.executable, "-B", "-c", code],
         capture_output=True,
         text=True,
         env={"PYTHONPATH": str(src)},
         check=False,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
-
-
-@pytest.fixture
-def _clear_rank_env(monkeypatch):
-    for var in cli._PROCESS_INDEX_ENV_VARS + cli._PROCESS_COUNT_ENV_VARS:
-        monkeypatch.delenv(var, raising=False)
 
 
 @pytest.mark.parametrize(
@@ -143,11 +148,16 @@ def _clear_rank_env(monkeypatch):
         ({"SLURM_PROCID": "7"}, 7),
         # An MPI launcher's own variable wins over srun's.
         ({"OMPI_COMM_WORLD_RANK": "1", "SLURM_PROCID": "4"}, 1),
-        # Unrecognizable values must not silence the process.
+        # A malformed value falls through to the next variable...
+        ({"PMI_RANK": "not-a-rank", "SLURM_PROCID": "3"}, 3),
+        # ...and to the single-process default when none is left.
         ({"PMI_RANK": "not-a-rank"}, 0),
+        # Node-local ranks are not job-wide, so they are not consulted.
+        ({"MPI_LOCALRANKID": "0", "PMIX_RANK": "4"}, 4),
+        ({"MPI_LOCALRANKID": "2"}, 0),
     ],
 )
-def test_process_index_reads_launcher_environment(_clear_rank_env, monkeypatch, env, expected):
+def test_process_index_reads_launcher_environment(monkeypatch, env, expected):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     assert cli.process_index() == expected
@@ -163,38 +173,44 @@ def test_process_index_reads_launcher_environment(_clear_rank_env, monkeypatch, 
         ({"PMIX_RANK": "9"}, False),
     ],
 )
-def test_is_control_process(_clear_rank_env, monkeypatch, env, expected):
+def test_is_control_process(monkeypatch, env, expected):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     assert cli.is_control_process() is expected
 
 
-@pytest.mark.parametrize(
-    ("env", "expected"),
-    [
-        ({}, 1),
-        ({"OMPI_COMM_WORLD_SIZE": "4"}, 4),
-        ({"PMI_SIZE": "8"}, 8),
-        ({"MPI_LOCALNRANKS": "2"}, 2),
-        ({"SLURM_NTASKS": "16"}, 16),
-        ({"PMI_SIZE": "bogus"}, 1),
-    ],
-)
-def test_process_count_reads_launcher_environment(_clear_rank_env, monkeypatch, env, expected):
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    assert cli.process_count() == expected
+def test_process_index_needs_no_mpi_library():
+    # A meta-path hook records every attempt to import mpi4py, including one
+    # that would fail or be caught, so the test does not depend on whether
+    # mpi4py happens to be installed.
+    code = (
+        "import sys\n"
+        "attempts = []\n"
+        "class Spy:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] == 'mpi4py':\n"
+        "            attempts.append(name)\n"
+        "        return None\n"
+        "sys.meta_path.insert(0, Spy())\n"
+        "from qcsc_prefect_fulqrum import cli\n"
+        "index, control = cli.process_index(), cli.is_control_process()\n"
+        "print(index, control, attempts)\n"
+        "sys.exit(0 if (index, control, attempts) == (2, False, []) else 1)\n"
+    )
+    src = Path(cli.__file__).resolve().parents[1]
+    proc = subprocess.run(
+        # -B: do not write __pycache__ into the source tree, which may be
+        # shared with other machines.
+        [sys.executable, "-B", "-c", code],
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": str(src), "OMPI_COMM_WORLD_RANK": "2"},
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-def test_process_index_needs_no_mpi_library(_clear_rank_env, monkeypatch):
-    monkeypatch.setitem(sys.modules, "mpi4py", None)
-    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "2")
-    assert cli.process_index() == 2
-
-
-def test_noncontrol_process_solves_but_writes_nothing(
-    _clear_rank_env, monkeypatch, tmp_path, capsys
-):
+def test_noncontrol_process_solves_but_writes_nothing(monkeypatch, tmp_path, capsys):
     _write_input(tmp_path)
     calls = []
     monkeypatch.setattr(cli, "solve_fulqrum", lambda **p: calls.append(p) or _fake_solve(**p))
@@ -208,7 +224,7 @@ def test_noncontrol_process_solves_but_writes_nothing(
     assert capsys.readouterr().out == ""
 
 
-def test_noncontrol_process_does_not_delete_control_outputs(_clear_rank_env, monkeypatch, tmp_path):
+def test_noncontrol_process_does_not_delete_control_outputs(monkeypatch, tmp_path):
     _write_input(tmp_path)
     monkeypatch.setattr(cli, "solve_fulqrum", _fake_solve)
     monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "0")
@@ -221,7 +237,7 @@ def test_noncontrol_process_does_not_delete_control_outputs(_clear_rank_env, mon
     assert (tmp_path / io_utils.OUTPUT_RESULT).read_bytes() == before
 
 
-def test_every_process_reports_failure(_clear_rank_env, monkeypatch, tmp_path):
+def test_every_process_reports_failure(monkeypatch, tmp_path):
     _write_input(tmp_path)
 
     def _boom(**_problem):
@@ -240,9 +256,7 @@ def test_every_process_reports_failure(_clear_rank_env, monkeypatch, tmp_path):
     assert error is not None and "solve exploded" in error["message"]
 
 
-def test_simulated_two_process_run_writes_one_result(
-    _clear_rank_env, monkeypatch, tmp_path, capsys
-):
+def test_simulated_two_process_run_writes_one_result(monkeypatch, tmp_path, capsys):
     _write_input(tmp_path)
     monkeypatch.setattr(cli, "solve_fulqrum", _fake_solve)
 

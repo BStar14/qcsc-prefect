@@ -12,8 +12,9 @@ stdout, so the processes cannot race on the result files. The process index
 comes from the launcher's environment, so no MPI library is needed to read it
 and the single-process path is unchanged.
 
-The ``process_index`` / ``process_count`` / ``is_control_process`` vocabulary
-follows :mod:`qiskit_addon_sqd.processes`.
+The ``process_index`` / ``is_control_process`` names follow
+``qiskit_addon_sqd.processes`` (qiskit-addon-sqd 0.13 and later), but the
+detection does not: see :func:`process_index`.
 
 Exit codes: ``0`` success, ``1`` the solve failed (details in ``error.json``),
 ``2`` usage error. A failing process returns ``1`` whether or not it is the
@@ -37,58 +38,44 @@ from .solver import solve_fulqrum
 logger = logging.getLogger("qcsc_prefect_fulqrum")
 
 
-# Rank variables set by the common launchers. Mirrors the detection in
-# qiskit_addon_sqd.processes, which this module's vocabulary follows
-# (process_index, process_count, is_control_process).
+# Global rank variables set by the common launchers, in priority order.
+#
+# Only job-wide ranks belong here. A node-local rank such as MPI_LOCALRANKID
+# (Intel MPI, MPICH Hydra) restarts at 0 on every node, so a multi-node run
+# would elect one control process per node and race on the result files.
 #
 # SLURM_PROCID is last: srun sets it, but so does sbatch for the batch step
 # itself, where it is 0 and agrees with the single-process default.
 _PROCESS_INDEX_ENV_VARS = (
-    "OMPI_COMM_WORLD_RANK",  # Open MPI
+    "OMPI_COMM_WORLD_RANK",  # Open MPI, IBM Spectrum MPI
     "PMI_RANK",  # Intel MPI, MPICH
-    "MPI_LOCALRANKID",  # IBM Spectrum MPI
     "PMIX_RANK",  # PMIx-based launchers
     "SLURM_PROCID",  # srun
 )
 
-_PROCESS_COUNT_ENV_VARS = (
-    "OMPI_COMM_WORLD_SIZE",  # Open MPI
-    "PMI_SIZE",  # Intel MPI, MPICH
-    "MPI_LOCALNRANKS",  # IBM Spectrum MPI
-    "SLURM_NTASKS",  # srun
-)
 
+def process_index() -> int:
+    """Return the index of this process, 0 for the control process.
 
-def _env_int(names: tuple[str, ...], default: int) -> int:
-    for name in names:
+    ``qiskit_addon_sqd.processes`` uses the launcher's ``*_SIZE`` variables
+    only to decide whether it runs under MPI, and then asks ``mpi4py``
+    (``COMM_WORLD.Get_rank()``) for the index. Here the index is read from the
+    launcher's rank variables directly, so that the compute node keeps its
+    minimal dependency set of numpy, scipy and fulqrum. The first
+    variable holding an integer wins; a malformed value is skipped. Launched as
+    a single process, or under a launcher none of these variables identify, the
+    index is 0.
+    """
+
+    for name in _PROCESS_INDEX_ENV_VARS:
         value = os.environ.get(name)
         if value is None:
             continue
         try:
             return int(value)
         except ValueError:
-            logger.warning("Ignoring non-integer %s=%r; assuming %d.", name, value, default)
-            return default
-    return default
-
-
-def process_index() -> int:
-    """Return the index of this process, 0 for the control process.
-
-    Unlike :mod:`qiskit_addon_sqd.processes`, the index is read from the
-    launcher's environment rather than from ``mpi4py``, so that the compute node
-    keeps its minimal dependency set of numpy, scipy and fulqrum. Launched as a
-    single process, or under a launcher none of these variables identify, the
-    index is 0.
-    """
-
-    return _env_int(_PROCESS_INDEX_ENV_VARS, 0)
-
-
-def process_count() -> int:
-    """Return the number of collective processes, 1 if not launched with many."""
-
-    return _env_int(_PROCESS_COUNT_ENV_VARS, 1)
+            logger.warning("Ignoring non-integer %s=%r.", name, value)
+    return 0
 
 
 def is_control_process() -> bool:
