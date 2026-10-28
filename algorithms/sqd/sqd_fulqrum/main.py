@@ -7,7 +7,6 @@ The quantum stage (LUCJ ansatz, transpilation, sampling) is the same as in
 
 import os
 import pathlib
-from functools import partial
 from typing import Any, Literal
 
 import ffsim
@@ -26,24 +25,13 @@ from qcsc_workflow_utility import (
     compute_molecular_integrals_from_geometry,
 )
 from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
-from qiskit.passmanager import ConditionalController
 from qiskit.primitives.containers import BitArray
-from qiskit.transpiler import Target, generate_preset_pass_manager
-from qiskit.transpiler.passes import (
-    ApplyLayout,
-    BarrierBeforeFinalMeasurements,
-    EnlargeWithAncilla,
-    FullAncillaAllocation,
-    Optimize1qGatesDecomposition,
-    RemoveIdentityEquivalent,
-    SabreLayout,
-)
-from qiskit.transpiler.passmanager import PassManager
+from qiskit.transpiler import Target
 from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform
 from qiskit_addon_sqd.fermion import SCIResult
-from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
 
 from sqd_fulqrum.recovery import SolveFn, run_configuration_recovery
+from sqd_fulqrum.transpile import build_pass_manager, derive_seed, isa_gate_depth
 
 DEFAULT_RUNTIME_BLOCK_NAME = "ibm-runner"
 DEFAULT_SOLVER_BLOCK_NAME = "sqd-fulqrum-solver"
@@ -221,6 +209,19 @@ def _resolve_shots(
     if not isinstance(params, dict):
         raise TypeError("'params' in sampler options must be a mapping.")
     return int(params.get("shots", default_shots))
+
+
+def circuit_transpile_options(
+    circuit_params: CircuitParameters, seed: int | np.random.Generator
+) -> dict[str, int]:
+    """JSON-safe ``build_pass_manager`` options for the configured circuit."""
+    return {
+        "optimization_level": circuit_params.optimization_level,
+        "seed_transpiler": derive_seed(seed),
+        "sabre_max_iterations": circuit_params.sabre_max_iterations,
+        "sabre_layout_trials": circuit_params.sabre_layout_trials,
+        "sabre_swap_trials": circuit_params.sabre_swap_trials,
+    }
 
 
 def make_block_solver(
@@ -409,56 +410,18 @@ def transpile_circuit(
     """Custom transpiler with massive layout search."""
     logger = get_run_logger()
 
-    if isinstance(seed, np.random.Generator):
-        seed = seed.integers(np.iinfo(int).max, size=1).item()
-    coupling_map = target.build_coupling_map()
-
-    # Define a custom pass manager
-    passmanager = generate_preset_pass_manager(
-        optimization_level=circuit_params.optimization_level,
-        seed_transpiler=seed,
-        target=target,
+    passmanager = build_pass_manager(
+        target,
+        **circuit_transpile_options(circuit_params, seed),
+        pre_init=PRE_INIT,
     )
-    passmanager.pre_init = PRE_INIT
-    passmanager.layout = PassManager(
-        [
-            BarrierBeforeFinalMeasurements(
-                label="qiskit.transpiler.internal.routing.protection.barrier",
-            ),
-            SabreLayout(
-                coupling_map=coupling_map,
-                seed=seed,
-                max_iterations=circuit_params.sabre_max_iterations,
-                layout_trials=circuit_params.sabre_layout_trials,
-                swap_trials=circuit_params.sabre_swap_trials,
-            ),
-            ConditionalController(
-                tasks=[
-                    FullAncillaAllocation(coupling_map=coupling_map),
-                    EnlargeWithAncilla(),
-                    ApplyLayout(),
-                ],
-                condition=lambda propset: propset["final_layout"] is None,
-            ),
-        ]
-    )
-    if "rzz" in target.operation_names:
-        passmanager.post_optimization = PassManager(
-            [
-                FoldRzzAngle(),
-                Optimize1qGatesDecomposition(target=target),  # Cancel added local gates
-                RemoveIdentityEquivalent(target=target),  # Remove GlobalPhaseGate
-            ]
-        )
 
     # Transpile
     logger.info("Transpiling ansatz circuit...")
     isa_circuit = passmanager.run(circuit)
-    gate_depth = isa_circuit.depth(
-        lambda inst: inst.operation.name not in ("rz", "barrier", "measure")
-    )
     logger.info(
-        f"Circuit depth = {gate_depth}\nInstruction counts = {dict(isa_circuit.count_ops())}\n"
+        f"Circuit depth = {isa_gate_depth(isa_circuit)}\n"
+        f"Instruction counts = {dict(isa_circuit.count_ops())}\n"
     )
     return isa_circuit
 
@@ -508,18 +471,12 @@ async def sample_bitstrings(
         )
 
     if qrmi_runtime_config is not None:
-        from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime
+        from sqd_fulqrum.qrmi import make_qrmi_runtime
 
-        from sqd_fulqrum.qrmi import prepare_sampler_circuit
-
-        runtime = QrmiRuntime(
-            **{
-                **qrmi_runtime_config,
-                "prepare": partial(
-                    prepare_sampler_circuit, circuit_parameters=circuit_params.model_dump()
-                ),
-                "transpiler": "sqd_fulqrum.qrmi:transpile_for_target",
-            }
+        # The compute node compiles with the seed the host path would draw.
+        runtime = make_qrmi_runtime(
+            qrmi_runtime_config,
+            transpile_config=circuit_transpile_options(circuit_params, rng),
         )
     else:
         try:

@@ -139,12 +139,23 @@ scheduler output.
 ### QRMI/Slurm sampling
 
 To sample through QRMI, install the workflow and QRMI integration from this
-checkout on both the workflow host and compute nodes:
+checkout on the workflow host:
 
 ```bash
 uv pip install -e 'packages/qcsc-prefect-qiskit[slurm]' \
   -e packages/qcsc-prefect-fulqrum -e algorithms/qcsc_workflow_utility \
   -e 'algorithms/sqd[fulqrum,qrmi]'
+```
+
+On the compute node, the Python that runs the QRMI worker needs QRMI and its
+`task_runner`, `qcsc-prefect-qiskit` (the worker), and `sqd_fulqrum` from the
+same revision. The compilation hook `sqd_fulqrum.transpile:transpile_for_target`
+imports only Qiskit and qiskit-ibm-runtime, so ffsim, Prefect-Qiskit and fulqrum
+are not needed there:
+
+```bash
+uv pip install -e packages/qcsc-prefect-qiskit
+uv pip install --no-deps -e algorithms/sqd
 ```
 
 Use `quantum_source="real-device"` and pass `qrmi_runtime_config` as a top-level
@@ -168,13 +179,19 @@ QRMI Batch mode and shared storage as described in the
 `FulqrumSolverJob` and its classical execution blocks are unchanged.
 
 With QRMI settings, `runner_name` is ignored. SQD supplies its own preparation
-and transpiler hooks: ffSIM gates are prepared before QPY serialization, and
-the existing custom transpiler runs against the Target acquired inside Slurm.
-The same circuit parameters and seed 24 are used. The `meas`/`test` registers
-and reset postselection are preserved. Without `qrmi_runtime_config`, the
-existing IBM Runtime path remains in use; `quantum_source="random"` continues
-to bypass both runtimes. Custom compilation configuration belongs to these
-SQD hooks rather than the generic preset compiler.
+and transpiler hooks, so `qrmi_runtime_config` must not set `prepare`,
+`transpiler` or `transpile_config`. On the workflow host, ffsim's `PRE_INIT`
+passes run and the remaining ffsim gates are expanded before QPY serialization.
+On the compute node, the same pass manager as the IBM Runtime path (preset
+stages plus the SABRE layout search of `parameters.circuit`) runs against the
+Target acquired inside Slurm, with the transpiler seed the host path would draw.
+Both paths therefore compile to the same circuit for the same Target. The
+`meas`/`test` registers and reset postselection are preserved. Without
+`qrmi_runtime_config`, the existing IBM Runtime path remains in use;
+`quantum_source="random"` continues to bypass both runtimes.
+
+The QPU is held by the Slurm job while the node compiles, so give the QRMI
+execution profile enough CPU threads for the layout search.
 
 ### Tests
 

@@ -7,6 +7,9 @@ import io
 import json
 import logging
 import socket
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -29,7 +32,8 @@ from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
 from qiskit.quantum_info import Statevector  # noqa: E402
 from qiskit_ibm_runtime import RuntimeEncoder  # noqa: E402
 from sqd_fulqrum import main as workflow  # noqa: E402
-from sqd_fulqrum.qrmi import prepare_sampler_circuit, transpile_for_target  # noqa: E402
+from sqd_fulqrum.qrmi import TRANSPILER, make_qrmi_runtime, prepare_sampler_circuit  # noqa: E402
+from sqd_fulqrum.transpile import transpile_for_target  # noqa: E402
 
 LOGGER = logging.getLogger(__name__)
 
@@ -97,7 +101,8 @@ def readout_probabilities(circuit):
 def test_lucj_hooks_preserve_readout_through_qpy_without_prefect_context(h2, reset, with_rzz):
     params = circuit_parameters(reset)
     original = make_circuit(params, h2)
-    prepared = prepare_sampler_circuit(original.copy(), circuit_parameters=params.model_dump())
+    config = workflow.circuit_transpile_options(params, np.random.default_rng(24))
+    prepared = prepare_sampler_circuit(original.copy(), transpile_config=config)
     stream = io.BytesIO()
     qpy.dump(prepared.circuit, stream)
     stream.seek(0)
@@ -113,6 +118,88 @@ def test_lucj_hooks_preserve_readout_through_qpy_without_prefect_context(h2, res
     np.testing.assert_allclose(
         readout_probabilities(isa), readout_probabilities(original), atol=1e-10, rtol=0
     )
+
+
+def test_node_hook_imports_neither_ffsim_nor_prefect():
+    """The compute node needs only Qiskit and qiskit-ibm-runtime for the hook."""
+    sqd_root = Path(workflow.__file__).resolve().parents[1]
+    code = (
+        "import sys; import sqd_fulqrum.transpile; "
+        "heavy = {'ffsim', 'prefect', 'prefect_qiskit', 'qcsc_prefect_fulqrum', "
+        "'qcsc_workflow_utility', 'pyscf', 'qiskit_addon_sqd'}; "
+        "print(sorted(heavy & {m.split('.')[0] for m in sys.modules}))"
+    )
+    # -B: do not write __pycache__ into the source tree.
+    out = subprocess.run(
+        [sys.executable, "-B", "-c", code],
+        cwd=sqd_root,
+        env={"PYTHONPATH": str(sqd_root)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert out.stdout.strip() == "[]"
+
+
+@pytest.mark.parametrize("reset", [False, True])
+@pytest.mark.parametrize("with_rzz", [False, True])
+def test_node_hook_matches_host_transpile(h2, reset, with_rzz):
+    """QRMI compiles on the node exactly as the IBM Runtime path does on the host."""
+    params = circuit_parameters(reset)
+    original = make_circuit(params, h2)
+    actual_target = target(with_rzz)
+    with patch.object(workflow, "get_run_logger", return_value=LOGGER):
+        host = workflow.transpile_circuit.fn(
+            circuit=original.copy(),
+            target=actual_target,
+            circuit_params=params,
+            seed=np.random.default_rng(24),
+        )
+    config = workflow.circuit_transpile_options(params, np.random.default_rng(24))
+    prepared = prepare_sampler_circuit(original.copy(), transpile_config=config)
+    stream = io.BytesIO()
+    qpy.dump(prepared.circuit, stream)
+    stream.seek(0)
+    (restored,) = qpy.load(stream)
+    node = transpile_for_target(restored, actual_target, prepared.config)
+    assert dict(node.count_ops()) == dict(host.count_ops())
+    assert node.depth() == host.depth()
+    assert node.layout.final_index_layout() == host.layout.final_index_layout()
+
+
+def test_node_hook_rejects_unexpected_config():
+    with pytest.raises(ValueError, match="unknown=\\['circuit_parameters'\\]"):
+        transpile_for_target(None, target(), {"circuit_parameters": {}})
+
+
+@pytest.mark.parametrize("key", ["prepare", "transpiler", "transpile_config"])
+def test_runtime_config_cannot_override_hooks(tmp_path, key):
+    config = {
+        "root_dir": tmp_path,
+        "command_block_name": "c",
+        "execution_profile_block_name": "e",
+        "hpc_profile_block_name": "h",
+        "resource": "test_heron",
+        key: None,
+    }
+    with pytest.raises(ValueError, match="must not set"):
+        make_qrmi_runtime(config, transpile_config={})
+
+
+def test_runtime_uses_sqd_hooks(tmp_path):
+    runtime = make_qrmi_runtime(
+        {
+            "root_dir": tmp_path,
+            "command_block_name": "c",
+            "execution_profile_block_name": "e",
+            "hpc_profile_block_name": "h",
+            "resource": "test_heron",
+        },
+        transpile_config={"seed_transpiler": 1},
+    )
+    assert runtime.transpiler == TRANSPILER
+    assert runtime.transpile_config == {}
+    assert runtime.prepare.keywords == {"transpile_config": {"seed_transpiler": 1}}
 
 
 def sample_result(reset):
@@ -138,12 +225,11 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
         calls.append(kwargs)
         work_dir = kwargs["work_dir"]
         request = json.loads((work_dir / "sampler_request.json").read_text())
-        assert request["transpiler"] == "sqd_fulqrum.qrmi:transpile_for_target"
+        assert request["transpiler"] == "sqd_fulqrum.transpile:transpile_for_target"
         assert request["resource"] == "test_heron"
         assert request["shots"] == 4
         hook_config = json.loads((work_dir / "transpile_config.json").read_text())
-        assert hook_config["circuit_parameters"] == params.model_dump()
-        assert hook_config["seed"] == 24
+        assert hook_config == workflow.circuit_transpile_options(params, np.random.default_rng(24))
         with (work_dir / "circuit.qpy").open("rb") as stream:
             (circuit,) = qpy.load(stream)
         actual_target = target()

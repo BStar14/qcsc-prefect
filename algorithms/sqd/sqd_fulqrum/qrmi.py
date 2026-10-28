@@ -1,14 +1,23 @@
-"""SQD-owned QPY preparation and compute-node compilation hooks for QRMI."""
+"""SQD-owned QPY preparation and QrmiRuntime construction for QRMI sampling.
+
+These helpers run on the workflow host. The compute-node compilation hook is
+``sqd_fulqrum.transpile:transpile_for_target``, which does not import ffsim.
+"""
 
 from __future__ import annotations
 
-import numpy as np
+from collections.abc import Mapping
+from functools import partial
+from typing import Any
+
 from ffsim.qiskit import PRE_INIT
-from prefect.logging.loggers import disable_run_logger
-from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit
+from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiRuntime
+
+TRANSPILER = "sqd_fulqrum.transpile:transpile_for_target"
+RESERVED_KEYS = frozenset({"prepare", "transpiler", "transpile_config"})
 
 
-def prepare_sampler_circuit(circuit, *, circuit_parameters: dict) -> PreparedCircuit:
+def prepare_sampler_circuit(circuit, *, transpile_config: dict) -> PreparedCircuit:
     """Run ffSIM passes while Python gate attributes exist, then expand for QPY."""
     circuit = PRE_INIT.run(circuit)
     for _ in range(10):
@@ -18,21 +27,28 @@ def prepare_sampler_circuit(circuit, *, circuit_parameters: dict) -> PreparedCir
             if (type(inst.operation).__module__ or "").startswith("ffsim.")
         }
         if not gates:
-            return PreparedCircuit(circuit, {"circuit_parameters": circuit_parameters, "seed": 24})
+            return PreparedCircuit(circuit, dict(transpile_config))
         circuit = circuit.decompose(gates_to_decompose=sorted(gates))
     raise RuntimeError("ffsim gates remain after ten decomposition rounds")
 
 
-def transpile_for_target(circuit, target, config: dict):
-    """Reuse the workflow's custom transpiler with the compute-node Target."""
-    from sqd_fulqrum.main import CircuitParameters, transpile_circuit
+def make_qrmi_runtime(
+    qrmi_runtime_config: Mapping[str, Any], transpile_config: dict
+) -> QrmiRuntime:
+    """Build a QrmiRuntime with the SQD preparation and compilation hooks.
 
-    # The QRMI worker runs outside a Prefect flow/task context. Execute the
-    # existing transpiler directly without creating a nested task or server.
-    with disable_run_logger():
-        return transpile_circuit.fn(
-            circuit=circuit,
-            target=target,
-            circuit_params=CircuitParameters(**config["circuit_parameters"]),
-            seed=np.random.default_rng(config["seed"]),
+    ``qrmi_runtime_config`` holds the QrmiRuntime fields chosen per run (job
+    root, block names, resource, monitoring). The hooks and their configuration
+    come from the workflow's circuit parameters, so they cannot be set here.
+    """
+    reserved = RESERVED_KEYS & set(qrmi_runtime_config)
+    if reserved:
+        raise ValueError(
+            f"qrmi_runtime_config must not set {sorted(reserved)}: sqd_fulqrum supplies "
+            "its own compilation hooks, configured by parameters.circuit."
         )
+    return QrmiRuntime(
+        **qrmi_runtime_config,
+        prepare=partial(prepare_sampler_circuit, transpile_config=transpile_config),
+        transpiler=TRANSPILER,
+    )
