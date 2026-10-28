@@ -212,8 +212,11 @@ uv run pytest algorithms/sqd/tests
 
 Tests skip when their dependencies are missing. The flow tests need `ffsim`,
 `prefect-qiskit` and `qcsc_workflow_utility`. The fulqrum comparison needs a
-fulqrum build. `test_sqd_fulqrum_slurm_integration.py` needs
-`SLURM_INTEGRATION=1` and `sbatch`. No test contacts a Prefect server.
+fulqrum build. `test_qrmi_runtime.py` covers the QRMI hooks and QPY handoff
+offline. `test_sqd_fulqrum_slurm_integration.py` and
+`test_sqd_fulqrum_qrmi_slurm_integration.py` need `SLURM_INTEGRATION=1` and
+`sbatch`; the QRMI one replaces QRMI and `task_runner` with fakes and requests
+no QPU. No test contacts a Prefect server.
 
 ## 🧭 MPI Parameter Tuning
 
