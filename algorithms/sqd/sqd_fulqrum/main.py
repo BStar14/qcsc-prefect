@@ -509,6 +509,14 @@ async def sample_bitstrings(
         sampler_pubs=[(lucj_circ,)],
         options=options,
     )
+    if qrmi_runtime_config is not None:
+        from sqd_fulqrum.qrmi import compiled_circuit_summary
+
+        summary = compiled_circuit_summary(pub_result)
+        if summary is None:
+            logger.warning("The compiled circuit (isa.qpy) is not readable from this host.")
+        else:
+            logger.info(summary)
 
     # Post-process bitstrings
     meas_bits = pub_result[0].data.meas

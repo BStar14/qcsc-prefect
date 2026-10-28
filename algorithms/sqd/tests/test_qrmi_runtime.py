@@ -210,7 +210,7 @@ def sample_result(reset):
 
 
 @pytest.mark.parametrize("reset", [False, True])
-def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch, h2, reset):
+def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch, caplog, h2, reset):
     params = circuit_parameters(reset)
     config = {
         "root_dir": str(tmp_path / "quantum"),
@@ -220,6 +220,7 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
         "resource": "test_heron",
     }
     calls = []
+    compiled = []
 
     async def submit(**kwargs):
         calls.append(kwargs)
@@ -235,6 +236,9 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
         actual_target = target()
         isa = transpile_for_target(circuit, actual_target, hook_config)
         validate_isa(isa, actual_target)
+        compiled.append(isa)
+        with (work_dir / "isa.qpy").open("wb") as stream:
+            qpy.dump(isa, stream)
         (work_dir / "result.json").write_text(json.dumps(sample_result(reset), cls=RuntimeEncoder))
         return SimpleNamespace(job_id="73", state="COMPLETED", exit_status=0)
 
@@ -251,23 +255,26 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     monkeypatch.setattr(workflow, "create_ansatz_circuits", workflow.create_ansatz_circuits.fn)
     monkeypatch.setattr(workflow.Variable, "get", options)
     monkeypatch.setattr(workflow.QuantumRuntime, "load", reject_ibm)
-    result = asyncio.run(
-        workflow.sample_bitstrings.fn(
-            params,
-            h2,
-            "unused-block",
-            "options",
-            "real-device",
-            24,
-            qrmi_runtime_config=config,
+    with caplog.at_level(logging.INFO, logger=LOGGER.name):
+        result = asyncio.run(
+            workflow.sample_bitstrings.fn(
+                params,
+                h2,
+                "unused-block",
+                "options",
+                "real-device",
+                24,
+                qrmi_runtime_config=config,
+            )
         )
-    )
     assert result.get_bitstrings() == (
         ["0101", "1001"] if reset else ["0101", "0110", "1001", "1010"]
     )
     assert len(calls) == 1
     assert calls[0]["command_block_name"] == "qrmi-command"
     assert "prepare" not in config and "transpiler" not in config
+    assert f"Instruction counts = {dict(compiled[0].count_ops())}" in caplog.text
+    assert "Compiled on the compute node:" in caplog.text
 
     # Exercise the original flow body and recovery loop. Only scheduler/native
     # execution and Prefect orchestration boundaries are replaced.

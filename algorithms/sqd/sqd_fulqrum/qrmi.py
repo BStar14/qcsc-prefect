@@ -8,10 +8,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from ffsim.qiskit import PRE_INIT
 from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiRuntime
+from qiskit import qpy
+from qiskit.primitives import PrimitiveResult
+
+from sqd_fulqrum.transpile import isa_gate_depth
 
 TRANSPILER = "sqd_fulqrum.transpile:transpile_for_target"
 RESERVED_KEYS = frozenset({"prepare", "transpiler", "transpile_config"})
@@ -51,4 +56,23 @@ def make_qrmi_runtime(
         **qrmi_runtime_config,
         prepare=partial(prepare_sampler_circuit, transpile_config=transpile_config),
         transpiler=TRANSPILER,
+    )
+
+
+def compiled_circuit_summary(result: PrimitiveResult) -> str | None:
+    """Describe the circuit the compute node compiled, as the host path logs it.
+
+    Reads ``isa.qpy`` from the QRMI job directory recorded in the result
+    metadata. Returns None when the file is not readable from this host.
+    """
+    work_dir = (result.metadata.get("qcsc_slurm") or {}).get("work_dir")
+    path = Path(work_dir) / "isa.qpy" if work_dir else None
+    if path is None or not path.is_file():
+        return None
+    with path.open("rb") as stream:
+        (isa_circuit,) = qpy.load(stream)
+    return (
+        f"Circuit depth = {isa_gate_depth(isa_circuit)}\n"
+        f"Instruction counts = {dict(isa_circuit.count_ops())}\n"
+        f"Compiled on the compute node: {path}"
     )
