@@ -28,6 +28,7 @@ dependencies = [
 # sqd_fulqrum workflow. The compute node needs the fulqrum build separately
 # (packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh).
 fulqrum = ["qcsc-prefect-fulqrum"]
+qrmi = ["qcsc-prefect-qiskit[slurm]==0.3.0"]
 
 [tool.uv.sources]
 qcsc-prefect-core = { path = "../../packages/qcsc-prefect-core", editable = true }
@@ -36,6 +37,7 @@ qcsc-prefect-blocks = { path = "../../packages/qcsc-prefect-blocks", editable = 
 qcsc-prefect-executor = { path = "../../packages/qcsc-prefect-executor", editable = true }
 qcsc-prefect-dice = { path = "../../packages/qcsc-prefect-dice", editable = true }
 qcsc-prefect-fulqrum = { path = "../../packages/qcsc-prefect-fulqrum", editable = true }
+qcsc-prefect-qiskit = { path = "../../packages/qcsc-prefect-qiskit", editable = true }
 qcsc_workflow_utility = { path = "../qcsc_workflow_utility", editable = true }
 
 [tool.setuptools]

@@ -136,6 +136,46 @@ Each solve leaves a `job_*` directory under `work_dir` with the rendered script,
 `input.npz`, `solver.json`, `output.npz`, `result.json` (or `error.json`) and the
 scheduler output.
 
+### QRMI/Slurm sampling
+
+To sample through QRMI, install the workflow and QRMI integration from this
+checkout on both the workflow host and compute nodes:
+
+```bash
+uv pip install -e 'packages/qcsc-prefect-qiskit[slurm]' \
+  -e packages/qcsc-prefect-fulqrum -e algorithms/qcsc_workflow_utility \
+  -e 'algorithms/sqd[fulqrum,qrmi]'
+```
+
+Use `quantum_source="real-device"` and pass `qrmi_runtime_config` as a top-level
+flow argument (alongside `parameters`). For example, in the Prefect run form:
+
+```json
+{
+  "root_dir": "/shared/qrmi-jobs",
+  "scheduler": "slurm",
+  "command_block_name": "my-qrmi-command",
+  "execution_profile_block_name": "my-qrmi-execution",
+  "hpc_profile_block_name": "my-qrmi-hpc",
+  "resource": "test_heron"
+}
+```
+
+The quantum CommandBlock must invoke the QRMI worker, the execution profile
+must use `launcher="single"`, and `slurm_qpu` must match `resource`. Configure
+QRMI Batch mode and shared storage as described in the
+[QRMI/Slurm guide](../../docs/howto/howto_qrmi_slurm_sampler.md).
+`FulqrumSolverJob` and its classical execution blocks are unchanged.
+
+With QRMI settings, `runner_name` is ignored. SQD supplies its own preparation
+and transpiler hooks: ffSIM gates are prepared before QPY serialization, and
+the existing custom transpiler runs against the Target acquired inside Slurm.
+The same circuit parameters and seed 24 are used. The `meas`/`test` registers
+and reset postselection are preserved. Without `qrmi_runtime_config`, the
+existing IBM Runtime path remains in use; `quantum_source="random"` continues
+to bypass both runtimes. Custom compilation configuration belongs to these
+SQD hooks rather than the generic preset compiler.
+
 ### Tests
 
 The tests in `algorithms/sqd/tests` cover only `sqd_fulqrum`. Run them from the
