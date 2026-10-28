@@ -178,6 +178,14 @@ QRMI Batch mode and shared storage as described in the
 [QRMI/Slurm guide](../../docs/howto/howto_qrmi_slurm_sampler.md).
 `FulqrumSolverJob` and its classical execution blocks are unchanged.
 
+`sqd-fulqrum-create-blocks` creates these three blocks when the config has a
+`[qrmi]` table with `resource` and `python_executable` (see the commented table
+in `sqd_fulqrum_blocks.slurm.example.toml`), or with `--qrmi-resource` and
+`--qrmi-python-executable`. The QRMI HPC profile is separate from the solver's,
+because it requests the QPU. The command prints the matching
+`qrmi_runtime_config`, and `--dry-run` includes it, so it can be pasted into
+each run.
+
 With QRMI settings, `runner_name` is ignored. SQD supplies its own preparation
 and transpiler hooks, so `qrmi_runtime_config` must not set `prepare`,
 `transpiler` or `transpile_config`. On the workflow host, ffsim's `PRE_INIT`

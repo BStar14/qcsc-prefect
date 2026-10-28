@@ -44,3 +44,14 @@ return_sci_state = false            # The workflow only needs energies and occup
 # Sampler options variable. Default: {"params": {"shots": 100000}}
 shots = 100000
 # sampler_options_json = '{"params": {"shots": 50000}}'
+
+# Optional QRMI sampling (Slurm only). Uncomment to also create the three blocks
+# of the QRMI sampler job; the command prints the qrmi_runtime_config to pass as a
+# flow argument on each run. Unset queue, project, work_dir (default: work_dir/qrmi),
+# modules, pre_commands, environments and ompthreads follow the solver settings.
+# [qrmi]
+# resource = "YOUR_QRMI_RESOURCE"   # Slurm --qpu; must match the QRMI configuration
+# python_executable = "/opt/venvs/qrmi/bin/python"  # Imports qrmi, the worker and sqd_fulqrum
+# walltime = "00:30:00"
+# ompthreads = 4                    # The QPU is held while the node compiles
+# timeout_seconds = 3600            # Monitoring only; does not cancel the job
