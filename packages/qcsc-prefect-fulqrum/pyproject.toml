@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qcsc-prefect-fulqrum"
-version = "0.2.5"
+version = "0.3.0"
 description = "Fulqrum subspace eigensolver integration for qcsc-prefect"
 readme = "README.md"
 requires-python = ">=3.11"
