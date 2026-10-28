@@ -2,7 +2,6 @@
 # Copy to sqd_fulqrum_blocks.slurm.toml and run:
 #   sqd-fulqrum-create-blocks --config algorithms/sqd/sqd_fulqrum_blocks.slurm.toml
 # Add --dry-run to print the resolved settings without saving anything.
-# The values below match the native/docker testbed of qcsc-prefect-fulqrum.
 
 # Required for Slurm
 hpc_target = "slurm"

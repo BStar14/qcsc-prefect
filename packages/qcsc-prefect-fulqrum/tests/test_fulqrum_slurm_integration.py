@@ -2,10 +2,10 @@
 
 No Prefect server is used. Blocks built by ``create_fulqrum_blocks`` are kept in
 memory and served to ``run_job_from_blocks``; the Prefect logger and artifact
-calls are stubbed. Run from the testbed login node after ``make dev-install``:
+calls are stubbed. Run it from the repository root on a Slurm submit host whose
+job root is shared with the compute nodes:
 
-    docker exec -w /shared/qcsc-prefect -e SLURM_INTEGRATION=1 login \
-        /opt/venvs/qcsc/bin/python -m pytest -p no:cacheprovider \
+    SLURM_INTEGRATION=1 python -m pytest \
         packages/qcsc-prefect-fulqrum/tests/test_fulqrum_slurm_integration.py
 
 Environment:

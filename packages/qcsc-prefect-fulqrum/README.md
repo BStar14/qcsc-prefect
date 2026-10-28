@@ -82,8 +82,6 @@ back to `SLURM_CPUS_PER_TASK`.
 - The io, CLI, block and solver-job tests run anywhere. The block and
   solver-job tests skip where Prefect is not installed.
 - The numerical tests need fulqrum and PySCF, so they skip when those are not
-  installed. Run them on a node where fulqrum is built, for example the
-  `native/docker` testbed's `c1` node.
+  installed. Run them on a node where fulqrum is built.
 - `test_fulqrum_slurm_integration.py` submits real Slurm jobs. It needs
-  `SLURM_INTEGRATION=1` and `sbatch`, and no Prefect server. See
-  `native/docker/RUNBOOK.md` step 7.
+  `SLURM_INTEGRATION=1` and `sbatch`, and no Prefect server.

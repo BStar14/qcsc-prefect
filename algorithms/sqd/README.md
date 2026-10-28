@@ -72,8 +72,8 @@ See the [Run Hybrid Workflow](../../docs/tutorials/run_sqd_workflow.md) tutorial
 [fulqrum](https://github.com/qiskit-community/fulqrum) through the
 `FulqrumSolverJob` block of `packages/qcsc-prefect-fulqrum`. The quantum stage
 (LUCJ ansatz, transpilation, `real-device` or `random` sampling) and the
-configuration recovery loop are the same as in `sqd_dice`. `sqd_dice` is not
-changed or imported.
+configuration recovery loop are the same as in `sqd_dice`, which `sqd_fulqrum`
+does not import.
 
 Differences from `sqd_dice`:
 
@@ -188,9 +188,7 @@ uv run pytest algorithms/sqd/tests
 Tests skip when their dependencies are missing. The flow tests need `ffsim`,
 `prefect-qiskit` and `qcsc_workflow_utility`. The fulqrum comparison needs a
 fulqrum build. `test_sqd_fulqrum_slurm_integration.py` needs
-`SLURM_INTEGRATION=1` and `sbatch`. See
-`packages/qcsc-prefect-fulqrum/native/docker/RUNBOOK.md` for the testbed
-commands. No test contacts a Prefect server.
+`SLURM_INTEGRATION=1` and `sbatch`. No test contacts a Prefect server.
 
 ## 🧭 MPI Parameter Tuning
 

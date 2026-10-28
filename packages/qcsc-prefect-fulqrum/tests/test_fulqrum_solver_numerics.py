@@ -1,9 +1,9 @@
 """Numerical checks of the fulqrum solver against PySCF FCI and qiskit-addon-sqd.
 
-These need fulqrum and PySCF, so they skip in CI. Run them on the testbed:
+These need fulqrum and PySCF, so they skip in CI. Run them with the Python of the
+environment where fulqrum is built:
 
-    docker exec -w /shared/qcsc-prefect c1 /opt/venvs/fulqrum/bin/python -m pytest \
-        packages/qcsc-prefect-fulqrum/tests -p no:cacheprovider
+    python -m pytest packages/qcsc-prefect-fulqrum/tests
 """
 
 from __future__ import annotations
