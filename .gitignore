@@ -215,3 +215,6 @@ algorithms/sbd/native/*.o
 algorithms/sbd/native/sbd/
 .DS_Store
 .vscode/sftp.json
+
+# Local fulqrum Docker/Slurm testbed
+packages/qcsc-prefect-fulqrum/native/docker/
