@@ -60,6 +60,7 @@ class _HPCProfileBlockStub:
         self.project_gpu = "ra010014" if hpc_target == "fugaku" else ""
         self.executable_map = {"bulk_executable": "/bin/echo"}
         self.slurm_qpu = None
+        self.slurm_extra_directives: list[str] = []
         self.gfscache = None
         self.spack_modules: list[str] = []
         self.mpi_options_for_pjm: list[str] = []
