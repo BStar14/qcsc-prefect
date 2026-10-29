@@ -2,6 +2,14 @@
 
 This package provides implementation for the QCSC algorithm demonstrated in the paper [Chemistry Beyond the Scale of Exact Diagonalization on a Quantum-Centric Supercomputer](https://arxiv.org/abs/2405.05068).
 
+It contains two variants of the workflow that differ only in the subspace eigensolver:
+
+- `sqd_dice` diagonalizes with the DICE SHCI solver (`qcsc-prefect-dice`). The
+  steps below set it up.
+- `sqd_fulqrum` diagonalizes with fulqrum (`qcsc-prefect-fulqrum`) and can
+  optionally sample through QRMI/Slurm. See "SQD with the fulqrum eigensolver"
+  below.
+
 ## 🚀 Getting Started
 
 Before starting, make sure:

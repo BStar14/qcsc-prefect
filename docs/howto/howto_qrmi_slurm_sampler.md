@@ -25,7 +25,10 @@ The library uses installed modules and does not import the examples or test
 fixtures. QRMI is imported only inside the compute-node entrypoint. The HPC
 executor is imported when a sampling task runs, keeping it optional for native
 Qiskit users. The Bell circuit example in `examples/qrmi_slurm_bell` uses the
-default compiler and only the public sampler API.
+default compiler and only the public sampler API. The `sqd_fulqrum` workflow in
+`algorithms/sqd` is a full application of both hooks: an ffsim `prepare` step on
+the workflow host and an importable `transpiler` on the compute node (see its
+[README](https://github.com/qiskit-community/qcsc-prefect/tree/main/algorithms/sqd)).
 
 ## Installation and cluster configuration
 

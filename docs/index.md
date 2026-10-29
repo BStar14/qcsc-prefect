@@ -21,7 +21,8 @@ qcsc-prefect/
 │   ├── qcsc-prefect-adapters/
 │   ├── qcsc-prefect-executor/
 │   ├── qcsc-prefect-qiskit/
-│   └── qcsc-prefect-dice/
+│   ├── qcsc-prefect-dice/
+│   └── qcsc-prefect-fulqrum/
 ├── algorithms/
 ├── examples/
 └── docs/

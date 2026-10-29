@@ -26,6 +26,7 @@ plugins:
             - packages/qcsc-prefect-blocks/src
             - packages/qcsc-prefect-executor/src
             - packages/qcsc-prefect-dice/src
+            - packages/qcsc-prefect-fulqrum/src
             - packages/qcsc-prefect-qiskit/src
           options:
             docstring_style: google
@@ -70,6 +71,7 @@ nav:
       - Prefect Qiskit Setup: howto/howto_setup_prefect_qiskit.md
       - Prefect Qiskit Setup (Fugaku): howto/howto_setup_prefect_qiskit_fugaku.md
       - DICE Integration: howto/howto_use_dice_prefect.md
+      - Fulqrum Integration: howto/howto_use_fulqrum_prefect.md
       - Connect to Prefect on MDX: howto/howto_connect_to_prefect_on_mdx.md
       - Python Environment: howto/howto_setup_python_env.md
       - Python Environment (Fugaku): howto/howto_setup_python_env_fugaku.md

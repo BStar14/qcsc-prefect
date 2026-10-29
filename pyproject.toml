@@ -50,6 +50,10 @@ qcsc-prefect-blocks   = { workspace = true }
 qcsc-prefect-executor = { workspace = true }
 qcsc-prefect-dice     = { workspace = true }
 qcsc-prefect-qiskit   = { workspace = true }
+# Not a workspace member: uv would resolve its [solver] extra (fulqrum>=0.5,
+# not on PyPI) for `uv sync --all-packages`. packages/conftest.py puts its
+# src/ on sys.path for the tests.
+qcsc-prefect-fulqrum  = { path = "packages/qcsc-prefect-fulqrum", editable = true }
 
 # --- Poetry ---
 [tool.poetry]

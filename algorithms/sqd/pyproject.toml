@@ -27,7 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 # sqd_fulqrum workflow. The compute node needs the fulqrum build separately
 # (packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh).
-fulqrum = ["qcsc-prefect-fulqrum"]
+fulqrum = ["qcsc-prefect-fulqrum==0.3.0"]
 qrmi = ["qcsc-prefect-qiskit[slurm]==0.3.0"]
 
 [tool.uv.sources]
