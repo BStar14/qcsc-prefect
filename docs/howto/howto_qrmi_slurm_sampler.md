@@ -1,15 +1,23 @@
-# QRMI/Slurm Sampler
+# QRMI Sampler
 
 `qcsc_prefect.integrations.qiskit.qrmi.QrmiRuntime` samples one or more bound,
-measured circuits through a Slurm allocation and a QRMI IBM Quantum Batch.
-The workflow host writes QPY and JSON to shared storage. The compute node
-acquires the QRMI Target, transpiles each circuit, and launches `task_runner`
-once for all circuits. The caller receives a native `PrimitiveResult`.
+measured circuits on IBM Quantum through QRMI and returns a native
+`PrimitiveResult`. It has two schedulers. Both connect to IBM Quantum through
+QRMI; they differ in where the code runs:
 
-Select this execution path with `scheduler="slurm"` (the default).
-Direct QRMI execution without Slurm (`scheduler="iqp"`) is not implemented
-and raises `NotImplementedError` at construction; other scheduler values
-raise `ValueError`.
+| | `scheduler="slurm"` (default) | `scheduler="iqp"` |
+| --- | --- | --- |
+| Runs in | a Slurm job on a compute node | the workflow (Prefect worker) process |
+| Session | the Batch that SPANK acquires | none: one job per `sampler()` call |
+| QRMI settings | compute-node environment | `resource_config` (stored as a secret) |
+| Needs | shared `root_dir`, three execution blocks, SPANK | network access to IBM Quantum |
+| Resource types | as configured for SPANK | `ibm-quantum-compute-service` only |
+
+With `scheduler="slurm"`, the workflow host writes QPY and JSON to shared
+storage. The compute node acquires the QRMI Target, transpiles each circuit,
+and launches `task_runner` once for all circuits. Direct execution with
+`scheduler="iqp"` is described in [Direct IQP execution](#direct-iqp-execution).
+Other scheduler values raise `ValueError`.
 
 ## Responsibilities
 
@@ -22,10 +30,11 @@ raise `ValueError`.
 | Validation of every classical register's name, width and shots | Resource and compilation settings |
 
 The library uses installed modules and does not import the examples or test
-fixtures. QRMI is imported only inside the compute-node entrypoint. The HPC
-executor is imported when a sampling task runs, keeping it optional for native
-Qiskit users. The Bell circuit example in `examples/qrmi_slurm_bell` uses the
-default compiler and only the public sampler API.
+fixtures. QRMI is imported only when sampling: inside the compute-node
+entrypoint for Slurm, or inside the sampling task for IQP. The HPC executor is
+imported when a Slurm sampling task runs, keeping it optional for native Qiskit
+users. The Bell circuit examples in `examples/qrmi_slurm_bell` and
+`examples/qrmi_iqp_bell` use the default compiler and only the public sampler API.
 
 ## Installation and cluster configuration
 
@@ -273,6 +282,92 @@ requests written by an older workflow-host installation. The worker accepts
 every eligible node before submitting work. The default CLI executable is
 `task_runner` beside the worker's Python; `--task-runner` can override it.
 
+## Direct IQP execution
+
+`scheduler="iqp"` runs QRMI in the workflow process and needs no Slurm cluster,
+shared directory or compute-node installation. Install QRMI with its IBM extra
+on that host (`pip install "qrmi[ibm]"`; QRMI publishes Linux wheels). The host
+must reach the IBM Quantum and IBM Cloud IAM endpoints.
+
+```python
+from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime
+
+runtime = QrmiRuntime(
+    scheduler="iqp",
+    resource="ibm_kingston",
+    resource_config={
+        "QRMI_IBM_QCS_ENDPOINT": "https://quantum.cloud.ibm.com/api/v1",
+        "QRMI_IBM_QCS_IAM_ENDPOINT": "https://iam.cloud.ibm.com",
+        "QRMI_IBM_QCS_IAM_APIKEY": "<your API key>",
+        "QRMI_IBM_QCS_SERVICE_CRN": "<your service instance CRN>",
+    },
+)
+result = await runtime.sampler([(circuit_a,), (circuit_b,)], shots=100)
+```
+
+`resource_config` holds QRMI's IBM Quantum Compute Service settings, using the
+QRMI environment variable names without the `<resource>_` prefix. It is passed
+to `QuantumResource.from_config` and is not read from or written to the process
+environment, so several flows in one worker can use different credentials.
+The runtime hides it from its `repr`. `root_dir`, the Slurm block names and
+`resource_config` with `scheduler="slurm"` are rejected.
+
+The PUB, shots, `prepare`, `transpile_config` and `transpiler` rules are the same
+as for Slurm. Each call:
+
+1. Creates a QRMI resource for this call only. It is never shared, and its
+   methods are called one at a time.
+2. Fetches the Target with `qrmi.primitives.ibm.get_backend(resource).target`
+   and compiles each circuit with the same code as the Slurm worker.
+3. Submits all circuits as one job with QRMI's `SamplerV2`, polls its status
+   every `watch_poll_interval` seconds, and validates the result against the
+   input PUBs.
+
+No session is used: the runtime never calls `acquire()` or `release()`, and
+`resource_config` must not contain `QRMI_IBM_QCS_SESSION_ID` or
+`QRMI_JOB_ACQUISITION_TOKEN`, which would attach the job to an existing session.
+Each `sampler()` call is a separate job in the IQP queue.
+
+The result's `metadata["qcsc_qrmi"]` records the resource, job ID, submission
+time, final status, Target width and the per-PUB compilation report.
+
+### Failures and cancellation
+
+- A job that ends as `ERROR` or `CANCELLED` raises `IqpJobFailed`.
+- Cancellation is accepted between status polls. A status, result or cancel call
+  that is already running in its thread finishes first; its wait follows QRMI's
+  own network timeouts.
+- If the job ID is known and the call fails or is cancelled before the job ends,
+  the runtime calls `job.cancel()` once, shielded from cancellation. A failed
+  cancel is logged and not retried.
+- If submission itself raises, it is unknown whether a job was created.
+  The runtime raises `IqpSubmissionUnknown` with the resource, time and error,
+  and does **not** resubmit. Check the IBM Quantum dashboard before retrying.
+- Prefect task retries are disabled, as for Slurm.
+
+### Runtime block
+
+`QrmiRuntimeBlock` stores the runtime settings in Prefect, with `resource_config`
+as a secret. `prepare` is a Python callable and cannot be stored; pass it when
+building the runtime:
+
+```python
+from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+QrmiRuntimeBlock(
+    scheduler="iqp",
+    resource="ibm_kingston",
+    resource_config={...},
+).save("my-qrmi-runtime", overwrite=True)
+
+runtime = await QrmiRuntimeBlock.aload_runtime("my-qrmi-runtime", prepare=prepare)
+```
+
+`QrmiRuntimeBlock.load(name)` keeps Prefect's behavior and returns the block;
+call `get_runtime(prepare)` on it, or use `aload_runtime` (or `load_runtime` in
+synchronous code). The same block type stores Slurm settings (`root_dir` and the
+three block names) with `scheduler="slurm"`.
+
 ## Local tests
 
 From the repository root, with the workspace dependencies installed:
@@ -280,6 +375,7 @@ From the repository root, with the workspace dependencies installed:
 ```bash
 uv run --no-sync pytest \
   packages/qcsc-prefect-qiskit/tests/test_qrmi_slurm_runtime.py \
+  packages/qcsc-prefect-qiskit/tests/test_qrmi_iqp_runtime.py \
   packages/qcsc-prefect-qiskit/tests/test_qrmi_slurm_task.py \
   packages/qcsc-prefect-executor/tests/test_qrmi_slurm_bell.py \
   packages/qcsc-prefect-adapters/tests/test_slurm_runtime.py -q
@@ -296,4 +392,8 @@ A separate Prefect integration test starts a temporary local server with
 `QuantumCircuit` and a runtime containing a preparation callable, then checks the
 completed task state and returned `BitArray`. Only the Slurm submission boundary
 is replaced; the test makes no QRMI or QPU calls and rejects external connections.
+The IQP tests replace the `qrmi` module with a fake that records every call and
+fails if one QRMI resource is used from two threads at the same time. They cover
+success, job failure, cancellation while submitting and while waiting, unknown
+submission results, session settings and the runtime block.
 These local tests do not establish hardware fidelity or cluster deployment.

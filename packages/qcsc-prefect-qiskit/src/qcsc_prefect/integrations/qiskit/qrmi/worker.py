@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
 import socket
@@ -12,15 +11,17 @@ import sys
 from pathlib import Path
 
 from qiskit import qasm3, qpy
-from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
+# Re-exported: the default transpiler path and existing hooks import these names here.
+from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager  # noqa: F401
+
+from .compile import compile_pubs, generic_transpile, validate_isa  # noqa: F401
 from .contract import (
     SCHEMA_VERSION,
     circuit_registers,
     decode_result,
     positive_shots,
 )
-from .transpilation import preset_pass_manager_options
 
 
 def require_batch_environment(resource: str) -> None:
@@ -32,25 +33,6 @@ def require_batch_environment(resource: str) -> None:
         )
     if not os.environ.get(f"{resource}_QRMI_JOB_ACQUISITION_TOKEN"):
         raise RuntimeError(f"Missing SPANK acquisition token; submit with --qpu={resource}")
-
-
-def generic_transpile(circuit, target, config):
-    """Configure a preset pass manager using JSON options and the actual Target."""
-    options = preset_pass_manager_options(config, num_qubits=circuit.num_qubits)
-    return generate_preset_pass_manager(target=target, **options).run(circuit)
-
-
-def validate_isa(circuit, target) -> None:
-    for instruction in circuit.data:
-        if instruction.operation.name == "barrier":
-            continue
-        qargs = tuple(circuit.find_bit(bit).index for bit in instruction.qubits)
-        if not target.instruction_supported(
-            operation_name=instruction.operation.name,
-            qargs=qargs,
-            parameters=instruction.operation.params,
-        ):
-            raise RuntimeError(f"Unsupported ISA instruction: {instruction.operation.name} {qargs}")
 
 
 def make_sampler_payload(isa_circuits, shots: int) -> dict:
@@ -114,26 +96,10 @@ def main(argv: list[str] | None = None) -> None:
         )
     if [circuit_registers(circuit) for circuit in circuits] != registers:
         raise ValueError("QPY registers do not match sampler request")
-    module_name, function_name = request["transpiler"].split(":")
-    transpile = getattr(importlib.import_module(module_name), function_name)
     target = get_target(resource)
-    isa_circuits = []
-    pub_reports = []
-    for circuit, config, pub_registers in zip(circuits, configs, registers):
-        isa = transpile(circuit, target, config)
-        if circuit_registers(isa) != pub_registers:
-            raise ValueError("transpiler must preserve classical register names and widths")
-        validate_isa(isa, target)
-        isa_circuits.append(isa)
-        pub_reports.append(
-            {
-                **config,
-                "input_ops": dict(circuit.count_ops()),
-                "isa_ops": dict(isa.count_ops()),
-                "isa_num_qubits": isa.num_qubits,
-                "registers": pub_registers,
-            }
-        )
+    isa_circuits, pub_reports = compile_pubs(
+        circuits, configs, registers, target, request["transpiler"]
+    )
     report = {
         "transpiler": request["transpiler"],
         "target_num_qubits": target.num_qubits,

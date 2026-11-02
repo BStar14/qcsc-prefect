@@ -67,31 +67,38 @@ def decode_result(
 ) -> PrimitiveResult:
     """Decode a sampler result whose PUB ``i`` must match ``registers[i]``."""
     result = ResultDecoder.decode(path.read_text(encoding="utf-8"))
+    return validate_result(result, shots, registers, where=f"see {path}")
+
+
+def validate_result(
+    result, shots: int, registers: Sequence[Mapping[str, int]], *, where: str
+) -> PrimitiveResult:
+    """Check that result PUB ``i`` has the registers, widths and shots of ``registers[i]``."""
     if not isinstance(result, PrimitiveResult):
         raise RuntimeError(
-            f"task_runner returned {type(result).__name__}; expected PrimitiveResult; see {path}"
+            f"task_runner returned {type(result).__name__}; expected PrimitiveResult; {where}"
         )
     if len(result) != len(registers):
         raise RuntimeError(
-            f"task_runner returned {len(result)} PUBs; expected {len(registers)}; see {path}"
+            f"task_runner returned {len(result)} PUBs; expected {len(registers)}; {where}"
         )
     for index, (pub_result, pub_registers) in enumerate(zip(result, registers)):
-        where = f"(PUB {index}); see {path}"
+        context = f"(PUB {index}); {where}"
         if not isinstance(pub_result, PubResult):
-            raise RuntimeError(f"Expected sampler PUB result {where}")
+            raise RuntimeError(f"Expected sampler PUB result {context}")
         data = pub_result.data
         if set(data.keys()) != set(pub_registers):
             raise RuntimeError(
-                f"Unexpected result registers; expected {dict(pub_registers)} {where}"
+                f"Unexpected result registers; expected {dict(pub_registers)} {context}"
             )
         for name, width in pub_registers.items():
             samples = data[name]
             if not isinstance(samples, BitArray) or samples.shape != ():
-                raise RuntimeError(f"Expected scalar BitArray for {name} {where}")
+                raise RuntimeError(f"Expected scalar BitArray for {name} {context}")
             if samples.num_shots != shots:
                 raise RuntimeError(
-                    f"task_runner returned {samples.num_shots} shots; expected {shots} {where}"
+                    f"task_runner returned {samples.num_shots} shots; expected {shots} {context}"
                 )
             if samples.num_bits != width:
-                raise RuntimeError(f"Expected {width} bits for {name} {where}")
+                raise RuntimeError(f"Expected {width} bits for {name} {context}")
     return result

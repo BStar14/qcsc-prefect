@@ -121,7 +121,8 @@ def test_explicit_slurm_scheduler_submits_and_decodes_result(runtime, submitted)
 @pytest.mark.parametrize(
     "scheduler,exception,message",
     [
-        ("iqp", NotImplementedError, 'scheduler="iqp" is not implemented'),
+        # Slurm settings are present, so "iqp" rejects them instead of running.
+        ("iqp", ValueError, 'scheduler="iqp" does not use root_dir'),
         ("unknown", ValueError, "Unsupported scheduler"),
         (None, ValueError, "Unsupported scheduler"),
     ],
