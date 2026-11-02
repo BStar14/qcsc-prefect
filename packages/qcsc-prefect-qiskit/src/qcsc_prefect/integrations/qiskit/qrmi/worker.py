@@ -53,12 +53,13 @@ def validate_isa(circuit, target) -> None:
             raise RuntimeError(f"Unsupported ISA instruction: {instruction.operation.name} {qargs}")
 
 
-def make_sampler_payload(isa_circuit, shots: int) -> dict:
+def make_sampler_payload(isa_circuits, shots: int) -> dict:
     return {
         "program_id": "sampler",
         "parameters": {
             "pubs": [
-                [qasm3.dumps(isa_circuit, disable_constants=True, allow_aliasing=True), None, shots]
+                [qasm3.dumps(isa, disable_constants=True, allow_aliasing=True), None, shots]
+                for isa in isa_circuits
             ],
             "version": 2,
             "support_qiskit": True,
@@ -68,13 +69,15 @@ def make_sampler_payload(isa_circuit, shots: int) -> dict:
     }
 
 
-def execute_task_runner(isa_circuit, shots: int, executable: Path, resource: str) -> None:
+def execute_task_runner(isa_circuits, shots: int, executable: Path, resource: str) -> None:
     Path("sampler_input.json").write_text(
-        json.dumps(make_sampler_payload(isa_circuit, shots), indent=2), encoding="utf-8"
+        json.dumps(make_sampler_payload(isa_circuits, shots), indent=2), encoding="utf-8"
     )
     # No retries: a zero CLI exit code alone does not prove quantum success.
     subprocess.run([str(executable), resource, "sampler_input.json", "result.json"], check=True)
-    decode_result(Path("result.json").resolve(), shots, circuit_registers(isa_circuit))
+    decode_result(
+        Path("result.json").resolve(), shots, [circuit_registers(isa) for isa in isa_circuits]
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -99,34 +102,51 @@ def main(argv: list[str] | None = None) -> None:
     if resource is None:
         raise RuntimeError(f"{resource_id} is not present in this Slurm allocation")
     with Path("circuit.qpy").open("rb") as stream:
-        (circuit,) = qpy.load(stream)
-    if circuit_registers(circuit) != request["registers"]:
+        circuits = qpy.load(stream)
+    registers = request["registers"]
+    configs = json.loads(Path("transpile_config.json").read_text(encoding="utf-8"))
+    if not isinstance(configs, list) or not isinstance(registers, list):
+        raise ValueError("registers and transpile_config must have one entry per PUB")
+    if not circuits or not len(circuits) == len(registers) == len(configs):
+        raise ValueError(
+            f"QPY has {len(circuits)} circuits, request has {len(registers)} registers "
+            f"and {len(configs)} transpile configs; expected one of each per PUB"
+        )
+    if [circuit_registers(circuit) for circuit in circuits] != registers:
         raise ValueError("QPY registers do not match sampler request")
-    config = json.loads(Path("transpile_config.json").read_text(encoding="utf-8"))
     module_name, function_name = request["transpiler"].split(":")
     transpile = getattr(importlib.import_module(module_name), function_name)
     target = get_target(resource)
-    isa = transpile(circuit, target, config)
-    if circuit_registers(isa) != request["registers"]:
-        raise ValueError("transpiler must preserve classical register names and widths")
-    validate_isa(isa, target)
+    isa_circuits = []
+    pub_reports = []
+    for circuit, config, pub_registers in zip(circuits, configs, registers):
+        isa = transpile(circuit, target, config)
+        if circuit_registers(isa) != pub_registers:
+            raise ValueError("transpiler must preserve classical register names and widths")
+        validate_isa(isa, target)
+        isa_circuits.append(isa)
+        pub_reports.append(
+            {
+                **config,
+                "input_ops": dict(circuit.count_ops()),
+                "isa_ops": dict(isa.count_ops()),
+                "isa_num_qubits": isa.num_qubits,
+                "registers": pub_registers,
+            }
+        )
     report = {
-        **config,
         "transpiler": request["transpiler"],
-        "input_ops": dict(circuit.count_ops()),
-        "isa_ops": dict(isa.count_ops()),
         "target_num_qubits": target.num_qubits,
-        "isa_num_qubits": isa.num_qubits,
-        "registers": request["registers"],
         "host": socket.gethostname(),
         "resource": resource_id,
         "mode": "batch",
+        "pubs": pub_reports,
     }
     Path("transpile_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     with Path("isa.qpy").open("wb") as stream:
-        qpy.dump(isa, stream)
+        qpy.dump(isa_circuits, stream)
     print(f">>> Host: {socket.gethostname()}, resource: {resource_id}, mode: batch", flush=True)
-    execute_task_runner(isa, shots, args.task_runner, resource_id)
+    execute_task_runner(isa_circuits, shots, args.task_runner, resource_id)
 
 
 if __name__ == "__main__":

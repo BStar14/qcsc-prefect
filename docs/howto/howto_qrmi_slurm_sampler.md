@@ -1,10 +1,10 @@
 # QRMI/Slurm Sampler
 
-`qcsc_prefect.integrations.qiskit.qrmi.QrmiRuntime` samples one bound,
-measured circuit through a Slurm allocation and a QRMI IBM Quantum Batch.
+`qcsc_prefect.integrations.qiskit.qrmi.QrmiRuntime` samples one or more bound,
+measured circuits through a Slurm allocation and a QRMI IBM Quantum Batch.
 The workflow host writes QPY and JSON to shared storage. The compute node
-acquires the QRMI Target, transpiles the circuit, and launches `task_runner`.
-The caller receives a native `PrimitiveResult`.
+acquires the QRMI Target, transpiles each circuit, and launches `task_runner`
+once for all circuits. The caller receives a native `PrimitiveResult`.
 
 Select this execution path with `scheduler="slurm"` (the default).
 Direct QRMI execution without Slurm (`scheduler="iqp"`) is not implemented
@@ -94,9 +94,10 @@ result = await runtime.sampler([(circuit,)], shots=100)
 counts = result[0].data.meas.get_counts()
 ```
 
-Only one `(circuit,)` PUB is accepted. Bind parameters before calling the runtime.
-The circuit must contain measurements and named classical registers covering all
-classical bits. The default is 100 shots. The equivalent supported options form is:
+Each PUB is a one-element `(circuit,)` tuple. Bind parameters before calling the
+runtime. Each circuit must contain measurements and named classical registers
+covering all classical bits. The default is 100 shots. The equivalent supported
+options form is:
 
 ```python
 result = await runtime.sampler(
@@ -104,9 +105,19 @@ result = await runtime.sampler(
 )
 ```
 
+Several bound circuits can be sampled in one Slurm job and one QRMI sampler
+call. Result `i` corresponds to PUB `i`, and all PUBs use the same shots:
+
+```python
+result = await runtime.sampler([(circuit_a,), (circuit_b,)], shots=100)
+counts_a = result[0].data.meas.get_counts()
+counts_b = result[1].data.meas.get_counts()
+```
+
 Conflicting `shots=` and `options["params"]["shots"]` values fail before submission.
 Shots must be positive integers; booleans, strings and floats are rejected.
 Other options, parameter-value PUBs and PUB-specific shots are rejected explicitly.
+If any PUB is invalid, the whole call fails before a job directory is created.
 This facade returns results directly; it does not provide Runtime Block loading,
 workflow-host Target acquisition or a Qiskit primitive job handle.
 
@@ -161,6 +172,15 @@ must be a number in [0, 1] or `None` (booleans are rejected).
 `qubits_initially_zero` must be a boolean, and `unitary_synthesis_plugin_config`
 must be a dictionary or `None`. Validation uses the prepared circuit and merged
 configuration, including any overrides from `PreparedCircuit.config`.
+
+With several PUBs, `transpile_config` is the base configuration for every PUB.
+`prepare` runs once per circuit, and each `PreparedCircuit.config` overrides the
+base for that circuit only. Each PUB's final configuration is validated against
+its own prepared circuit, and is passed to the compiler with that circuit.
+A non-`None` `initial_layout` in the base configuration therefore requires every
+prepared circuit to have the same number of qubits; return a per-circuit
+`initial_layout` from `prepare` when the circuits differ. Without a layout,
+circuits of different widths are accepted. Errors name the failing PUB index.
 Qiskit validates target-dependent constraints and installed plugin names on the
 compute node. Target/backend, basis-gate and coupling-map overrides are excluded:
 the compiler always uses the actual Target acquired inside the Slurm allocation.
@@ -173,14 +193,15 @@ before `task_runner` is called.
 
 For application-specific preparation, supply
 `prepare(circuit) -> PreparedCircuit`. This function runs before serialization
-on a circuit copy and returns a QPY-safe circuit plus JSON configuration.
+on a copy of each circuit and returns a QPY-safe circuit plus JSON configuration.
 The caller's original circuit is not modified. QPY preserves circuit definitions;
 applications using custom Python gate attributes should prepare those gates
 before transport.
 
 For a custom compute-node compiler, supply `transpiler="module:function"`.
-The installed function is called as `function(circuit, target, config)` and must
-return a bound, measured `QuantumCircuit`. The module must be importable in the
+The installed function is called once per circuit as
+`function(circuit, target, config)` and must return a bound, measured
+`QuantumCircuit`. The module must be importable in the
 compute-node Python environment. Both hooks must preserve classical register
 names and widths. `PreparedCircuit.config` overrides matching `transpile_config`
 keys. This applies to both the default compiler's preset options and a custom
@@ -229,19 +250,25 @@ Applications own their hook implementations and interpretation of results.
 
 Each job retains:
 
-- `circuit.qpy`: the circuit to transport.
-- `sampler_request.json`: schema version 1, resource, shots, registers and compiler hook.
-- `transpile_config.json`: optional compiler configuration.
+- `circuit.qpy`: the circuits to transport, in PUB order.
+- `sampler_request.json`: schema version 2, resource, shots, a list with the
+  registers of each PUB, and the compiler hook.
+- `transpile_config.json`: a list with the final compiler configuration of each PUB.
 - `sampler.slurm` and scheduler stdout/stderr.
-- `isa.qpy` and `transpile_report.json`: compiled circuit and Target information.
+- `isa.qpy` and `transpile_report.json`: compiled circuits in PUB order, Target
+  information, and a `pubs` list with the configuration, operation counts and
+  registers of each PUB.
 - `sampler_input.json` and raw `result.json`: CLI input and encoded output.
 - `slurm_job.json`: scheduler state and execution record when monitoring returns.
 
-Both worker and caller require one result PUB and validate every classical
-register's name, width, scalar shape and shots. A zero CLI exit code alone is
-not sufficient. Failed jobs and malformed results retain their diagnostic files.
+Both worker and caller require one result PUB per input PUB, in the same order,
+and validate every classical register's name, width, scalar shape and shots.
+A zero CLI exit code alone is not sufficient. Failed jobs and malformed results
+retain their diagnostic files.
 
-Update the workflow and compute-node installations together. The worker accepts
+Update the workflow and compute-node installations together. The worker rejects
+a request whose schema version differs from its own, including schema version 1
+requests written by an older workflow-host installation. The worker accepts
 `--request sampler_request.json`; verify imports and worker `--help` output on
 every eligible node before submitting work. The default CLI executable is
 `task_runner` beside the worker's Python; `--task-runner` can override it.
