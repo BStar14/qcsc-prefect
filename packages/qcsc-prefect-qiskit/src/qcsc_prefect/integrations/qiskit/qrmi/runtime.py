@@ -39,20 +39,27 @@ class PreparedCircuit:
 
 @dataclass
 class QrmiRuntime:
-    """Sample one bound, measured circuit through QRMI.
+    """Sample one or more bound, measured circuits through QRMI in one job.
 
     Only ``scheduler="slurm"`` is currently supported. Direct QRMI execution
     without Slurm (``scheduler="iqp"``) is not implemented.
 
-    ``prepare`` runs before QPY serialization. ``transpiler`` is an importable
-    ``module:function(circuit, target, config)`` on the compute node. Both hosts
-    must have that module installed. No target is acquired on the workflow host;
-    this facade is not a drop-in ``prefect_qiskit.QuantumRuntime`` Block.
+    ``sampler`` accepts ``[(circuit,), (circuit,), ...]``; result ``i``
+    corresponds to PUB ``i``. All PUBs share the same shots.
 
-    The default transpiler accepts JSON-safe preset pass manager options in
-    ``transpile_config``, including ``initial_layout`` (physical qubit indices),
-    ``optimization_level`` (default 1), and ``seed_transpiler``. Custom pass
-    managers can be constructed and run inside a ``transpiler`` hook.
+    ``prepare`` runs on a copy of each circuit before QPY serialization.
+    ``transpiler`` is an importable ``module:function(circuit, target, config)``
+    on the compute node, called once per circuit. Both hosts must have that
+    module installed. No target is acquired on the workflow host; this facade
+    is not a drop-in ``prefect_qiskit.QuantumRuntime`` Block.
+
+    ``transpile_config`` is the base configuration for every PUB, and each
+    ``PreparedCircuit.config`` overrides matching keys for its own circuit.
+    The default transpiler accepts JSON-safe preset pass manager options,
+    including ``initial_layout`` (physical qubit indices), ``optimization_level``
+    (default 1), and ``seed_transpiler``. Each PUB's final configuration is
+    validated against its prepared circuit. Custom pass managers can be
+    constructed and run inside a ``transpiler`` hook.
     """
 
     root_dir: Path
@@ -82,27 +89,40 @@ class QrmiRuntime:
         self._validate_scheduler()
         shots = resolve_shots(shots, options)
         pubs = list(sampler_pubs)
-        if len(pubs) != 1 or not isinstance(pubs[0], (tuple, list)) or len(pubs[0]) != 1:
-            raise ValueError("QRMI Slurm accepts only [(circuit,)]; bind parameters first")
-        circuit = pubs[0][0]
-        registers = circuit_registers(circuit)
+        if not pubs or any(not isinstance(pub, (tuple, list)) or len(pub) != 1 for pub in pubs):
+            raise ValueError(
+                "QRMI Slurm accepts only [(circuit,), ...]; bind parameters first and "
+                "use the common shots argument"
+            )
+        circuits = [pub[0] for pub in pubs]
+        registers = [circuit_registers(circuit) for circuit in circuits]
         if not self.resource or any(char.isspace() for char in self.resource):
             raise ValueError("resource must be a nonempty QRMI resource ID without whitespace")
         if self.transpiler.count(":") != 1:
             raise ValueError("transpiler must be an importable module:function")
-        prepared = self.prepare(circuit.copy()) if self.prepare else PreparedCircuit(circuit.copy())
-        if circuit_registers(prepared.circuit) != registers:
-            raise ValueError("prepare must preserve classical register names and widths")
-        config = {**self.transpile_config, **prepared.config}
-        # Validate JSON before creating a job directory or starting any task.
-        json.dumps(config, allow_nan=False)
-        if self.transpiler == DEFAULT_TRANSPILER:
-            preset_pass_manager_options(config, num_qubits=prepared.circuit.num_qubits)
-        return await _sample_on_slurm(prepared.circuit, shots, registers, config, self)
+        prepared_circuits = []
+        configs = []
+        # Validate every PUB before creating a job directory or starting any task.
+        for index, (circuit, pub_registers) in enumerate(zip(circuits, registers)):
+            prepared = (
+                self.prepare(circuit.copy()) if self.prepare else PreparedCircuit(circuit.copy())
+            )
+            if circuit_registers(prepared.circuit) != pub_registers:
+                raise ValueError("prepare must preserve classical register names and widths")
+            config = {**self.transpile_config, **prepared.config}
+            json.dumps(config, allow_nan=False)
+            if self.transpiler == DEFAULT_TRANSPILER:
+                try:
+                    preset_pass_manager_options(config, num_qubits=prepared.circuit.num_qubits)
+                except ValueError as exc:
+                    raise ValueError(f"PUB {index}: {exc}") from exc
+            prepared_circuits.append(prepared.circuit)
+            configs.append(config)
+        return await _sample_on_slurm(prepared_circuits, shots, registers, configs, self)
 
 
 @task(name="quantum-sampling-qrmi-slurm", retries=0, cache_policy=NO_CACHE, persist_result=False)
-async def _sample_on_slurm(circuit, shots, registers, config, runtime) -> PrimitiveResult:
+async def _sample_on_slurm(circuits, shots, registers, configs, runtime) -> PrimitiveResult:
     work_dir = Path(runtime.root_dir).expanduser().resolve() / uuid4().hex
     work_dir.mkdir(parents=True, exist_ok=False)
     request = {
@@ -113,9 +133,9 @@ async def _sample_on_slurm(circuit, shots, registers, config, runtime) -> Primit
         "transpiler": runtime.transpiler,
     }
     (work_dir / "sampler_request.json").write_text(json.dumps(request, indent=2), encoding="utf-8")
-    (work_dir / "transpile_config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    (work_dir / "transpile_config.json").write_text(json.dumps(configs, indent=2), encoding="utf-8")
     with (work_dir / "circuit.qpy").open("wb") as stream:
-        qpy.dump(circuit, stream)
+        qpy.dump(circuits, stream)
     job = await run_job_from_blocks(
         command_block_name=runtime.command_block_name,
         execution_profile_block_name=runtime.execution_profile_block_name,
