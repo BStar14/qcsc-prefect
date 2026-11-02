@@ -350,6 +350,9 @@ time, final status, Target width and the per-PUB compilation report.
 - If submission itself raises, it is unknown whether a job was created.
   The runtime raises `IqpSubmissionUnknown` with the resource, time and error,
   and does **not** resubmit. Check the IBM Quantum dashboard before retrying.
+  If the call was cancelled while submission ran and submission then raised,
+  the cancellation propagates with that `IqpSubmissionUnknown` as its cause, and
+  the submission error is also logged.
 - Prefect task retries are disabled, as for Slurm.
 
 ### Runtime block

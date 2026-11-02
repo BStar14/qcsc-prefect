@@ -115,21 +115,32 @@ async def sample_on_iqp(circuits, shots, registers, configs, runtime) -> Primiti
             record["status"] = status
         return status
 
+    submit_error = None
+
+    def unknown_submission(error):
+        unknown = IqpSubmissionUnknown(
+            f"Submitting to {runtime.resource} at {submitted_at} failed: {error!r}. "
+            "The job may still exist; it is not resubmitted. "
+            "Check the IBM Quantum dashboard before retrying."
+        )
+        unknown.__cause__ = error
+        return unknown
+
     try:
         try:
             job_id = await _call(lambda: resource.task_start(payload))
         except asyncio.CancelledError as exc:
-            # Cancelled while task_start ran: still record the job ID it returned.
-            job_id, _ = _finished(exc)
+            # Cancelled while task_start ran: keep the job ID it returned, or the reason
+            # it failed, and still propagate the cancellation.
+            job_id, submit_error = _finished(exc)
             if job_id is not None:
                 submitted(job_id)
+            if submit_error is not None:
+                raise exc from unknown_submission(submit_error)
             raise
         except Exception as exc:
-            raise IqpSubmissionUnknown(
-                f"Submitting to {runtime.resource} at {submitted_at} failed: {exc!r}. "
-                "The job may still exist; it is not resubmitted. "
-                "Check the IBM Quantum dashboard before retrying."
-            ) from exc
+            submit_error = exc
+            raise unknown_submission(exc)
         submitted(job_id)
 
         # Cancellation is accepted between polls; a running status call finishes first.
@@ -157,9 +168,10 @@ async def sample_on_iqp(circuits, shots, registers, configs, runtime) -> Primiti
             await _cancel_once(job, record, logger)
         if job is None:
             logger.error(
-                "IQP submission to %s at %s did not return a job; nothing to cancel",
+                "IQP submission to %s at %s did not return a job; nothing to cancel: %r",
                 runtime.resource,
                 submitted_at,
+                submit_error,
             )
         raise
     validate_result(result, shots, registers, where=f"IQP job {record['job_id']}")

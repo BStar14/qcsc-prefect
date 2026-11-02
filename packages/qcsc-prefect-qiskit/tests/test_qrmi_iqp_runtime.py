@@ -526,6 +526,34 @@ def test_cancellation_during_submission_still_stops_the_returned_job(runtime, fa
     assert fake.overlap == []
 
 
+def test_submission_error_during_cancellation_is_kept(runtime, fake, offline):
+    # Cancelled while task_start runs, and task_start then fails. The cancellation still
+    # propagates, but the reason the submission result is unknown is not lost.
+    release = threading.Event()
+    fake.block_on["task_start"] = release
+    fake.fail_on["task_start"] = TimeoutError("no response")
+
+    async def main():
+        task = asyncio.create_task(runtime.sampler([(bell(),)], shots=4))
+        await asyncio.to_thread(fake.entered_event("task_start").wait, 5)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        release.set()
+        with pytest.raises(asyncio.CancelledError) as raised:
+            await task
+        return raised.value
+
+    cancelled = asyncio.run(main())
+    unknown = cancelled.__cause__
+    assert isinstance(unknown, iqp_mod.IqpSubmissionUnknown)
+    assert "no response" in str(unknown) and "not resubmitted" in str(unknown)
+    assert isinstance(unknown.__cause__, TimeoutError)
+    assert fake.calls.count("task_start") == 1
+    assert "task_stop" not in fake.calls
+    errors = [text for level, text in offline.records if level == "error"]
+    assert any("did not return a job" in text and "no response" in text for text in errors)
+
+
 def test_unknown_submission_is_not_resubmitted_and_is_recorded(runtime, fake, offline):
     fake.fail_on["task_start"] = TimeoutError("no response")
     with pytest.raises(iqp_mod.IqpSubmissionUnknown) as raised:
@@ -534,8 +562,12 @@ def test_unknown_submission_is_not_resubmitted_and_is_recorded(runtime, fake, of
     assert "ibm_test" in message and "not resubmitted" in message
     assert fake.calls.count("task_start") == 1
     assert "task_stop" not in fake.calls
+    assert isinstance(raised.value.__cause__, TimeoutError)
     errors = [text for level, text in offline.records if level == "error"]
-    assert any("ibm_test" in text and "did not return a job" in text for text in errors)
+    assert any(
+        "ibm_test" in text and "did not return a job" in text and "no response" in text
+        for text in errors
+    )
 
 
 def test_failed_stop_is_logged_and_not_retried(runtime, fake, offline):
