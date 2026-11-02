@@ -14,6 +14,7 @@ from enum import Enum
 from types import ModuleType, SimpleNamespace
 
 import anyio
+import prefect.blocks.core
 import pytest
 from qcsc_prefect.integrations.qiskit.qrmi import (
     PreparedCircuit,
@@ -708,7 +709,11 @@ def test_mismatched_iqp_result_is_rejected(runtime, fake, returned, message):
         sample(runtime, [(bell("a"),), (bell("b"),)])
 
 
-def test_runtime_block_round_trip_keeps_settings_and_secret():
+def test_runtime_block_round_trip_keeps_settings_and_secret(monkeypatch):
+    # Restoring a block emits a Prefect "loaded" event, which starts a temporary
+    # Prefect server. Record the event instead; this test checks only the settings.
+    events = []
+    monkeypatch.setattr(prefect.blocks.core, "emit_event", lambda **event: events.append(event))
     block = QrmiRuntimeBlock(
         scheduler="iqp",
         resource="ibm_test",
@@ -721,6 +726,7 @@ def test_runtime_block_round_trip_keeps_settings_and_secret():
         name="test", block_schema_id=uuid(), block_type_id=uuid(), include_secrets=True
     )
     restored = QrmiRuntimeBlock._from_block_document(doc)
+    assert [event["event"] for event in events] == ["prefect.block.qrmi-runtime.loaded"]
     runtime = restored.get_runtime()
     assert runtime.scheduler == "iqp"
     assert runtime.resource == "ibm_test"
