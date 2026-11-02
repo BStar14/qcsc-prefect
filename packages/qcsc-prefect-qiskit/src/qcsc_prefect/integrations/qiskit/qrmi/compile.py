@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 
+from qiskit import qasm3
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
 from .contract import circuit_registers
@@ -32,6 +33,20 @@ def validate_isa(circuit, target) -> None:
 def load_transpiler(path: str):
     module_name, function_name = path.split(":")
     return getattr(importlib.import_module(module_name), function_name)
+
+
+def make_sampler_parameters(isa_circuits, shots: int) -> dict:
+    """SamplerV2 input with one bound PUB per ISA circuit, in order."""
+    return {
+        "pubs": [
+            [qasm3.dumps(isa, disable_constants=True, allow_aliasing=True), None, shots]
+            for isa in isa_circuits
+        ],
+        "version": 2,
+        "support_qiskit": True,
+        "shots": shots,
+        "options": {},
+    }
 
 
 def compile_pubs(circuits, configs, registers, target, transpiler: str):

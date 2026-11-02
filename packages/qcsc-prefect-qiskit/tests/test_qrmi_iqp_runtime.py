@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import gc
+import json
+import re
 import socket
 import sys
 import threading
@@ -21,8 +25,17 @@ from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod
 from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
 from qiskit.primitives import PrimitiveResult, SamplerPubResult
 from qiskit.primitives.containers import BitArray, DataBin
+from qiskit.providers import JobStatus
 from qiskit.providers.fake_provider import GenericBackendV2
+from qiskit.providers.jobstatus import JOB_FINAL_STATES
+from qiskit_ibm_runtime import RuntimeEncoder
 
+try:
+    from qiskit_ibm_runtime.decoders.result_decoder import ResultDecoder
+except ModuleNotFoundError:
+    from qiskit_ibm_runtime.utils.result_decoder import ResultDecoder
+
+REGISTER = re.compile(r"^bit\[(\d+)\] (\w+);$", re.MULTILINE)
 CONFIG = {
     "QRMI_IBM_QCS_ENDPOINT": "https://quantum.example/api/v1",
     "QRMI_IBM_QCS_IAM_ENDPOINT": "https://iam.example",
@@ -40,25 +53,31 @@ def bell(register="meas", extra_qubits=0):
     return circuit
 
 
-class Status(Enum):
-    QUEUED = "queued"
-    RUNNING = "running"
-    DONE = "done"
-    ERROR = "error"
-    CANCELLED = "cancelled"
+class TaskStatus(Enum):
+    # Same members as qrmi.TaskStatus.
+    Queued = 1
+    Running = 2
+    Completed = 3
+    Failed = 4
+    Cancelled = 5
 
 
 class FakeQrmi:
-    """Records QRMI calls and fails the test if one resource is used concurrently."""
+    """Records QRMI calls and fails the test if one resource is used concurrently.
 
-    def __init__(self, target, *, final=Status.DONE, polls_before_final=1):
+    The fake follows QRMI 0.26 (8284bb2): QuantumResource.task_start/task_status/
+    task_result/task_stop, and qrmi.primitives.RuntimeJobV2 whose status() and
+    result() call the resource and whose __del__ calls task_stop when delete_job=True.
+    """
+
+    def __init__(self, target, *, final=TaskStatus.Completed, polls_before_final=1):
         self.target = target
         self.final = final
         self.polls_before_final = polls_before_final
         self.calls = []
+        self.call_threads = {}  # call name -> thread names
         self.resources = []
-        self.jobs = []
-        self.submitted = []
+        self.jobs = []  # submitted job records, in order
         self.overlap = []
         self.fail_on = {}  # call name -> exception
         self.block_on = {}  # call name -> threading.Event to wait for
@@ -66,6 +85,9 @@ class FakeQrmi:
         self.bits = None
         self.result_override = None  # a PrimitiveResult returned instead of a matching one
         self.lock = threading.Lock()
+
+    def entered_event(self, name):
+        return self.entered.setdefault(name, threading.Event())
 
     def operation(self, resource, name):
         fake = self
@@ -77,7 +99,9 @@ class FakeQrmi:
                         fake.overlap.append(name)
                     resource.busy = True
                     fake.calls.append(name)
-                fake.entered.setdefault(name, threading.Event()).set()
+                    thread = threading.current_thread().name
+                    fake.call_threads.setdefault(name, []).append(thread)
+                fake.entered_event(name).set()
                 if name in fake.block_on:
                     fake.block_on[name].wait(5)
                 # Widen the window so that concurrent use would be detected.
@@ -90,12 +114,39 @@ class FakeQrmi:
 
         return Busy()
 
+    def make_result(self, job):
+        if self.result_override is not None:
+            return self.result_override
+        bits = self.bits or ["0"] * len(job["registers"])
+        return PrimitiveResult(
+            [
+                SamplerPubResult(
+                    DataBin(
+                        **{
+                            name: BitArray.from_samples(
+                                [bit * width] * job["shots"], num_bits=width
+                            )
+                            for name, width in registers.items()
+                        }
+                    ),
+                    metadata={},
+                )
+                for registers, bit in zip(job["registers"], bits)
+            ],
+            metadata={},
+        )
+
     def module(self):
         fake = self
         qrmi = ModuleType("qrmi")
 
         class ResourceType(Enum):
             IBMQuantumComputeService = "ibm-quantum-compute-service"
+
+        class Payload:
+            @staticmethod
+            def QiskitPrimitive(*, input, program_id):  # noqa: N802 (QRMI's name)
+                return SimpleNamespace(input=input, program_id=program_id)
 
         class QuantumResource:
             def __init__(self, resource_id, config):
@@ -117,67 +168,85 @@ class FakeQrmi:
             def release(self, token):
                 fake.calls.append("release")
 
-        class Job:
-            def __init__(self, resource, circuits, shots):
-                self.resource = resource
-                self.circuits = circuits
-                self.shots = shots
-                self.polls = 0
-                self.cancelled = False
+            def task_start(self, payload):
+                with fake.operation(self, "task_start"):
+                    assert payload.program_id == "sampler"
+                    parameters = json.loads(payload.input)
+                    # Read classical registers from the QASM without qiskit_qasm3_import.
+                    registers = [
+                        {name: int(width) for width, name in REGISTER.findall(pub[0])}
+                        for pub in parameters["pubs"]
+                    ]
+                    job = {
+                        "id": f"job-{len(fake.jobs)}",
+                        "parameters": parameters,
+                        "registers": registers,
+                        "shots": parameters["shots"],
+                        "polls": 0,
+                        "stopped": False,
+                    }
+                    fake.jobs.append(job)
+                    return job["id"]
+
+            def _job(self, task_id):
+                return next(job for job in fake.jobs if job["id"] == task_id)
+
+            def task_status(self, task_id):
+                with fake.operation(self, "task_status"):
+                    job = self._job(task_id)
+                    if job["stopped"]:
+                        return TaskStatus.Cancelled
+                    job["polls"] += 1
+                    if job["polls"] > fake.polls_before_final:
+                        return fake.final
+                    return TaskStatus.Queued
+
+            def task_result(self, task_id):
+                with fake.operation(self, "task_result"):
+                    result = fake.make_result(self._job(task_id))
+                    return SimpleNamespace(value=json.dumps(result, cls=RuntimeEncoder))
+
+            def task_stop(self, task_id):
+                with fake.operation(self, "task_stop"):
+                    self._job(task_id)["stopped"] = True
+
+        status_map = {
+            TaskStatus.Queued: JobStatus.QUEUED,
+            TaskStatus.Running: JobStatus.RUNNING,
+            TaskStatus.Completed: JobStatus.DONE,
+            TaskStatus.Failed: JobStatus.ERROR,
+            TaskStatus.Cancelled: JobStatus.CANCELLED,
+        }
+
+        class RuntimeJobV2:
+            # Mirrors qrmi.primitives.RuntimeJobV2 at 8284bb2, including __del__.
+            def __init__(self, qrmi, job_id, *, delete_job=False):
+                self._qrmi = qrmi
+                self._job_id = job_id
+                self._delete_job = delete_job
+                self._last_status = None
+
+            def __del__(self):
+                if self._delete_job is True:
+                    self._qrmi.task_stop(self._job_id)
 
             def job_id(self):
-                return f"job-{fake.jobs.index(self)}"
-
-            def status(self):
-                with fake.operation(self.resource, "status"):
-                    if self.cancelled:
-                        return Status.CANCELLED
-                    self.polls += 1
-                    if self.polls > fake.polls_before_final:
-                        return fake.final
-                    return Status.QUEUED
-
-            def result(self):
-                with fake.operation(self.resource, "result"):
-                    if fake.result_override is not None:
-                        return fake.result_override
-                    bits = fake.bits or ["0"] * len(self.circuits)
-                    return PrimitiveResult(
-                        [
-                            SamplerPubResult(
-                                DataBin(
-                                    **{
-                                        reg.name: BitArray.from_samples(
-                                            [bit * len(reg)] * self.shots, num_bits=len(reg)
-                                        )
-                                        for reg in circuit.cregs
-                                    }
-                                ),
-                                metadata={},
-                            )
-                            for circuit, bit in zip(self.circuits, bits)
-                        ],
-                        metadata={},
-                    )
+                return self._job_id
 
             def cancel(self):
-                with fake.operation(self.resource, "cancel"):
-                    self.cancelled = True
+                self._qrmi.task_stop(self._job_id)
 
-        class SamplerV2:
-            def __init__(self, resource, *, options):
-                self.resource = resource
-                self.options = options
+            def status(self):
+                if self._last_status is None or self._last_status not in JOB_FINAL_STATES:
+                    self._last_status = self._qrmi.task_status(self._job_id)
+                return status_map.get(self._last_status)
 
-            def run(self, circuits):
-                with fake.operation(self.resource, "run"):
-                    job = Job(self.resource, list(circuits), self.options["default_shots"])
-                    fake.jobs.append(job)
-                    fake.submitted.append(job)
-                    return job
+            def result(self):
+                return ResultDecoder.decode(self._qrmi.task_result(self._job_id).value)
 
+        primitives = ModuleType("qrmi.primitives")
+        primitives.RuntimeJobV2 = RuntimeJobV2
         ibm = ModuleType("qrmi.primitives.ibm")
-        ibm.SamplerV2 = SamplerV2
 
         def get_backend(resource):
             with fake.operation(resource, "get_backend"):
@@ -186,7 +255,9 @@ class FakeQrmi:
         ibm.get_backend = get_backend
         qrmi.QuantumResource = QuantumResource
         qrmi.ResourceType = ResourceType
-        return qrmi, ibm
+        qrmi.Payload = Payload
+        qrmi.TaskStatus = TaskStatus
+        return qrmi, primitives, ibm
 
 
 @pytest.fixture(autouse=True)
@@ -212,9 +283,9 @@ def offline(monkeypatch):
 def fake(monkeypatch):
     target = GenericBackendV2(num_qubits=5, basis_gates=["rz", "sx", "x", "cx"]).target
     fake = FakeQrmi(target)
-    qrmi, ibm = fake.module()
+    qrmi, primitives, ibm = fake.module()
     monkeypatch.setitem(sys.modules, "qrmi", qrmi)
-    monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
+    monkeypatch.setitem(sys.modules, "qrmi.primitives", primitives)
     monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)
     return fake
 
@@ -249,10 +320,10 @@ def test_success_compiles_against_resource_target_and_returns_ordered_results(ru
     assert result[1].data.wide.get_counts() == {"11": 4}
     (resource,) = fake.resources
     assert resource.id == "ibm_test" and resource.config == CONFIG
-    (job,) = fake.submitted
-    layouts = [isa.layout.initial_index_layout(filter_ancillas=True) for isa in job.circuits]
-    assert layouts == [[1, 3], [4, 2, 0]]
-    assert job.shots == 4
+    (job,) = fake.jobs
+    assert job["registers"] == [{"narrow": 2}, {"wide": 2}]
+    assert job["shots"] == 4
+    assert [pub[1:] for pub in job["parameters"]["pubs"]] == [[None, 4], [None, 4]]
     record = result.metadata["qcsc_qrmi"]
     assert record["job_id"] == "job-0"
     assert record["resource"] == "ibm_test"
@@ -319,29 +390,53 @@ def test_invalid_pub_fails_before_creating_a_resource(runtime, fake):
     assert fake.calls == []
 
 
-def test_job_failure_raises_and_does_not_cancel_a_final_job(runtime, fake):
-    fake.final = Status.ERROR
+def test_job_failure_raises_and_does_not_stop_a_final_job(runtime, fake):
+    fake.final = TaskStatus.Failed
     with pytest.raises(iqp_mod.IqpJobFailed, match="job-0 on ibm_test ended as ERROR"):
         sample(runtime, [(bell(),)])
-    assert len(fake.submitted) == 1
-    assert "cancel" not in fake.calls
-    assert "result" not in fake.calls
+    gc.collect()
+    assert len(fake.jobs) == 1
+    assert "task_stop" not in fake.calls
+    assert "task_result" not in fake.calls
 
 
-@pytest.mark.parametrize("failing", ["status", "result"])
-def test_error_after_submission_cancels_once_and_does_not_resubmit(runtime, fake, failing):
+@pytest.mark.parametrize("failing", ["task_status", "task_result"])
+def test_error_after_submission_stops_once_and_does_not_resubmit(runtime, fake, failing):
     fake.fail_on[failing] = ConnectionError("network down")
     with pytest.raises(ConnectionError):
         sample(runtime, [(bell(),)])
-    assert len(fake.submitted) == 1
-    if failing == "status":
-        assert fake.calls.count("cancel") == 1
+    gc.collect()
+    assert fake.calls.count("task_start") == 1
+    if failing == "task_status":
+        assert fake.calls.count("task_stop") == 1
     else:
-        # The job reached DONE; only fetching its result failed. Nothing to cancel.
-        assert "cancel" not in fake.calls
+        # The job reached DONE; only fetching its result failed. Nothing to stop.
+        assert "task_stop" not in fake.calls
 
 
-def test_cancellation_while_waiting_cancels_job_once(runtime, fake):
+def test_successful_job_is_never_stopped_even_after_collection(runtime, fake):
+    sample(runtime, [(bell(),)])
+    gc.collect()
+    assert "task_stop" not in fake.calls
+
+
+def test_stop_requests_never_run_on_the_event_loop_thread(runtime, fake):
+    fake.fail_on["task_status"] = ConnectionError("network down")
+    loop_thread = []
+
+    async def main():
+        loop_thread.append(threading.current_thread().name)
+        with pytest.raises(ConnectionError):
+            await runtime.sampler([(bell(),)], shots=4)
+
+    asyncio.run(main())
+    gc.collect()
+    assert fake.call_threads["task_stop"] and loop_thread[0] not in fake.call_threads["task_stop"]
+    for name, threads in fake.call_threads.items():
+        assert loop_thread[0] not in threads, f"{name} ran on the event loop thread"
+
+
+def test_anyio_cancellation_while_waiting_stops_job_once(runtime, fake):
     fake.polls_before_final = 10_000
 
     async def main():
@@ -349,55 +444,194 @@ def test_cancellation_while_waiting_cancels_job_once(runtime, fake):
             await runtime.sampler([(bell(),)], shots=4)
 
     anyio.run(main)
-    assert len(fake.submitted) == 1
-    assert fake.calls.count("cancel") == 1
-    assert fake.submitted[0].cancelled
+    gc.collect()
+    assert fake.calls.count("task_start") == 1
+    assert fake.calls.count("task_stop") == 1
+    assert fake.jobs[0]["stopped"]
+    assert fake.overlap == []
 
 
-def test_cancellation_during_submission_still_cancels_the_returned_job(runtime, fake):
-    # The caller is cancelled while run() is in its thread. The thread finishes and
-    # returns the job, so its ID is known and the job is cancelled at the next poll.
-    fake.block_on["run"] = threading.Event()
+@pytest.mark.parametrize("how", ["task_cancel", "task_cancel_twice", "asyncio_timeout"])
+def test_asyncio_cancellation_during_status_waits_before_stopping(runtime, fake, how):
+    # Native asyncio cancellation does not wait for the thread running task_status.
+    # The stop request must still start only after that call has returned.
+    release = threading.Event()
+    fake.block_on["task_status"] = release
     fake.polls_before_final = 10_000
 
     async def main():
-        with anyio.CancelScope() as scope:
-            async with anyio.create_task_group() as group:
-                group.start_soon(runtime.sampler, [(bell(),)])
+        task = asyncio.create_task(runtime.sampler([(bell(),)], shots=4))
+        await asyncio.to_thread(fake.entered_event("task_status").wait, 5)
+        if how == "asyncio_timeout":
+            threading.Timer(0.2, release.set).start()
+            with pytest.raises(TimeoutError):
+                async with asyncio.timeout(0.05):
+                    await asyncio.shield(task)
+            task.cancel()
+        else:
+            task.cancel()
+            await asyncio.sleep(0.05)
+            if how == "task_cancel_twice":
+                task.cancel()
+            await asyncio.sleep(0.05)
+            assert "task_stop" not in fake.calls  # still waiting for task_status
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
 
-                async def cancel_when_submitting():
-                    await anyio.to_thread.run_sync(
-                        fake.entered.setdefault("run", threading.Event()).wait, 5
-                    )
-                    scope.cancel()
-                    fake.block_on["run"].set()
+    asyncio.run(main())
+    gc.collect()
+    assert fake.overlap == []
+    assert fake.calls.count("task_stop") == 1
+    assert fake.calls.index("task_stop") > fake.calls.index("task_status")
 
-                group.start_soon(cancel_when_submitting)
 
-    anyio.run(main)
-    assert len(fake.submitted) == 1
-    assert fake.calls.count("cancel") == 1
+def test_asyncio_timeout_around_sampler_does_not_overlap_calls(runtime, fake):
+    release = threading.Event()
+    fake.block_on["task_status"] = release
+    fake.polls_before_final = 10_000
+    threading.Timer(0.3, release.set).start()
+
+    async def main():
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(0.1):
+                await runtime.sampler([(bell(),)], shots=4)
+
+    asyncio.run(main())
+    gc.collect()
+    assert fake.overlap == []
+    assert fake.calls.count("task_stop") == 1
+
+
+def test_cancellation_during_submission_still_stops_the_returned_job(runtime, fake):
+    # The caller is cancelled while task_start is in its thread. The thread finishes and
+    # returns the job ID, so the job is stopped once the submission call has returned.
+    release = threading.Event()
+    fake.block_on["task_start"] = release
+    fake.polls_before_final = 10_000
+
+    async def main():
+        task = asyncio.create_task(runtime.sampler([(bell(),)], shots=4))
+        await asyncio.to_thread(fake.entered_event("task_start").wait, 5)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(main())
+    gc.collect()
+    assert fake.calls.count("task_start") == 1
+    assert fake.calls.count("task_stop") == 1
+    assert fake.overlap == []
 
 
 def test_unknown_submission_is_not_resubmitted_and_is_recorded(runtime, fake, offline):
-    fake.fail_on["run"] = TimeoutError("no response")
+    fake.fail_on["task_start"] = TimeoutError("no response")
     with pytest.raises(iqp_mod.IqpSubmissionUnknown) as raised:
         sample(runtime, [(bell(),)])
     message = str(raised.value)
     assert "ibm_test" in message and "not resubmitted" in message
-    assert fake.calls.count("run") == 1
-    assert "cancel" not in fake.calls
+    assert fake.calls.count("task_start") == 1
+    assert "task_stop" not in fake.calls
     errors = [text for level, text in offline.records if level == "error"]
     assert any("ibm_test" in text and "did not return a job" in text for text in errors)
 
 
-def test_failed_cancel_is_logged_and_not_retried(runtime, fake, offline):
-    fake.fail_on["status"] = ConnectionError("network down")
-    fake.fail_on["cancel"] = ConnectionError("still down")
+def test_failed_stop_is_logged_and_not_retried(runtime, fake, offline):
+    fake.fail_on["task_status"] = ConnectionError("network down")
+    fake.fail_on["task_stop"] = ConnectionError("still down")
     with pytest.raises(ConnectionError):
         sample(runtime, [(bell(),)])
-    assert fake.calls.count("cancel") == 1
+    gc.collect()
+    assert fake.calls.count("task_stop") == 1
     assert any("Cancelling IQP job job-0 failed" in text for _, text in offline.records)
+
+
+def cancel_messages(logs):
+    return [(level, text) for level, text in logs.records if "ancel" in text]
+
+
+@pytest.mark.parametrize("how", ["anyio", "task_cancel", "task_cancel_during_stop"])
+def test_failed_stop_during_cancellation_is_logged_as_failure(runtime, fake, offline, how):
+    # The stop request fails. Its failure must be reported, not hidden behind a
+    # re-raised cancellation. anyio cancels the stop request itself (the scope stays
+    # cancelled); "task_cancel_during_stop" does the same with a second Task.cancel().
+    fake.polls_before_final = 10_000
+    fake.fail_on["task_stop"] = ConnectionError("still down")
+
+    if how == "anyio":
+
+        async def main():
+            with anyio.move_on_after(0.1):
+                await runtime.sampler([(bell(),)], shots=4)
+
+        anyio.run(main)
+    else:
+        release = threading.Event()
+        if how == "task_cancel_during_stop":
+            fake.block_on["task_stop"] = release
+
+        async def main():
+            task = asyncio.create_task(runtime.sampler([(bell(),)], shots=4))
+            await asyncio.sleep(0.1)
+            task.cancel()
+            if how == "task_cancel_during_stop":
+                await asyncio.to_thread(fake.entered_event("task_stop").wait, 5)
+                task.cancel()
+                await asyncio.sleep(0.05)
+                release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        asyncio.run(main())
+    assert fake.calls.count("task_stop") == 1
+    messages = cancel_messages(offline)
+    assert len(messages) == 1
+    level, text = messages[0]
+    assert level == "error"
+    assert "Cancelling IQP job job-0 failed" in text and "still down" in text
+
+
+def test_successful_stop_during_cancellation_is_logged_once(runtime, fake, offline):
+    fake.polls_before_final = 10_000
+
+    async def main():
+        with anyio.move_on_after(0.1):
+            await runtime.sampler([(bell(),)], shots=4)
+
+    anyio.run(main)
+    assert cancel_messages(offline) == [("info", "Requested cancellation of IQP job job-0")]
+
+
+@pytest.mark.parametrize(
+    "final,stopped", [(TaskStatus.Completed, False), (TaskStatus.Failed, False), (None, True)]
+)
+def test_status_returned_during_cancellation_decides_whether_to_stop(runtime, fake, final, stopped):
+    # Cancelled while task_status runs. If that call reports a final status, the job
+    # has already ended and must not be stopped; otherwise it is stopped once.
+    release = threading.Event()
+    fake.block_on["task_status"] = release
+    if final is None:
+        fake.polls_before_final = 10_000
+    else:
+        fake.polls_before_final = 0
+        fake.final = final
+
+    async def main():
+        task = asyncio.create_task(runtime.sampler([(bell(),)], shots=4))
+        await asyncio.to_thread(fake.entered_event("task_status").wait, 5)
+        task.cancel()
+        await asyncio.sleep(0.05)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(main())
+    gc.collect()
+    assert fake.calls.count("task_status") == 1
+    assert fake.calls.count("task_stop") == (1 if stopped else 0)
+    assert fake.overlap == []
 
 
 def test_one_resource_is_never_used_from_two_threads(runtime, fake):

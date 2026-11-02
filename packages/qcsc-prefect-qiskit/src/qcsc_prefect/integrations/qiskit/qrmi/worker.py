@@ -10,12 +10,17 @@ import subprocess
 import sys
 from pathlib import Path
 
-from qiskit import qasm3, qpy
+from qiskit import qpy
 
 # Re-exported: the default transpiler path and existing hooks import these names here.
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager  # noqa: F401
 
-from .compile import compile_pubs, generic_transpile, validate_isa  # noqa: F401
+from .compile import (  # noqa: F401
+    compile_pubs,
+    generic_transpile,
+    make_sampler_parameters,
+    validate_isa,
+)
 from .contract import (
     SCHEMA_VERSION,
     circuit_registers,
@@ -36,19 +41,7 @@ def require_batch_environment(resource: str) -> None:
 
 
 def make_sampler_payload(isa_circuits, shots: int) -> dict:
-    return {
-        "program_id": "sampler",
-        "parameters": {
-            "pubs": [
-                [qasm3.dumps(isa, disable_constants=True, allow_aliasing=True), None, shots]
-                for isa in isa_circuits
-            ],
-            "version": 2,
-            "support_qiskit": True,
-            "shots": shots,
-            "options": {},
-        },
-    }
+    return {"program_id": "sampler", "parameters": make_sampler_parameters(isa_circuits, shots)}
 
 
 def execute_task_runner(isa_circuits, shots: int, executable: Path, resource: str) -> None:

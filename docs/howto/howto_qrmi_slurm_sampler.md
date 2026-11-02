@@ -319,9 +319,11 @@ as for Slurm. Each call:
    methods are called one at a time.
 2. Fetches the Target with `qrmi.primitives.ibm.get_backend(resource).target`
    and compiles each circuit with the same code as the Slurm worker.
-3. Submits all circuits as one job with QRMI's `SamplerV2`, polls its status
-   every `watch_poll_interval` seconds, and validates the result against the
-   input PUBs.
+3. Submits all circuits as one job with `QuantumResource.task_start`, using the
+   same SamplerV2 input as the Slurm worker, polls its status every
+   `watch_poll_interval` seconds, and validates the result against the input PUBs.
+   The job is tracked with QRMI's `RuntimeJobV2(..., delete_job=False)`, so
+   discarding the job object never stops the job.
 
 No session is used: the runtime never calls `acquire()` or `release()`, and
 `resource_config` must not contain `QRMI_IBM_QCS_SESSION_ID` or
@@ -334,12 +336,17 @@ time, final status, Target width and the per-PUB compilation report.
 ### Failures and cancellation
 
 - A job that ends as `ERROR` or `CANCELLED` raises `IqpJobFailed`.
-- Cancellation is accepted between status polls. A status, result or cancel call
-  that is already running in its thread finishes first; its wait follows QRMI's
-  own network timeouts.
+- Cancellation is accepted between status polls. This holds for anyio
+  cancellation, `Task.cancel()` and `asyncio.timeout()`. A QRMI call that is
+  already running in its worker thread is awaited to completion before anything
+  else uses the resource, even if cancellation is requested again; its wait
+  follows QRMI's own network timeouts. Direct IQP execution requires an asyncio
+  event loop.
 - If the job ID is known and the call fails or is cancelled before the job ends,
-  the runtime calls `job.cancel()` once, shielded from cancellation. A failed
-  cancel is logged and not retried.
+  the runtime calls `job.cancel()` once, in a worker thread. This includes a
+  cancellation that arrives while submission is running: the job ID it returns is
+  kept and the job is stopped. A failed cancel is logged and not retried.
+- A job that completed, or that ended on its own, is never stopped.
 - If submission itself raises, it is unknown whether a job was created.
   The runtime raises `IqpSubmissionUnknown` with the resource, time and error,
   and does **not** resubmit. Check the IBM Quantum dashboard before retrying.
