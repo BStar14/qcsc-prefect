@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tomllib
 from pathlib import Path
 from typing import Any
 
 from prefect.variables import Variable
+from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
 from qcsc_prefect_dice import create_dice_blocks
+
+from skqd_dice.main import DEFAULT_RUNTIME_BLOCK_NAME
+
+# QRMI settings that are secrets: read from the environment, never from the config file.
+SECRET_RESOURCE_KEYS = ("QRMI_IBM_QCS_IAM_APIKEY",)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -47,6 +54,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hpc-profile-block-name")
     parser.add_argument("--solver-block-name")
     parser.add_argument("--options-variable-name")
+    parser.add_argument("--runtime-block-name")
 
     parser.add_argument("--select-cutoff", type=float)
     parser.add_argument("--davidson-tol", type=float)
@@ -139,6 +147,40 @@ def _default_mpi_options(*, hpc_target: str, mpiprocs: int) -> list[str]:
 
 def _set_variable(variable_name: str, value: Any) -> None:
     Variable.set(variable_name, value, overwrite=True)
+
+
+def _runtime_block(runtime: dict[str, Any]) -> QrmiRuntimeBlock:
+    """Build the QrmiRuntimeBlock described by the ``[runtime]`` config table.
+
+    Other keys of the table are QrmiRuntimeBlock fields. The SKQD flow sets the
+    transpiler and its configuration itself, so they are not accepted here.
+    """
+    settings = {"scheduler": "iqp", **runtime}
+    qrmi = {str(key): str(value) for key, value in settings.pop("qrmi", {}).items()}
+    unsupported = sorted(settings.keys() & {"transpiler", "transpile_config", "resource_config"})
+    if unsupported:
+        raise RuntimeError(
+            f"[runtime] must not set {', '.join(unsupported)}; the SKQD flow sets the "
+            "transpiler, and resource_config is built from [runtime.qrmi] and the environment"
+        )
+    _require("runtime.resource", settings.get("resource"))
+    if settings["scheduler"] == "iqp":
+        secrets = sorted(qrmi.keys() & set(SECRET_RESOURCE_KEYS))
+        if secrets:
+            raise RuntimeError(
+                f"Do not write {', '.join(secrets)} in the config file; set it in the environment"
+            )
+        for key in SECRET_RESOURCE_KEYS:
+            qrmi[key] = _require(f"environment variable {key}", os.environ.get(key))
+        settings["resource_config"] = qrmi
+    elif qrmi:
+        raise RuntimeError(
+            '[runtime.qrmi] is only used by scheduler="iqp"; Slurm compute nodes read QRMI '
+            "settings from their own environment"
+        )
+    block = QrmiRuntimeBlock(**settings)
+    block.get_runtime()  # Validate the settings before saving.
+    return block
 
 
 def main() -> None:
@@ -267,12 +309,25 @@ def main() -> None:
         sampler_options = {"params": {"shots": shots}}
     _set_variable(options_variable_name, sampler_options)
 
+    runtime_block_name = None
+    if "runtime" in config:
+        runtime_block_name = str(
+            _pick_value(
+                args.runtime_block_name,
+                config.get("runtime_block_name"),
+                DEFAULT_RUNTIME_BLOCK_NAME,
+            )
+        ).strip()
+        _runtime_block(config["runtime"]).save(runtime_block_name, overwrite=True)
+
     print(f"Saved blocks and variable for SKQD workflow (target={hpc_target})")
     print(f"  SKQD solver block: {block_names['solver_block_name']}")
     print(f"  Command block: {block_names['command_block_name']}")
     print(f"  Execution profile block: {block_names['execution_profile_block_name']}")
     print(f"  HPC profile block: {block_names['hpc_profile_block_name']}")
     print(f"  Options variable: {options_variable_name}")
+    if runtime_block_name:
+        print(f"  QRMI runtime block: {runtime_block_name}")
     print(f"  Work directory: {Path(str(work_dir)).expanduser().resolve()}")
     print(f"  DICE executable: {Path(str(dice_executable)).expanduser().resolve()}")
 
