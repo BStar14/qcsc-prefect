@@ -1,19 +1,19 @@
 """Definition of SQD workflow."""
 
 import asyncio
+import dataclasses
 import os
 import pathlib
 from typing import Any, Literal
 
 import ffsim
 import numpy as np
-from ffsim.qiskit import PRE_INIT
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_table_artifact
 from prefect.cache_policies import INPUTS, NO_CACHE
 from prefect.variables import Variable
-from prefect_qiskit.runtime import QuantumRuntime
 from pydantic import BaseModel, Field
+from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
 from qcsc_prefect_dice import DiceSHCISolverJob
 from qcsc_workflow_utility import (
     ElectronicProperties,
@@ -21,27 +21,15 @@ from qcsc_workflow_utility import (
     compute_molecular_integrals_from_geometry,
 )
 from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
-from qiskit.passmanager import ConditionalController
 from qiskit.primitives.containers import BitArray
-from qiskit.transpiler import Target, generate_preset_pass_manager
-from qiskit.transpiler.passes import (
-    ApplyLayout,
-    BarrierBeforeFinalMeasurements,
-    EnlargeWithAncilla,
-    FullAncillaAllocation,
-    Optimize1qGatesDecomposition,
-    RemoveIdentityEquivalent,
-    SabreLayout,
-)
-from qiskit.transpiler.passmanager import PassManager
 from qiskit_addon_sqd.configuration_recovery import recover_configurations
 from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform
 from qiskit_addon_sqd.fermion import SCIResult
-from qiskit_ibm_runtime.transpiler.passes import FoldRzzAngle
 
 from sqd_dice.subsample import postselect, subsample
+from sqd_dice.transpilation import TRANSPILER, prepare, transpile_config
 
-DEFAULT_RUNTIME_BLOCK_NAME = "ibm-runner"
+DEFAULT_RUNTIME_BLOCK_NAME = "qrmi-runtime"
 
 
 class MoleculeGeometry(BaseModel):
@@ -414,70 +402,6 @@ def create_ansatz_circuits(
     return lucj_circ
 
 
-@task
-def transpile_circuit(
-    circuit: QuantumCircuit,
-    target: Target,
-    circuit_params: CircuitParameters,
-    seed: np.random.Generator,
-) -> QuantumCircuit:
-    """Custom transpiler with massive layout search."""
-    logger = get_run_logger()
-
-    if isinstance(seed, np.random.Generator):
-        seed = seed.integers(np.iinfo(int).max, size=1).item()
-    coupling_map = target.build_coupling_map()
-
-    # Define a custom pass manager
-    passmanager = generate_preset_pass_manager(
-        optimization_level=circuit_params.optimization_level,
-        seed_transpiler=seed,
-        target=target,
-    )
-    passmanager.pre_init = PRE_INIT
-    passmanager.layout = PassManager(
-        [
-            BarrierBeforeFinalMeasurements(
-                label="qiskit.transpiler.internal.routing.protection.barrier",
-            ),
-            SabreLayout(
-                coupling_map=coupling_map,
-                seed=seed,
-                max_iterations=circuit_params.sabre_max_iterations,
-                layout_trials=circuit_params.sabre_layout_trials,
-                swap_trials=circuit_params.sabre_swap_trials,
-            ),
-            ConditionalController(
-                tasks=[
-                    FullAncillaAllocation(coupling_map=coupling_map),
-                    EnlargeWithAncilla(),
-                    ApplyLayout(),
-                ],
-                condition=lambda propset: propset["final_layout"] is None,
-            ),
-        ]
-    )
-    if "rzz" in target.operation_names:
-        passmanager.post_optimization = PassManager(
-            [
-                FoldRzzAngle(),
-                Optimize1qGatesDecomposition(target=target),  # Cancel added local gates
-                RemoveIdentityEquivalent(target=target),  # Remove GlobalPhaseGate
-            ]
-        )
-
-    # Transpile
-    logger.info("Transpiling ansatz circuit...")
-    isa_circuit = passmanager.run(circuit)
-    gate_depth = isa_circuit.depth(
-        lambda inst: inst.operation.name not in ("rz", "barrier", "measure")
-    )
-    logger.info(
-        f"Circuit depth = {gate_depth}\nInstruction counts = {dict(isa_circuit.count_ops())}\n"
-    )
-    return isa_circuit
-
-
 @task(
     persist_result=True,
     result_serializer="compressed/pickle",
@@ -495,7 +419,7 @@ async def sample_bitstrings(
     Args:
         circuit_params: Circuit parameters for quantum sampling.
         elec_props: Electronic properties of molecule to solver for.
-        runner_name: Block name of QuantumRuntime to execute primitives on.
+        runner_name: Name of QrmiRuntimeBlock to sample with.
         option_name: Name of Variable storing sampler primitive options to load.
 
     Returns:
@@ -519,11 +443,11 @@ async def sample_bitstrings(
         )
 
     try:
-        runtime = await QuantumRuntime.load(runner_name)
+        runtime = await QrmiRuntimeBlock.aload_runtime(runner_name)
     except ValueError as exc:
         raise RuntimeError(
-            f"Quantum source 'real-device' requested but QuantumRuntime block "
-            f"'{runner_name}' is not defined. Set quantum_source='random' to use "
+            f"Quantum source 'real-device' requested but QrmiRuntimeBlock "
+            f"'{runner_name}' could not be loaded. Set quantum_source='random' to use "
             "deterministic random sampling instead."
         ) from exc
 
@@ -533,18 +457,28 @@ async def sample_bitstrings(
         elec_props=elec_props,
     )
 
-    # Transpile
-    target = await runtime.get_target()
-    isa_circuit = transpile_circuit(
-        circuit=lucj_circ,
-        target=target,
-        circuit_params=circuit_params,
-        seed=rng,
+    # The runtime runs the ffsim pre-init stage in this process (prepare), then
+    # transpiles against the actual Target with the SQD hook: in this process for
+    # scheduler="iqp", on the compute node for "slurm". The block's transpiler and
+    # transpile_config are replaced; the compilation report is in the result metadata
+    # (iqp) or transpile_report.json (slurm).
+    runtime = dataclasses.replace(
+        runtime,
+        prepare=prepare,
+        transpiler=TRANSPILER,
+        transpile_config=transpile_config(
+            optimization_level=circuit_params.optimization_level,
+            seed_transpiler=rng.integers(np.iinfo(int).max, size=1).item(),
+            sabre_max_iterations=circuit_params.sabre_max_iterations,
+            sabre_swap_trials=circuit_params.sabre_swap_trials,
+            sabre_layout_trials=circuit_params.sabre_layout_trials,
+        ),
     )
 
     # Run primitive
+    logger.info("Sampling the LUCJ circuit on %s", runtime.resource)
     pub_result = await runtime.sampler(
-        sampler_pubs=[(isa_circuit,)],
+        sampler_pubs=[(lucj_circ,)],
         options=options,
     )
 
