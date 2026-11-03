@@ -37,3 +37,15 @@ solver_mode = "cpu"
 
 # Optional runtime options variable
 # Default if omitted: {"params":{"shots":50000}} for Slurm
+
+# QrmiRuntimeBlock "qrmi-runtime" for quantum_source = "real-device". Uncomment the
+# tables below to create it; random and qfw runs do not need it. Set
+# QRMI_IBM_QCS_IAM_APIKEY in the environment for scheduler = "iqp".
+# [runtime]
+# scheduler = "iqp"
+# resource = "ibm_kingston"
+#
+# [runtime.qrmi]
+# QRMI_IBM_QCS_ENDPOINT = "https://quantum.cloud.ibm.com/api/v1"
+# QRMI_IBM_QCS_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
+# QRMI_IBM_QCS_SERVICE_CRN = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"

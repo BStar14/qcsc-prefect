@@ -41,6 +41,52 @@ def _register_block_types(*custom_block_classes) -> None:
             register()
 
 
+# QRMI settings that are secrets: read from the environment, never from the config file.
+SECRET_RESOURCE_KEYS = ("QRMI_IBM_QCS_IAM_APIKEY",)
+
+
+def _require(name: str, value: Any) -> Any:
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise RuntimeError(f"Missing required setting: {name}")
+    return value
+
+
+def _runtime_block(runtime: dict[str, Any]):
+    """Build the QrmiRuntimeBlock described by the ``[runtime]`` config table.
+
+    Other keys of the table are QrmiRuntimeBlock fields. The SBD flow sets the
+    prepare hook, the transpiler and its configuration itself, so they are not accepted.
+    """
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    settings = {"scheduler": "iqp", **runtime}
+    qrmi = {str(key): str(value) for key, value in settings.pop("qrmi", {}).items()}
+    unsupported = sorted(settings.keys() & {"transpiler", "transpile_config", "resource_config"})
+    if unsupported:
+        raise RuntimeError(
+            f"[runtime] must not set {', '.join(unsupported)}; the SBD flow sets the "
+            "transpiler, and resource_config is built from [runtime.qrmi] and the environment"
+        )
+    _require("runtime.resource", settings.get("resource"))
+    if settings["scheduler"] == "iqp":
+        secrets = sorted(qrmi.keys() & set(SECRET_RESOURCE_KEYS))
+        if secrets:
+            raise RuntimeError(
+                f"Do not write {', '.join(secrets)} in the config file; set it in the environment"
+            )
+        for key in SECRET_RESOURCE_KEYS:
+            qrmi[key] = _require(f"environment variable {key}", os.environ.get(key))
+        settings["resource_config"] = qrmi
+    elif qrmi:
+        raise RuntimeError(
+            '[runtime.qrmi] is only used by scheduler="iqp"; Slurm compute nodes read QRMI '
+            "settings from their own environment"
+        )
+    block = QrmiRuntimeBlock(**settings)
+    block.get_runtime()  # Validate the settings before saving.
+    return block
+
+
 def _set_variable(variable_name: str, value: Any) -> None:
     subprocess.run(
         ["prefect", "variable", "set", variable_name, json.dumps(value), "--overwrite"],
@@ -576,6 +622,12 @@ def main() -> None:
         options_value = {"params": {"shots": shots}}
     _set_variable(options_variable_name, options_value)
 
+    runtime_saved = "runtime" in config
+    if runtime_saved:
+        from sbd.sampling import RUNTIME_BLOCK_NAME
+
+        _runtime_block(config["runtime"]).save(RUNTIME_BLOCK_NAME, overwrite=True)
+
     print(f"Saved blocks and variable for SBD workflow (target={hpc_target})")
     print(f"  SBD solver block: {solver_block_name}")
     print(f"  Command block: {command_block_name}")
@@ -586,6 +638,8 @@ def main() -> None:
     print(f"  SBD executable: {Path(str(sbd_executable)).expanduser().resolve()}")
     print(f"  Script filename: {script_filename}")
     print(f"  Metrics artifact key: {metrics_artifact_key}")
+    if runtime_saved:
+        print(f"  QRMI runtime block: {RUNTIME_BLOCK_NAME}")
 
 
 if __name__ == "__main__":
