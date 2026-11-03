@@ -50,3 +50,18 @@ solver_mode = "cpu"
 # Optional runtime options variable
 # default if omitted: {"params":{"shots":500000}} for miyabi, {"params":{"shots":50000}} for fugaku
 shots = 50000 # Fugaku tutorial baseline; override for your workload
+
+# QrmiRuntimeBlock "qrmi-runtime" used for quantum_source = "real-device". For random or
+# qfw only, delete [runtime] and [runtime.qrmi]; an existing block is then kept. The flow
+# sets the SBD transpiler and its configuration itself.
+[runtime]
+# "iqp": submit from the workflow process. "slurm": use root_dir and three block names.
+scheduler = "iqp"
+resource = "ibm_kingston"
+
+# QRMI settings without the "<resource>_" prefix. Set QRMI_IBM_QCS_IAM_APIKEY in the
+# environment; it must not be written in this file.
+[runtime.qrmi]
+QRMI_IBM_QCS_ENDPOINT = "https://quantum.cloud.ibm.com/api/v1"
+QRMI_IBM_QCS_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
+QRMI_IBM_QCS_SERVICE_CRN = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"

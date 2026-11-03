@@ -12,7 +12,6 @@ import numpy as np
 from ffsim.qiskit import PRE_INIT
 from prefect import get_run_logger, task
 from prefect.variables import Variable
-from prefect_qiskit import QuantumRuntime
 from qcsc_workflow_utility.chem import ElectronicProperties, NpStrict1DArrayF64
 from qiskit.primitives.containers import BitArray
 from qiskit_addon_sqd.configuration_recovery import (
@@ -30,8 +29,8 @@ from .np_type_extension import (
     NpStrict1DArrayLL,
     NpStrict2DArrayBool,
 )
+from .sampling import RUNTIME_BLOCK_NAME, load_runtime, sample_sync
 from .solver_job import SBDResult, SBDSolverJob
-from .transpile_custom import find_optimal_layout, transpile_circuit
 
 # Convert Addon function into Prefect Task
 recover_configurations = task(_recover_configurations)
@@ -73,15 +72,15 @@ def walker_sqd(
 
     if quantum_source == "real-device":
         try:
-            runtime = QuantumRuntime.load("ibm-runner")
+            runtime = load_runtime(RUNTIME_BLOCK_NAME, circuit_params)
         except ValueError as exc:
             raise RuntimeError(
-                "Quantum source 'real-device' requested but QuantumRuntime block "
-                "'ibm-runner' is not defined. Set quantum_source='random' to use "
-                "deterministic random sampling instead."
+                "Quantum source 'real-device' requested but QrmiRuntimeBlock "
+                f"'{RUNTIME_BLOCK_NAME}' could not be loaded. Set quantum_source='random' "
+                "to use deterministic random sampling instead."
             ) from exc
 
-        resource_name = runtime.resource_name
+        resource_name = runtime.resource
 
     elif quantum_source == "qfw":
         try:
@@ -126,52 +125,18 @@ def walker_sqd(
         sampling_start = perf_counter()
 
         if runtime is not None:
-            target_start = perf_counter()
-            target = runtime.get_target()
-
+            # QrmiRuntime searches the SABRE layout and transpiles against the actual
+            # Target: in this process for scheduler="iqp", on the compute node for "slurm".
             logger.info(
-                "Loaded backend target for %s in %.2fs.",
-                resource_name,
-                perf_counter() - target_start,
-            )
-
-            logger.info(
-                "Searching ISA layout for backend %s "
-                "(max_iterations=%s, swap_trials=%s, layout_trials=%s).",
-                resource_name,
+                "Sampling through QrmiRuntime (scheduler=%s, max_iterations=%s, "
+                "swap_trials=%s, layout_trials=%s).",
+                runtime.scheduler,
                 circuit_params.sabre_max_iterations,
                 circuit_params.sabre_swap_trials,
                 circuit_params.sabre_layout_trials,
             )
-            layout = find_optimal_layout(
-                test_circuit=vir_circuit,
-                target=target,
-                optimization_level=circuit_params.optimization_level,
-                max_iterations=circuit_params.sabre_max_iterations,
-                swap_trials=circuit_params.sabre_swap_trials,
-                layout_trials=circuit_params.sabre_layout_trials,
-            )
-
-            logger.info("Transpiling ISA circuit for backend %s.", resource_name)
-            transpile_start = perf_counter()
-            isa_circuit = transpile_circuit(
-                circuit=vir_circuit,
-                target=target,
-                layout=layout,
-                optimization_level=circuit_params.optimization_level,
-            )
-            logger.info(
-                "Completed ISA transpilation for %s in %.2fs.",
-                resource_name,
-                perf_counter() - transpile_start,
-            )
-
             try:
-                pub_result = runtime.sampler(
-                    sampler_pubs=[(isa_circuit,)],
-                    options=options,
-                    tags=["res: quantum"],
-                )
+                pub_result = sample_sync(runtime, vir_circuit, options=options)
             except Exception:
                 logger.exception(
                     "Sampler submission or execution failed for backend %s.",

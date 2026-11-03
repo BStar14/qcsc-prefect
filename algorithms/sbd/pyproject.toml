@@ -16,10 +16,12 @@ requires-python = ">=3.12"
 dependencies = [
     "ffsim",
     "qiskit-addon-sqd",
-    "prefect-qiskit",
+    "anyio>=4",
     "prefect[aws]>=3.4.14",
     "pydantic_numpy",
+    "qcsc-prefect-qiskit",
     "qcsc_workflow_utility",
+    "qiskit-ibm-runtime",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +33,7 @@ ray = ["prefect-ray"]
 qfw = ["ffsim==0.0.84"]
 
 [tool.uv.sources]
+qcsc-prefect-qiskit = { path = "../../packages/qcsc-prefect-qiskit", editable = true }
 qcsc_workflow_utility = { path = "../qcsc_workflow_utility", editable = true }
 
 [tool.setuptools]
