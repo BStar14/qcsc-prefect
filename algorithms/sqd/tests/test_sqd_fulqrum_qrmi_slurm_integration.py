@@ -2,7 +2,7 @@
 
 The workflow's ``sample_bitstrings`` task body submits the upstream QRMI worker
 through the blocks built by ``sqd-fulqrum-create-blocks``. The job compiles the
-LUCJ circuit on the compute node with ``sqd_fulqrum.transpile`` and decodes the
+LUCJ circuit on the compute node with ``sqd_common.transpile`` and decodes the
 result on the host. Only the QPU side is faked, so no QPU or QRMI endpoint is
 contacted:
 
@@ -58,9 +58,9 @@ from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod  # noqa
 from qcsc_prefect_executor import from_blocks  # noqa: E402
 from qcsc_prefect_executor.slurm import run as slurm_run  # noqa: E402
 from qcsc_prefect_fulqrum import block_utils  # noqa: E402
+from sqd_common.qrmi import TRANSPILER  # noqa: E402
 from sqd_fulqrum import create_blocks  # noqa: E402
 from sqd_fulqrum import main as workflow  # noqa: E402
-from sqd_fulqrum.qrmi import TRANSPILER  # noqa: E402
 
 SQD = Path(__file__).resolve().parents[1]
 REPO = SQD.parents[1]
@@ -260,6 +260,6 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_config, caplog):
     )
     assert "#SBATCH --qpu" not in (job_dir / "sampler.slurm").read_text()
     loaded = set(json.loads((job_dir / "node_modules.json").read_text()))
-    assert "sqd_fulqrum" in loaded
+    assert "sqd_common" in loaded
     assert loaded.isdisjoint(HEAVY), sorted(loaded & set(HEAVY))
     assert "Compiled on the compute node:" in caplog.text

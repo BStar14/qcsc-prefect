@@ -41,7 +41,8 @@ from qcsc_prefect_executor.slurm import run as slurm_run  # noqa: E402
 from qcsc_prefect_fulqrum import block_utils, solver_job  # noqa: E402
 from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform  # noqa: E402
 from qiskit_addon_sqd.fermion import SCIResult, solve_fermion  # noqa: E402
-from sqd_fulqrum import create_blocks, recovery  # noqa: E402
+from sqd_common import recovery  # noqa: E402
+from sqd_fulqrum import create_blocks  # noqa: E402
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_fulqrum_blocks.slurm.example.toml"
 ROOT = Path(os.getenv("SQD_FULQRUM_SLURM_ROOT", "/data/sqd-fulqrum-integration"))

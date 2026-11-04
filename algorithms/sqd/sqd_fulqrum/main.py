@@ -29,9 +29,8 @@ from qiskit.primitives.containers import BitArray
 from qiskit.transpiler import Target
 from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform
 from qiskit_addon_sqd.fermion import SCIResult
-
-from sqd_fulqrum.recovery import SolveFn, run_configuration_recovery
-from sqd_fulqrum.transpile import build_pass_manager, derive_seed, isa_gate_depth
+from sqd_common.recovery import SolveFn, run_configuration_recovery
+from sqd_common.transpile import build_pass_manager, derive_seed, isa_gate_depth
 
 DEFAULT_RUNTIME_BLOCK_NAME = "ibm-runner"
 DEFAULT_SOLVER_BLOCK_NAME = "sqd-fulqrum-solver"
@@ -471,7 +470,7 @@ async def sample_bitstrings(
         )
 
     if qrmi_runtime_config is not None:
-        from sqd_fulqrum.qrmi import make_qrmi_runtime
+        from sqd_common.qrmi import make_qrmi_runtime
 
         # The compute node compiles with the seed the host path would draw.
         runtime = make_qrmi_runtime(
@@ -510,7 +509,7 @@ async def sample_bitstrings(
         options=options,
     )
     if qrmi_runtime_config is not None:
-        from sqd_fulqrum.qrmi import compiled_circuit_summary
+        from sqd_common.qrmi import compiled_circuit_summary
 
         summary = compiled_circuit_summary(pub_result)
         if summary is None:

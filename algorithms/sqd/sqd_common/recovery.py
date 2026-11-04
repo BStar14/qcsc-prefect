@@ -1,7 +1,7 @@
 """Self-consistent configuration recovery loop of SQD.
 
 This module has no Prefect dependency. The eigensolver is passed in as an async
-callable, so the flow can use ``FulqrumSolverJob`` while tests can use an
+callable, so the flows can use a solver block while tests can use an
 in-process solver.
 """
 
@@ -16,7 +16,7 @@ import numpy as np
 from qiskit_addon_sqd.configuration_recovery import recover_configurations
 from qiskit_addon_sqd.fermion import SCIResult
 
-from sqd_fulqrum.subsample import postselect, subsample
+from sqd_common.subsample import postselect, subsample
 
 SolveFn = Callable[[tuple[np.ndarray, np.ndarray]], Awaitable[SCIResult]]
 

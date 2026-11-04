@@ -13,8 +13,8 @@ pytest.importorskip("qiskit_addon_sqd")
 
 from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform  # noqa: E402
 from qiskit_addon_sqd.fermion import SCIResult, solve_fermion  # noqa: E402
-from sqd_fulqrum import recovery  # noqa: E402
-from sqd_fulqrum import subsample as fulqrum_subsample  # noqa: E402
+from sqd_common import recovery  # noqa: E402
+from sqd_common import subsample as fulqrum_subsample  # noqa: E402
 
 SQD_DICE_SUBSAMPLE = Path(__file__).resolve().parents[1] / "sqd_dice" / "subsample.py"
 

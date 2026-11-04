@@ -31,9 +31,9 @@ from qiskit.primitives.containers import BitArray, DataBin  # noqa: E402
 from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
 from qiskit.quantum_info import Statevector  # noqa: E402
 from qiskit_ibm_runtime import RuntimeEncoder  # noqa: E402
+from sqd_common.qrmi import TRANSPILER, make_qrmi_runtime, prepare_sampler_circuit  # noqa: E402
+from sqd_common.transpile import transpile_for_target  # noqa: E402
 from sqd_fulqrum import main as workflow  # noqa: E402
-from sqd_fulqrum.qrmi import TRANSPILER, make_qrmi_runtime, prepare_sampler_circuit  # noqa: E402
-from sqd_fulqrum.transpile import transpile_for_target  # noqa: E402
 
 LOGGER = logging.getLogger(__name__)
 
@@ -124,7 +124,7 @@ def test_node_hook_imports_neither_ffsim_nor_prefect():
     """The compute node needs only Qiskit and qiskit-ibm-runtime for the hook."""
     sqd_root = Path(workflow.__file__).resolve().parents[1]
     code = (
-        "import sys; import sqd_fulqrum.transpile; "
+        "import sys; import sqd_common.transpile; "
         "heavy = {'ffsim', 'prefect', 'prefect_qiskit', 'qcsc_prefect_fulqrum', "
         "'qcsc_workflow_utility', 'pyscf', 'qiskit_addon_sqd'}; "
         "print(sorted(heavy & {m.split('.')[0] for m in sys.modules}))"
@@ -226,7 +226,7 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
         calls.append(kwargs)
         work_dir = kwargs["work_dir"]
         request = json.loads((work_dir / "sampler_request.json").read_text())
-        assert request["transpiler"] == "sqd_fulqrum.transpile:transpile_for_target"
+        assert request["transpiler"] == "sqd_common.transpile:transpile_for_target"
         assert request["resource"] == "test_heron"
         assert request["shots"] == 4
         hook_config = json.loads((work_dir / "transpile_config.json").read_text())

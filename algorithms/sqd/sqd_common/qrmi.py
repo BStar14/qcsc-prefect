@@ -1,7 +1,7 @@
 """SQD-owned QPY preparation and QrmiRuntime construction for QRMI sampling.
 
 These helpers run on the workflow host. The compute-node compilation hook is
-``sqd_fulqrum.transpile:transpile_for_target``, which does not import ffsim.
+``sqd_common.transpile:transpile_for_target``, which does not import ffsim.
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiRuntime
 from qiskit import qpy
 from qiskit.primitives import PrimitiveResult
 
-from sqd_fulqrum.transpile import isa_gate_depth
+from sqd_common.transpile import isa_gate_depth
 
-TRANSPILER = "sqd_fulqrum.transpile:transpile_for_target"
+TRANSPILER = "sqd_common.transpile:transpile_for_target"
 RESERVED_KEYS = frozenset({"prepare", "transpiler", "transpile_config"})
 
 
@@ -49,7 +49,7 @@ def make_qrmi_runtime(
     reserved = RESERVED_KEYS & set(qrmi_runtime_config)
     if reserved:
         raise ValueError(
-            f"qrmi_runtime_config must not set {sorted(reserved)}: sqd_fulqrum supplies "
+            f"qrmi_runtime_config must not set {sorted(reserved)}: the SQD workflow supplies "
             "its own compilation hooks, configured by parameters.circuit."
         )
     return QrmiRuntime(

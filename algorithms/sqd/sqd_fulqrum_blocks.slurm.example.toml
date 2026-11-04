@@ -51,7 +51,7 @@ shots = 100000
 # modules, pre_commands, environments and ompthreads follow the solver settings.
 # [qrmi]
 # resource = "YOUR_QRMI_RESOURCE"   # Slurm --qpu; must match the QRMI configuration
-# python_executable = "/opt/venvs/qrmi/bin/python"  # Imports qrmi, the worker and sqd_fulqrum
+# python_executable = "/opt/venvs/qrmi/bin/python"  # Imports qrmi, the worker and sqd_common
 # walltime = "00:30:00"
 # ompthreads = 4                    # The QPU is held while the node compiles
 # timeout_seconds = 3600            # Monitoring only; does not cancel the job
