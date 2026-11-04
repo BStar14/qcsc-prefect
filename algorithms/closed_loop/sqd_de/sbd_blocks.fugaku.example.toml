@@ -1,5 +1,5 @@
 # Example configuration for SBD Prefect blocks on Fugaku
-# Copy this file to algorithms/sbd/sbd_blocks.toml and adjust the required paths/group.
+# Copy this file to algorithms/closed_loop/sqd_de/sbd_blocks.toml and adjust the required paths/group.
 
 # Required for Fugaku
 hpc_target = "fugaku"

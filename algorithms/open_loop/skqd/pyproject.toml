@@ -25,14 +25,14 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-qcsc-prefect-core = { path = "../../packages/qcsc-prefect-core", editable = true }
-qcsc-prefect-adapters = { path = "../../packages/qcsc-prefect-adapters", editable = true }
-qcsc-prefect-blocks = { path = "../../packages/qcsc-prefect-blocks", editable = true }
-qcsc-prefect-executor = { path = "../../packages/qcsc-prefect-executor", editable = true }
-qcsc-prefect-dice = { path = "../../packages/qcsc-prefect-dice", editable = true }
-qcsc-prefect-sbd = { path = "../../packages/qcsc-prefect-sbd", editable = true }
-qcsc-prefect-qiskit = { path = "../../packages/qcsc-prefect-qiskit", editable = true }
-qcsc_workflow_utility = { path = "../qcsc_workflow_utility", editable = true }
+qcsc-prefect-core = { path = "../../../packages/qcsc-prefect-core", editable = true }
+qcsc-prefect-adapters = { path = "../../../packages/qcsc-prefect-adapters", editable = true }
+qcsc-prefect-blocks = { path = "../../../packages/qcsc-prefect-blocks", editable = true }
+qcsc-prefect-executor = { path = "../../../packages/qcsc-prefect-executor", editable = true }
+qcsc-prefect-dice = { path = "../../../packages/qcsc-prefect-dice", editable = true }
+qcsc-prefect-sbd = { path = "../../../packages/qcsc-prefect-sbd", editable = true }
+qcsc-prefect-qiskit = { path = "../../../packages/qcsc-prefect-qiskit", editable = true }
+qcsc_workflow_utility = { path = "../../qcsc_workflow_utility", editable = true }
 
 [tool.setuptools]
 packages = ["skqd_dice"]

@@ -46,9 +46,9 @@ narrower problem. `run` raises `ValueError` (see `check_sbd_input`) when:
 - `spin_sq` is not `None` (SBD has no total spin target).
 
 The block refers to a `CommandBlock`, an `ExecutionProfileBlock` and an `HPCProfileBlock`
-by name. `algorithms/sbd/create_blocks.py` creates all four blocks for Miyabi, Fugaku or
+by name. `algorithms/closed_loop/sqd_de/create_blocks.py` creates all four blocks for Miyabi, Fugaku or
 Slurm.
 
 Blocks saved before this package existed, when `SBDSolverJob` was defined in
-`algorithms/sbd`, keep working: the block type name (`SBD Solver Job`), slug and fields
+`algorithms/closed_loop/sqd_de`, keep working: the block type name (`SBD Solver Job`), slug and fields
 are unchanged.

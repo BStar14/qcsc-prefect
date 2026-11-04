@@ -121,7 +121,7 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-sbd
 
 uv pip install -e algorithms/qcsc_workflow_utility
-uv pip install -e algorithms/sbd
+uv pip install -e algorithms/closed_loop/sqd_de
 ```
 
 Check that the packages are installed correctly:
@@ -207,7 +207,7 @@ This approach uses automated block creation via script instead of manual UI edit
 ```bash
 cd /work/gz00/z12345/qcsc-prefect
 mkdir -p /work/gz00/z12345/sbd_jobs
-cp algorithms/sbd/sbd_blocks.example.toml algorithms/sbd/sbd_blocks.toml
+cp algorithms/closed_loop/sqd_de/sbd_blocks.example.toml algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 Update your prefect token (Only On Prem) if your token is expired.
@@ -220,9 +220,9 @@ prefect-auth login
 
 #### 4.2 Edit the configuration file
 
-Edit `algorithms/sbd/sbd_blocks.toml` and set the following parameters.
+Edit `algorithms/closed_loop/sqd_de/sbd_blocks.toml` and set the following parameters.
 ```bash
-vim algorithms/sbd/sbd_blocks.toml
+vim algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 Set at least:
@@ -256,7 +256,7 @@ Set at least:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml
+python algorithms/closed_loop/sqd_de/create_blocks.py --config algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 This creates the following blocks (default names):
@@ -319,7 +319,7 @@ In the Prefect console, click **Run** → **Custom run** and set as following. A
 
 | Field | Value / Example |
 |---|---|
-| FCIDump File | `/work/gz00/z12345/qcsc-prefect/algorithms/sbd/data/fcidump_N2_MO.txt` |
+| FCIDump File | `/work/gz00/z12345/qcsc-prefect/algorithms/closed_loop/sqd_de/data/fcidump_N2_MO.txt` |
 | SQD Subspace Dimension (Optional) | `1000000` (start small for testing) |
 | Differential Evolution Iterations (Optional)| `1` (start small for testing) |
 | Quantum Source (Optional) | `real-device` or `random` |
@@ -381,7 +381,7 @@ prefect deployment inspect 'riken-sqd-de/riken_sqd_de'
 ```
 
 3) Locate the Flow definition in the repo
-The flow is defined in `algorithms/sbd/sbd/main.py`
+The flow is defined in `algorithms/closed_loop/sqd_de/sbd/main.py`
 
 ### 3.4 What happens in this architecture
 
@@ -439,11 +439,11 @@ Copy and edit the configuration file:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-cp algorithms/sbd/sbd_blocks.toml algorithms/sbd/sbd_blocks_gpu.toml
-vim algorithms/sbd/sbd_blocks_gpu.toml
+cp algorithms/closed_loop/sqd_de/sbd_blocks.toml algorithms/closed_loop/sqd_de/sbd_blocks_gpu.toml
+vim algorithms/closed_loop/sqd_de/sbd_blocks_gpu.toml
 ```
 
-Edit `algorithms/sbd/sbd_blocks_gpu.toml` and change:
+Edit `algorithms/closed_loop/sqd_de/sbd_blocks_gpu.toml` and change:
 
 | Parameter | Value / Example |
 |---|---|
@@ -471,7 +471,7 @@ Edit `algorithms/sbd/sbd_blocks_gpu.toml` and change:
 Run:
 
 ```bash
-python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks_gpu.toml
+python algorithms/closed_loop/sqd_de/create_blocks.py --config algorithms/closed_loop/sqd_de/sbd_blocks_gpu.toml
 ```
 
 This creates a GPU block set that can coexist with the CPU block set.

@@ -45,6 +45,13 @@ qcsc-prefect/
   Optional DICE SHCI solver integration.
 - `packages/qcsc-prefect-sbd/`
   Optional SBD Davidson solver integration (`SBDSolverJob`).
+- `algorithms/`
+  Reference QCSC workflows. Each one has its own `pyproject.toml` and README and is
+  installed on its own.
+  - `open_loop/sqd`, `open_loop/skqd`: sample once, then diagonalize (DICE or SBD).
+  - `closed_loop/sqd_de`: SQD with differential evolution of the circuit parameters
+    (SBD or DICE).
+  - `qcsc_workflow_utility`: chemistry and solver helpers shared by the workflows.
 - `examples/`
   End-to-end runnable examples for Miyabi and Fugaku.
 - `docs/`

@@ -57,7 +57,7 @@ uv pip install --no-deps \
 
 # algorithm dependencies
 uv pip install -e algorithms/qcsc_workflow_utility
-uv pip install -e algorithms/sbd
+uv pip install -e algorithms/closed_loop/sqd_de
 ```
 
 ## Create SBD Blocks (Miyabi/Fugaku)
@@ -71,15 +71,15 @@ cd /work/gz00/z12345/qcsc-prefect
 Miyabi:
 
 ```bash
-cp algorithms/sbd/sbd_blocks.example.toml algorithms/sbd/sbd_blocks.toml
-vim algorithms/sbd/sbd_blocks.toml
+cp algorithms/closed_loop/sqd_de/sbd_blocks.example.toml algorithms/closed_loop/sqd_de/sbd_blocks.toml
+vim algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 Fugaku:
 
 ```bash
-cp algorithms/sbd/sbd_blocks.fugaku.example.toml algorithms/sbd/sbd_blocks.toml
-vim algorithms/sbd/sbd_blocks.toml
+cp algorithms/closed_loop/sqd_de/sbd_blocks.fugaku.example.toml algorithms/closed_loop/sqd_de/sbd_blocks.toml
+vim algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 The `[runtime]` and `[runtime.qrmi]` tables at the end of the Miyabi example create the
@@ -101,13 +101,13 @@ Run block generator:
 Miyabi:
 
 ```bash
-python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml --hpc-target miyabi
+python algorithms/closed_loop/sqd_de/create_blocks.py --config algorithms/closed_loop/sqd_de/sbd_blocks.toml --hpc-target miyabi
 ```
 
 Fugaku:
 
 ```bash
-python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml --hpc-target fugaku
+python algorithms/closed_loop/sqd_de/create_blocks.py --config algorithms/closed_loop/sqd_de/sbd_blocks.toml --hpc-target fugaku
 ```
 
 `sbd_executable` should point to your built binary, for example:
@@ -132,7 +132,7 @@ carryover_ratio = 0.1
 
 Then increase only if your target case runs without OOM.
 
-For Fugaku, `algorithms/sbd/sbd_blocks.fugaku.example.toml` already matches the tutorial baseline
+For Fugaku, `algorithms/closed_loop/sqd_de/sbd_blocks.fugaku.example.toml` already matches the tutorial baseline
 (`num_nodes = 2`, `mpiprocs = 2`, `mpi_options = ["-n", "2"]`, `script_filename = "sbd_solver.pjm"`),
 so in most cases you only need to update `group`, `queue`, `work_dir`, and `sbd_executable`.
 For backward compatibility, `project` is still accepted as a legacy alias in Fugaku mode.
@@ -151,7 +151,7 @@ This creates:
 Local execution from JSON parameters:
 
 ```bash
-python algorithms/sbd/exec.py algorithms/sbd/default_params/test_n2.json
+python algorithms/closed_loop/sqd_de/exec.py algorithms/closed_loop/sqd_de/default_params/test_n2.json
 ```
 
 Note:
@@ -176,7 +176,7 @@ sbd-deploy
   `qrmi-runtime`. The block's `scheduler` selects where QRMI runs (see below).
 - `random`: deterministic pseudo-random bitstrings from `random_seed`.
 - `qfw`: the QFw-SLURM path through the `QFwResource` block `qfw-runner`, unchanged. See
-  [the QFw-SLURM tutorial](../../docs/tutorials/run_sbd_closed_loop_workflow_qfw-slurm.md).
+  [the QFw-SLURM tutorial](../../../docs/tutorials/run_sbd_closed_loop_workflow_qfw-slurm.md).
 
 With `real-device`, each walker sends its LUCJ circuit untranspiled in one `sampler()`
 call. The ffsim pre-init stage runs in the workflow process. The runtime then searches
@@ -188,10 +188,10 @@ block's scheduler:
 
 - `scheduler = "iqp"`: in the workflow process. Install QRMI there
   (`pip install "qrmi[ibm]"`, Linux only). The process must reach IBM Quantum.
-- `scheduler = "slurm"`: on the compute node. Install this package (`algorithms/sbd`)
+- `scheduler = "slurm"`: on the compute node. Install this package (`algorithms/closed_loop/sqd_de`)
   in the compute-node Python as well, so that the hook can be imported. Set `root_dir`
   and the three block names described in the
-  [QRMI Sampler guide](../../docs/howto/howto_qrmi_slurm_sampler.md) in `[runtime]`, and
+  [QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md) in `[runtime]`, and
   leave out `[runtime.qrmi]`.
 
 The `sqd_options` variable is passed to `QrmiRuntime` unchanged. On the `real-device`

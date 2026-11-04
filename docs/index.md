@@ -24,6 +24,12 @@ qcsc-prefect/
 │   ├── qcsc-prefect-dice/
 │   └── qcsc-prefect-sbd/
 ├── algorithms/
+│   ├── qcsc_workflow_utility/
+│   ├── open_loop/
+│   │   ├── sqd/
+│   │   └── skqd/
+│   └── closed_loop/
+│       └── sqd_de/
 ├── examples/
 └── docs/
 ```

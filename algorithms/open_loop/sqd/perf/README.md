@@ -21,7 +21,7 @@ virtual environment where the `sqd_dice` package is installed, and run:
 
 ```bash
 cd /path/to/qcsc-prefect
-uv run --project algorithms/sqd python algorithms/sqd/perf/tune_dice.py
+uv run --project algorithms/open_loop/sqd python algorithms/open_loop/sqd/perf/tune_dice.py
 ```
 
 This command deploys the `dice_perf_tuning` workflow on your Prefect server.
