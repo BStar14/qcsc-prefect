@@ -1,7 +1,8 @@
-"""Create Prefect blocks and variables required for the SQD fulqrum workflow.
+"""Create the Prefect blocks required for the SQD fulqrum workflow.
 
 An optional ``[qrmi]`` table (Slurm only) also creates the three blocks of the
-QRMI sampler job and prints the ``qrmi_runtime_config`` to pass on each run.
+QRMI sampler job and prints the ``qrmi_runtime_config`` to paste into the
+Sampling parameters of each run. Shots and sampler options are flow parameters.
 """
 
 from __future__ import annotations
@@ -14,6 +15,12 @@ from typing import Any
 
 HPC_TARGETS = ("slurm", "local", "miyabi", "fugaku")
 QRMI_WORKER_ARGS = ["-m", "qcsc_prefect.integrations.qiskit.qrmi.worker"]
+# Run settings that belong to the flow parameters, not to the blocks.
+FLOW_PARAMETER_KEYS = {
+    "shots": "sampling.shots",
+    "sampler_options_json": "sampling.sampler_options",
+    "options_variable_name": "sampling.shots and sampling.sampler_options",
+}
 QRMI_KEYS = frozenset(
     {
         "resource",
@@ -75,7 +82,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--execution-profile-block-name")
     parser.add_argument("--hpc-profile-block-name")
     parser.add_argument("--solver-block-name")
-    parser.add_argument("--options-variable-name")
 
     parser.add_argument("--eigensolver", choices=["scipy", "primme"])
     parser.add_argument("--hamiltonian-format", choices=["csr", "matrix_free"])
@@ -88,11 +94,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Whether to return the ground-state amplitudes as an SCIState.",
     )
-    parser.add_argument("--shots", type=int)
-    parser.add_argument(
-        "--sampler-options-json",
-        help='Raw JSON for Prefect variable value (e.g. \'{"params": {"shots": 50000}}\').',
-    )
     parser.add_argument(
         "--qrmi-resource",
         help="QRMI resource ID; creates the QRMI sampler blocks (Slurm only).",
@@ -104,7 +105,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Print the resolved settings as JSON without saving blocks or variables.",
+        help="Print the resolved settings as JSON without saving blocks.",
     )
     return parser.parse_args(argv)
 
@@ -172,15 +173,18 @@ def _default_names(*, hpc_target: str) -> dict[str, str]:
     }
 
 
-def resolve_settings(
-    args: argparse.Namespace, config: dict[str, Any]
-) -> tuple[dict[str, Any], str, dict[str, Any]]:
+def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
     """Merge CLI arguments over the config file.
 
     Returns:
-        ``(block_kwargs, options_variable_name, sampler_options)``, where
-        ``block_kwargs`` are the keyword arguments of ``create_fulqrum_blocks``.
+        The keyword arguments of ``create_fulqrum_blocks``.
     """
+    for key, parameter in FLOW_PARAMETER_KEYS.items():
+        if key in config:
+            raise RuntimeError(
+                f"'{key}' is not a block setting. Set {parameter} in the flow "
+                "parameters of each run instead."
+            )
 
     def pick(name: str, default: Any = None) -> Any:
         return _pick_value(getattr(args, name, None), config.get(name), default)
@@ -253,14 +257,7 @@ def resolve_settings(
             _pick_value(args.fugaku_pjm_resources, config.get("fugaku_pjm_resources"))
         ),
     )
-
-    options_variable_name = str(pick("options_variable_name", "sampler_options")).strip()
-    sampler_options_json = pick("sampler_options_json")
-    if sampler_options_json:
-        sampler_options = json.loads(str(sampler_options_json))
-    else:
-        sampler_options = {"params": {"shots": int(pick("shots", 100000))}}
-    return block_kwargs, options_variable_name, sampler_options
+    return block_kwargs
 
 
 def resolve_qrmi_settings(
@@ -394,24 +391,14 @@ def create_qrmi_blocks(qrmi: dict[str, Any]) -> None:
     ).save(qrmi["hpc_profile_block_name"], overwrite=True)
 
 
-def _set_variable(variable_name: str, value: Any) -> None:
-    from prefect.variables import Variable
-
-    Variable.set(variable_name, value, overwrite=True)
-
-
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     config = _load_config_file(args.config)
-    block_kwargs, options_variable_name, sampler_options = resolve_settings(args, config)
+    block_kwargs = resolve_settings(args, config)
     qrmi = resolve_qrmi_settings(args, config, block_kwargs)
 
     if args.dry_run:
-        resolved = {
-            "blocks": block_kwargs,
-            "options_variable_name": options_variable_name,
-            "sampler_options": sampler_options,
-        }
+        resolved = {"blocks": block_kwargs}
         if qrmi is not None:
             resolved["qrmi_blocks"] = qrmi
             resolved["qrmi_runtime_config"] = qrmi_runtime_config(qrmi)
@@ -423,16 +410,12 @@ def main(argv: list[str] | None = None) -> None:
     block_names = create_fulqrum_blocks(**block_kwargs)
     if qrmi is not None:
         create_qrmi_blocks(qrmi)
-    _set_variable(options_variable_name, sampler_options)
 
-    print(
-        f"Saved blocks and variable for SQD fulqrum workflow (target={block_kwargs['hpc_target']})"
-    )
+    print(f"Saved blocks for SQD fulqrum workflow (target={block_kwargs['hpc_target']})")
     print(f"  SQD solver block: {block_names['solver_block_name']}")
     print(f"  Command block: {block_names['command_block_name']}")
     print(f"  Execution profile block: {block_names['execution_profile_block_name']}")
     print(f"  HPC profile block: {block_names['hpc_profile_block_name']}")
-    print(f"  Options variable: {options_variable_name}")
     print(f"  Work directory: {block_kwargs['root_dir']}")
     print(f"  Fulqrum executable: {block_kwargs['fulqrum_executable']}")
     if qrmi is not None:
@@ -440,7 +423,7 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  QRMI execution profile block: {qrmi['execution_profile_block_name']}")
         print(f"  QRMI HPC profile block: {qrmi['hpc_profile_block_name']}")
         print(f"  QRMI resource (slurm_qpu): {qrmi['resource']}")
-        print("Pass this as the flow argument qrmi_runtime_config to sample through QRMI:")
+        print("To sample through QRMI, set sampling.qrmi_runtime_config of each run to:")
         print(json.dumps(qrmi_runtime_config(qrmi), indent=2))
 
 
