@@ -5,7 +5,7 @@ project = "gz00"
 # group = "ra000000"
 queue = "regular-c" # Miyabi queue, or Fugaku rscgrp (e.g. "small")
 work_dir = "/work/gz00/<user>/sbd_jobs"
-sbd_executable = "/work/gz00/<user>/qcsc-prefect/algorithms/sbd/native/diag"
+sbd_executable = "/work/gz00/<user>/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 
 # Optional execution profile
 # launcher default: "mpiexec.hydra" (miyabi), "mpiexec" (fugaku)

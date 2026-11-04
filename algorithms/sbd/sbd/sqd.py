@@ -12,6 +12,7 @@ import numpy as np
 from ffsim.qiskit import PRE_INIT
 from prefect import get_run_logger, task
 from prefect.variables import Variable
+from qcsc_prefect_sbd import SBDResult, SBDSolverJob
 from qcsc_workflow_utility.chem import ElectronicProperties, NpStrict1DArrayF64
 from qiskit.primitives.containers import BitArray
 from qiskit_addon_sqd.configuration_recovery import (
@@ -30,7 +31,6 @@ from .np_type_extension import (
     NpStrict2DArrayBool,
 )
 from .sampling import RUNTIME_BLOCK_NAME, load_runtime, sample_sync
-from .solver_job import SBDResult, SBDSolverJob
 
 # Convert Addon function into Prefect Task
 recover_configurations = task(_recover_configurations)

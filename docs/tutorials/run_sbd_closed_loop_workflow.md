@@ -116,7 +116,9 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
-  -e packages/qcsc-prefect-executor
+  -e packages/qcsc-prefect-executor \
+  -e packages/qcsc-prefect-dice \
+  -e packages/qcsc-prefect-sbd
 
 uv pip install -e algorithms/qcsc_workflow_utility
 uv pip install -e algorithms/sbd
@@ -155,7 +157,7 @@ Navigate to the directory and build:
 
 <img src="../images/icon-miyabi.png" alt="miyabi" width="50"/><br>
 ```bash
-cd /work/gz00/z12345/qcsc-prefect/algorithms/sbd/native
+cd /work/gz00/z12345/qcsc-prefect/packages/qcsc-prefect-sbd/native
 bash ./build_sbd.sh
 ```
 
@@ -185,7 +187,7 @@ realpath ./diag
 Example output:
 
 ```text
-/work/gz00/z12345/qcsc-prefect/algorithms/sbd/native/diag
+/work/gz00/z12345/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag
 ```
 
 We will need this path in the next step.
@@ -234,7 +236,7 @@ Set at least:
 | `project` | `gz00` | Your Miyabi project name |
 | `queue` | `regular-c` | Queue name on Miyabi |
 | `work_dir` | `/work/gz00/z12345/sbd_jobs` | Job working directory |
-| `sbd_executable` | `/work/gz00/z12345/qcsc-prefect/algorithms/sbd/native/diag` | Absolute path to diag executable |
+| `sbd_executable` | `/work/gz00/z12345/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag` | Absolute path to diag executable |
 | `mpiprocs` | `8` | Number of MPI processes |
 | `mpi_options` | `["-np", "8"]` | MPI options |
 | `task_comm_size` | `1` | Task communicator size |
@@ -417,7 +419,7 @@ Now, we will create a GPU-enabled version.
 For the GPU version, place the binary under:
 
 ```text
-/work/gz00/z12345/qcsc-prefect/algorithms/sbd/native/diag-gpu
+/work/gz00/z12345/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag-gpu
 ```
 
 On the MDX workflow client, copy the prebuilt GPU binary with:
@@ -426,7 +428,7 @@ On the MDX workflow client, copy the prebuilt GPU binary with:
 
 ```bash
 cd /work/gz00/z12345/qcsc-prefect
-cp /large/tutorial/diag-gpu algorithms/sbd/native/
+cp /large/tutorial/diag-gpu packages/qcsc-prefect-sbd/native/
 ```
 
 This tutorial assumes the GPU solver runs with the binary name `diag-gpu`.
@@ -449,7 +451,7 @@ Edit `algorithms/sbd/sbd_blocks_gpu.toml` and change:
 | `hpc_profile_block_name` | `hpc-miyabi-sbd-gpu` |
 | `solver_block_name` | `davidson-solver-gpu` |
 | `queue` | `regular-g` |
-| `sbd_executable` | `/work/gz00/z12345/qcsc-prefect/algorithms/sbd/native/diag-gpu` |
+| `sbd_executable` | `/work/gz00/z12345/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag-gpu` |
 | `launcher` | `mpirun` |
 | `mpiprocs` | `1` |
 | `modules` | Do not set |

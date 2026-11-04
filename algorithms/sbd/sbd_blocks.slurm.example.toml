@@ -3,7 +3,7 @@ hpc_target = "slurm"
 project = "YOUR_SLURM_ACCOUNT"
 queue = "YOUR_SLURM_PARTITION"
 work_dir = "/path/where/you/want/sbd_jobs"
-sbd_executable = "/path/to/qcsc-prefect/algorithms/sbd/native/diag"
+sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 
 # Optional execution profile
 launcher = "srun"

@@ -38,13 +38,13 @@ This script compiles `main.cc` directly, so a separate `CMakeLists.txt` is not r
 It defaults to a local checkout under:
 
 ```text
-algorithms/sbd/native/sbd
+packages/qcsc-prefect-sbd/native/sbd
 ```
 
 and produces:
 
 ```text
-algorithms/sbd/native/diag-gpu
+packages/qcsc-prefect-sbd/native/diag-gpu
 ```
 
 > [!NOTE]
@@ -68,14 +68,14 @@ bash ./build_sbd_fugaku.sh
 Upon successful compilation, an executable named `diag` will be created in this directory:
 
 ```text
-algorithms/sbd/native/diag
+packages/qcsc-prefect-sbd/native/diag
 ```
 
 Set the absolute path to this executable in the SBD block configuration file:
 
 ```toml
-# algorithms/sbd/sbd_blocks.toml
-sbd_executable = "/abs/path/to/qcsc-prefect/algorithms/sbd/native/diag"
+# algorithms/sbd/sbd_blocks.toml (or the block config of another algorithm)
+sbd_executable = "/abs/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 ```
 
 ### Optional environment overrides

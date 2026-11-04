@@ -20,7 +20,8 @@ qcsc-prefect/
 │   ├── qcsc-prefect-adapters
 │   ├── qcsc-prefect-executor
 │   ├── qcsc-prefect-qiskit
-│   └── qcsc-prefect-dice
+│   ├── qcsc-prefect-dice
+│   └── qcsc-prefect-sbd
 ├── pyproject.toml
 └── .pre-commit-config.yaml
 ```
@@ -42,6 +43,8 @@ qcsc-prefect/
   Optional native Qiskit Runtime integration utilities.
 - `packages/qcsc-prefect-dice/`
   Optional DICE SHCI solver integration.
+- `packages/qcsc-prefect-sbd/`
+  Optional SBD Davidson solver integration (`SBDSolverJob`).
 - `examples/`
   End-to-end runnable examples for Miyabi and Fugaku.
 - `docs/`
@@ -67,6 +70,12 @@ Install the core packages plus the Python-side DICE integration with:
 
 ```bash
 pip install "qcsc-prefect[dice]"
+```
+
+Install the core packages plus the Python-side SBD integration with:
+
+```bash
+pip install "qcsc-prefect[sbd]"
 ```
 
 Install all optional integrations with:

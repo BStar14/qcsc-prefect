@@ -19,7 +19,9 @@ dependencies = [
     "anyio>=4",
     "prefect[aws]>=3.4.14",
     "pydantic_numpy",
+    "qcsc-prefect-dice",
     "qcsc-prefect-qiskit",
+    "qcsc-prefect-sbd",
     "qcsc_workflow_utility",
     "qiskit-ibm-runtime",
 ]
@@ -33,7 +35,13 @@ ray = ["prefect-ray"]
 qfw = ["ffsim==0.0.84"]
 
 [tool.uv.sources]
+qcsc-prefect-core = { path = "../../packages/qcsc-prefect-core", editable = true }
+qcsc-prefect-adapters = { path = "../../packages/qcsc-prefect-adapters", editable = true }
+qcsc-prefect-blocks = { path = "../../packages/qcsc-prefect-blocks", editable = true }
+qcsc-prefect-executor = { path = "../../packages/qcsc-prefect-executor", editable = true }
+qcsc-prefect-dice = { path = "../../packages/qcsc-prefect-dice", editable = true }
 qcsc-prefect-qiskit = { path = "../../packages/qcsc-prefect-qiskit", editable = true }
+qcsc-prefect-sbd = { path = "../../packages/qcsc-prefect-sbd", editable = true }
 qcsc_workflow_utility = { path = "../qcsc_workflow_utility", editable = true }
 
 [tool.setuptools]
