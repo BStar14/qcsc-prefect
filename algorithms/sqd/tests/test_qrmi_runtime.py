@@ -31,6 +31,8 @@ from qiskit.primitives.containers import BitArray, DataBin  # noqa: E402
 from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
 from qiskit.quantum_info import Statevector  # noqa: E402
 from qiskit_ibm_runtime import RuntimeEncoder  # noqa: E402
+from sqd_common import flow, lucj, postprocess, sampling  # noqa: E402
+from sqd_common.flow_params import CircuitParameters, SamplingParameters  # noqa: E402
 from sqd_common.qrmi import TRANSPILER, make_qrmi_runtime, prepare_sampler_circuit  # noqa: E402
 from sqd_common.transpile import transpile_for_target  # noqa: E402
 from sqd_fulqrum import main as workflow  # noqa: E402
@@ -57,7 +59,7 @@ def h2():
 
 
 def circuit_parameters(reset=False):
-    return workflow.CircuitParameters(
+    return CircuitParameters(
         use_reset_mitigation=reset,
         sabre_layout_trials=4,
         sabre_swap_trials=2,
@@ -65,9 +67,14 @@ def circuit_parameters(reset=False):
     )
 
 
+def lucj_parameters(params, h2):
+    with patch.object(lucj, "get_run_logger", return_value=LOGGER):
+        return lucj.get_lucj_params.fn(params, h2)
+
+
 def make_circuit(params, h2):
-    with patch.object(workflow, "get_run_logger", return_value=LOGGER):
-        return workflow.create_ansatz_circuits.fn(params, h2)
+    with patch.object(lucj, "get_run_logger", return_value=LOGGER):
+        return lucj.build_lucj_circuit.fn(lucj_parameters(params, h2), params)
 
 
 def target(with_rzz=False):
@@ -101,7 +108,7 @@ def readout_probabilities(circuit):
 def test_lucj_hooks_preserve_readout_through_qpy_without_prefect_context(h2, reset, with_rzz):
     params = circuit_parameters(reset)
     original = make_circuit(params, h2)
-    config = workflow.circuit_transpile_options(params, np.random.default_rng(24))
+    config = lucj.circuit_transpile_options(params, np.random.default_rng(24))
     prepared = prepare_sampler_circuit(original.copy(), transpile_config=config)
     stream = io.BytesIO()
     qpy.dump(prepared.circuit, stream)
@@ -122,7 +129,7 @@ def test_lucj_hooks_preserve_readout_through_qpy_without_prefect_context(h2, res
 
 def test_node_hook_imports_neither_ffsim_nor_prefect():
     """The compute node needs only Qiskit and qiskit-ibm-runtime for the hook."""
-    sqd_root = Path(workflow.__file__).resolve().parents[1]
+    sqd_root = Path(lucj.__file__).resolve().parents[1]
     code = (
         "import sys; import sqd_common.transpile; "
         "heavy = {'ffsim', 'prefect', 'prefect_qiskit', 'qcsc_prefect_fulqrum', "
@@ -148,14 +155,14 @@ def test_node_hook_matches_host_transpile(h2, reset, with_rzz):
     params = circuit_parameters(reset)
     original = make_circuit(params, h2)
     actual_target = target(with_rzz)
-    with patch.object(workflow, "get_run_logger", return_value=LOGGER):
-        host = workflow.transpile_circuit.fn(
+    with patch.object(lucj, "get_run_logger", return_value=LOGGER):
+        host = lucj.transpile_lucj_circuit.fn(
             circuit=original.copy(),
             target=actual_target,
             circuit_params=params,
             seed=np.random.default_rng(24),
         )
-    config = workflow.circuit_transpile_options(params, np.random.default_rng(24))
+    config = lucj.circuit_transpile_options(params, np.random.default_rng(24))
     prepared = prepare_sampler_circuit(original.copy(), transpile_config=config)
     stream = io.BytesIO()
     qpy.dump(prepared.circuit, stream)
@@ -230,7 +237,7 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
         assert request["resource"] == "test_heron"
         assert request["shots"] == 4
         hook_config = json.loads((work_dir / "transpile_config.json").read_text())
-        assert hook_config == workflow.circuit_transpile_options(params, np.random.default_rng(24))
+        assert hook_config == lucj.circuit_transpile_options(params, np.random.default_rng(24))
         with (work_dir / "circuit.qpy").open("rb") as stream:
             (circuit,) = qpy.load(stream)
         actual_target = target()
@@ -242,32 +249,29 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
         (work_dir / "result.json").write_text(json.dumps(sample_result(reset), cls=RuntimeEncoder))
         return SimpleNamespace(job_id="73", state="COMPLETED", exit_status=0)
 
-    async def options(*args, **kwargs):
-        return {"params": {"shots": 4}}
-
     async def reject_ibm(*args, **kwargs):
         pytest.fail("QRMI sampling must not load an IBM Runtime block")
+
+    artifacts = []
+
+    async def artifact(**kwargs):
+        artifacts.append(kwargs)
 
     monkeypatch.setattr(runtime_mod, "_sample_on_slurm", runtime_mod._sample_on_slurm.fn)
     monkeypatch.setattr(runtime_mod, "get_run_logger", lambda: LOGGER)
     monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
-    monkeypatch.setattr(workflow, "get_run_logger", lambda: LOGGER)
-    monkeypatch.setattr(workflow, "create_ansatz_circuits", workflow.create_ansatz_circuits.fn)
-    monkeypatch.setattr(workflow.Variable, "get", options)
-    monkeypatch.setattr(workflow.QuantumRuntime, "load", reject_ibm)
+    for module in (lucj, sampling, postprocess, flow, workflow):
+        monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
+    monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
+    monkeypatch.setattr(sampling, "create_table_artifact", artifact)
+    monkeypatch.setattr(postprocess, "create_table_artifact", artifact)
+    monkeypatch.setattr(sampling.QuantumRuntime, "load", reject_ibm)
+    sampling_params = SamplingParameters(shots=4, qrmi_runtime_config=config)
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
         result = asyncio.run(
-            workflow.sample_bitstrings.fn(
-                params,
-                h2,
-                "unused-block",
-                "options",
-                "real-device",
-                24,
-                qrmi_runtime_config=config,
-            )
+            sampling.quantum_sampling.fn(lucj_parameters(params, h2), params, sampling_params)
         )
-    assert result.get_bitstrings() == (
+    assert BitArray.from_bool_array(result).get_bitstrings() == (
         ["0101", "1001"] if reset else ["0101", "0110", "1001", "1010"]
     )
     assert len(calls) == 1
@@ -275,11 +279,21 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     assert "prepare" not in config and "transpiler" not in config
     assert f"Instruction counts = {dict(compiled[0].count_ops())}" in caplog.text
     assert "Compiled on the compute node:" in caplog.text
+    ((source),) = artifacts
+    assert source["key"] == sampling.SAMPLING_ARTIFACT_KEY
+    row = source["table"][0]
+    assert row["source"] == "qrmi" and row["resource"] == "test_heron"
+    assert row["qrmi_result_dir"] == str(calls[0]["work_dir"]) and row["slurm_job_id"] == "73"
+    assert (row["shots"], row["shots_kept"]) == (4, len(result))
 
-    # Exercise the original flow body and recovery loop. Only scheduler/native
+    # The saved job directory reloads to the same samples, without a new job.
+    reloaded = asyncio.run(sampling.load_qrmi_result.fn(row["qrmi_result_dir"], params))
+    np.testing.assert_array_equal(reloaded, result)
+    assert len(calls) == 1
+
+    # Exercise the flow body and recovery loop. Only scheduler/native
     # execution and Prefect orchestration boundaries are replaced.
     solver_calls = []
-    artifacts = []
 
     async def solve(**kwargs):
         assert kwargs["one_body_tensor"] is h2.one_body_tensor
@@ -292,9 +306,6 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
         assert name == "sqd-fulqrum-solver"
         return SimpleNamespace(run=solve)
 
-    async def artifact(**kwargs):
-        artifacts.append(kwargs)
-
     class DirectTask:
         def __init__(self, fn):
             self.fn = fn
@@ -302,23 +313,28 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
         def with_options(self, **kwargs):
             return self.fn
 
+        def __call__(self, **kwargs):
+            return self.fn(**kwargs)
+
     monkeypatch.setattr(
-        workflow, "compute_molecular_integrals_from_geometry", DirectTask(lambda **kwargs: h2)
+        flow, "compute_molecular_integrals_from_geometry", DirectTask(lambda **kwargs: h2)
     )
-    monkeypatch.setattr(workflow, "sample_bitstrings", DirectTask(workflow.sample_bitstrings.fn))
+    for name in ("get_lucj_params", "quantum_sampling", "sqd_loop"):
+        monkeypatch.setattr(flow, name, DirectTask(getattr(flow, name).fn))
     monkeypatch.setattr(workflow.FulqrumSolverJob, "load", load_solver)
-    monkeypatch.setattr(workflow, "create_table_artifact", artifact)
-    parameters = workflow.Parameters(
+    artifacts.clear()
+    parameters = workflow.FlowParameters(
         molecule={"atom": "H 0 0 0; H 0 0 0.74", "basis": "sto-3g"},
         circuit=params,
+        sampling=sampling_params,
         sqd={"subspace_dim": 1, "num_batches": 1, "max_iterations": 1},
     )
-    energy = asyncio.run(workflow.sqd_2405_05068_fulqrum.fn(parameters, qrmi_runtime_config=config))
+    energy = asyncio.run(workflow.sqd_2405_05068_fulqrum.fn(parameters))
     assert energy == pytest.approx(-1.5 + h2.nuclear_repulsion_energy)
     assert len(calls) == 2
     assert len(solver_calls) == 1
-    assert artifacts[0]["key"] == workflow.ARTIFACT_KEY
-    assert artifacts[0]["table"][0]["dimension"] == 1
+    assert [a["key"] for a in artifacts] == [sampling.SAMPLING_ARTIFACT_KEY, workflow.ARTIFACT_KEY]
+    assert artifacts[1]["table"][0]["dimension"] == 1
 
 
 def test_ibm_runtime_path_is_preserved(monkeypatch, h2):
@@ -329,7 +345,7 @@ def test_ibm_runtime_path_is_preserved(monkeypatch, h2):
 
     async def load(name):
         calls.append(name)
-        return SimpleNamespace(get_target=get_target, sampler=sample)
+        return SimpleNamespace(resource_name="ibm_test", get_target=get_target, sampler=sample)
 
     async def get_target():
         return "ibm-target"
@@ -344,44 +360,21 @@ def test_ibm_runtime_path_is_preserved(monkeypatch, h2):
         assert options == {"params": {"shots": 4}}
         return sample_result(False)
 
-    async def options(*args, **kwargs):
-        return {"params": {"shots": 4}}
+    async def artifact(**kwargs):
+        pass
 
-    monkeypatch.setattr(workflow, "get_run_logger", lambda: LOGGER)
-    monkeypatch.setattr(workflow, "create_ansatz_circuits", lambda **kwargs: circuit)
-    monkeypatch.setattr(workflow, "transpile_circuit", transpile)
-    monkeypatch.setattr(workflow.QuantumRuntime, "load", load)
-    monkeypatch.setattr(workflow.Variable, "get", options)
+    monkeypatch.setattr(sampling, "get_run_logger", lambda: LOGGER)
+    monkeypatch.setattr(sampling, "create_table_artifact", artifact)
+    monkeypatch.setattr(sampling, "build_lucj_circuit", lambda **kwargs: circuit)
+    monkeypatch.setattr(sampling, "transpile_lucj_circuit", transpile)
+    monkeypatch.setattr(sampling.QuantumRuntime, "load", load)
     result = asyncio.run(
-        workflow.sample_bitstrings.fn(params, h2, "ibm", "options", "real-device", 24)
+        sampling.quantum_sampling.fn(
+            lucj_parameters(params, h2), params, SamplingParameters(shots=4, runner_name="ibm")
+        )
     )
     assert calls == ["ibm"]
-    assert result.get_bitstrings() == sample_result(False)[0].data.meas.get_bitstrings()
-
-
-def test_random_sampling_bypasses_qrmi_and_ibm(monkeypatch):
-    async def options(*args, **kwargs):
-        return {"params": {"shots": 4}}
-
-    async def reject(*args, **kwargs):
-        pytest.fail("Random sampling must not load a Runtime block")
-
-    monkeypatch.setattr(workflow, "get_run_logger", lambda: LOGGER)
-    monkeypatch.setattr(workflow.Variable, "get", options)
-    monkeypatch.setattr(workflow.QuantumRuntime, "load", reject)
-    samples = [
-        asyncio.run(
-            workflow.sample_bitstrings.fn(
-                circuit_parameters(),
-                SimpleNamespace(num_orbitals=2),
-                "unused",
-                "options",
-                "random",
-                24,
-                qrmi_runtime_config={},
-            )
-        )
-        for _ in range(2)
-    ]
-    assert samples[0].get_bitstrings() == samples[1].get_bitstrings()
-    assert samples[0].num_bits == samples[0].num_shots == 4
+    assert (
+        BitArray.from_bool_array(result).get_bitstrings()
+        == sample_result(False)[0].data.meas.get_bitstrings()
+    )
