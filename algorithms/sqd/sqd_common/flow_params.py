@@ -5,11 +5,14 @@ deployment's run form in the Prefect UI shows every setting of a run in one
 place, grouped by the Qiskit Patterns stage it controls.
 """
 
+from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 DEFAULT_RUNTIME_BLOCK_NAME = "ibm-runner"
+# Repository root of a source checkout (algorithms/sqd/sqd_common/ is three levels down).
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class MoleculeGeometry(BaseModel):
@@ -58,6 +61,20 @@ class FCIDumpFile(BaseModel):
         ),
         title="FCIDump File",
     )
+
+    @field_validator("fcidump_file")
+    @classmethod
+    def _resolve_fcidump_file(cls, value: str) -> str:
+        """Resolve a relative path from the working directory, else from the repository root.
+
+        A deployment serves from the package directory, so example paths such as
+        ``algorithms/sqd/data/n2_631g_fc.fcidump`` resolve against the checkout.
+        """
+        path = Path(value).expanduser()
+        if path.is_absolute() or path.exists() or not (REPO_ROOT / path).exists():
+            return str(path)
+        return str(REPO_ROOT / path)
+
     spin_sq: float = Field(
         default=0.0,
         description=(
