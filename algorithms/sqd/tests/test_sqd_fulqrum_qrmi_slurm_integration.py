@@ -207,7 +207,7 @@ def qrmi_config(monkeypatch):
         },
     }
     args = create_blocks._parse_args([])
-    block_kwargs, _, _ = create_blocks.resolve_settings(args, config)
+    block_kwargs = create_blocks.resolve_settings(args, config)
     qrmi = create_blocks.resolve_qrmi_settings(args, config, block_kwargs)
     create_blocks.create_qrmi_blocks(qrmi)
 

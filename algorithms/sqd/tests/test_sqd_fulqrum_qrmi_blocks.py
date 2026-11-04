@@ -24,7 +24,7 @@ def _config(**qrmi):
 def _resolve(argv=(), config=None):
     args = create_blocks._parse_args(list(argv))
     config = _config() if config is None else config
-    block_kwargs, _, _ = create_blocks.resolve_settings(args, config)
+    block_kwargs = create_blocks.resolve_settings(args, config)
     return create_blocks.resolve_qrmi_settings(args, config, block_kwargs)
 
 
@@ -126,7 +126,6 @@ def test_main_saves_separate_qrmi_blocks(tmp_path, monkeypatch, capsys):
     ):
         monkeypatch.setattr(cls, "save", fake_save, raising=False)
     monkeypatch.setattr(block_utils, "register_fulqrum_block_types", lambda: None)
-    monkeypatch.setattr(create_blocks, "_set_variable", lambda *args: None)
     path = tmp_path / "blocks.json"
     path.write_text(json.dumps(_config(**QRMI)))
 

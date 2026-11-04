@@ -100,7 +100,7 @@ def store(monkeypatch):
         config["fulqrum_executable"] = os.environ["FULQRUM_SLURM_EXECUTABLE"]
     if os.getenv("FULQRUM_SLURM_PARTITION"):
         config["queue"] = os.environ["FULQRUM_SLURM_PARTITION"]
-    kwargs, _, _ = create_blocks.resolve_settings(create_blocks._parse_args([]), config)
+    kwargs = create_blocks.resolve_settings(create_blocks._parse_args([]), config)
 
     shutil.rmtree(ROOT, ignore_errors=True)
     names = block_utils.create_fulqrum_blocks(**kwargs)
