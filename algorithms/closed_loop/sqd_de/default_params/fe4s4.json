@@ -1,5 +1,5 @@
 {
-  "fcidump": "algorithms/sbd/data/fcidump_Fe4S4_MO.txt",
+  "fcidump": "algorithms/closed_loop/sqd_de/data/fcidump_Fe4S4_MO.txt",
   "sqd_dim": 200000,
   "quantum_source": "real-device",
   "random_seed": 24,

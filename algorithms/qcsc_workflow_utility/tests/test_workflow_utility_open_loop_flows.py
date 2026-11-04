@@ -21,8 +21,8 @@ pytest.importorskip("sqd_dice")
 pytest.importorskip("skqd_dice")
 
 ROOT = Path(__file__).resolve().parents[3]
-N2 = str(ROOT / "algorithms/sbd/data/fcidump_N2_MO.txt")
-H2 = str(ROOT / "algorithms/sbd/data/fcidump_H2_STO3G.txt")
+N2 = str(ROOT / "algorithms/closed_loop/sqd_de/data/fcidump_N2_MO.txt")
+H2 = str(ROOT / "algorithms/closed_loop/sqd_de/data/fcidump_H2_STO3G.txt")
 SHOTS = 2000
 FLOWS = {
     "sqd": ("sqd_dice.main", "sqd_2405_05068", "sqd", "sqd-solver"),
@@ -185,26 +185,30 @@ def test_unknown_solver_slug_is_rejected(flow_key, monkeypatch):
         run_flow(flow_key, monkeypatch, solver_block_ref="other_solver/x")
 
 
+# The last commit on main before solver selection (the merge of #55), and the flow paths
+# at that commit. A fixed revision keeps the comparison meaningful after later changes.
+PREVIOUS_REVISION = "a394b846c69c08da272e21db954b0378b517ce8d"
+PREVIOUS_PATHS = {
+    "sqd": "algorithms/sqd/sqd_dice/main.py",
+    "skqd": "algorithms/skqd/skqd_dice/main.py",
+}
+
+
 @pytest.fixture(scope="module")
 def previous_flows(tmp_path_factory):
-    """The SQD and SKQD flow modules before solver selection, from the base commit."""
-    base = subprocess.run(
-        ["git", "-C", str(ROOT), "merge-base", "HEAD", "refs/remotes/upstream/main"],
-        capture_output=True,
-        text=True,
-    )
-    revision = base.stdout.strip() if base.returncode == 0 else "HEAD~1"
+    """The SQD and SKQD flow modules before solver selection, read from git history."""
     directory = tmp_path_factory.mktemp("previous")
     modules = {}
-    for flow_key, (module_name, _, _, _) in FLOWS.items():
-        package = module_name.split(".")[0]
+    for flow_key in FLOWS:
         source = subprocess.run(
-            ["git", "-C", str(ROOT), "show", f"{revision}:algorithms/{flow_key}/{package}/main.py"],
+            ["git", "-C", str(ROOT), "show", f"{PREVIOUS_REVISION}:{PREVIOUS_PATHS[flow_key]}"],
             capture_output=True,
             text=True,
         )
-        if source.returncode != 0 or "solver_block_ref" in source.stdout:
-            pytest.skip("the previous flow source is not available")
+        if source.returncode != 0:
+            # For example a shallow clone without this commit.
+            pytest.skip(f"commit {PREVIOUS_REVISION[:7]} is not available in this clone")
+        assert "solver_block_ref" not in source.stdout
         path = directory / f"previous_{flow_key}.py"
         path.write_text(source.stdout)
         spec = importlib.util.spec_from_file_location(f"previous_{flow_key}", path)

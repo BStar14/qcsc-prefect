@@ -11,8 +11,8 @@ from typing import Any
 
 
 def _import_sbd_solver_block():
-    # Supports direct execution (python algorithms/sbd/create_blocks.py ...): the script
-    # directory is put on sys.path so that the sbd package can be imported below.
+    # Supports direct execution (python algorithms/closed_loop/sqd_de/create_blocks.py ...):
+    # the script directory is put on sys.path so that the sbd package can be imported below.
     script_dir = str(Path(__file__).resolve().parent)
     if script_dir not in sys.path:
         sys.path.insert(0, script_dir)

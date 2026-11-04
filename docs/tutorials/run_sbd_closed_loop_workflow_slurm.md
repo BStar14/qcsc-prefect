@@ -166,7 +166,7 @@ Install the workflow utility and SBD packages:
 
 ``` bash
 uv pip install -e algorithms/qcsc_workflow_utility
-uv pip install -e algorithms/sbd
+uv pip install -e algorithms/closed_loop/sqd_de
 ```
 
 Check the installation:
@@ -263,14 +263,14 @@ mkdir -p /path/to/sbd_jobs
 Copy the Slurm example configuration to create your local configuration:
 
 ``` bash
-cp /path/to/qcsc-prefect/algorithms/sbd/sbd_blocks.slurm.example.toml \
-   /path/to/qcsc-prefect/algorithms/sbd/sbd_blocks.toml
+cp /path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd_blocks.slurm.example.toml \
+   /path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 Edit the local configuration:
 
 ``` bash
-vim /path/to/qcsc-prefect/algorithms/sbd/sbd_blocks.toml
+vim /path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 At minimum, configure:
@@ -333,7 +333,7 @@ See [How to Run and Access a Prefect Server on a Slurm Login Node](../howto/howt
 Run the block creation script using the Slurm configuration:
 
 ``` bash
-python /path/to/qcsc-prefect/algorithms/sbd/create_blocks.py --config /path/to/qcsc-prefect/algorithms/sbd/sbd_blocks.toml
+python /path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/create_blocks.py --config /path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 The script creates the reusable configuration needed by `SBDSolverJob`
@@ -450,7 +450,7 @@ For an initial test, use parameters similar to:
 
 | Field | Value / Example |
 |---|---|
-| FCIDump File | `/path/to/qcsc-prefect/algorithms/sbd/data/fcidump_N2_MO.txt` |
+| FCIDump File | `/path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/data/fcidump_N2_MO.txt` |
 | SQD Subspace Dimension | `1000000` |
 | Differential Evolution Iterations | `1` |
 | Quantum Source | `random` or `real-device` |
@@ -595,8 +595,8 @@ prefect block ls
 Then recreate the Blocks if necessary:
 
 ``` bash
-python algorithms/sbd/create_blocks.py \
-  --config algorithms/sbd/sbd_blocks.toml
+python algorithms/closed_loop/sqd_de/create_blocks.py \
+  --config algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 ------------------------------------------------------------------------

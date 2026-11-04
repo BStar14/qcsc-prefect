@@ -1,17 +1,17 @@
-# Sample-based Krylov Quantum Diagonalization
+# Sample-based Quantum Diagonalization
 
-This package provides implementation for the QCSC algorithm demonstrated in the paper  [Quantum-Centric Algorithm for Sample-Based Krylov Diagonalization](https://arxiv.org/abs/2501.09702).
+This package provides implementation for the QCSC algorithm demonstrated in the paper [Chemistry Beyond the Scale of Exact Diagonalization on a Quantum-Centric Supercomputer](https://arxiv.org/abs/2405.05068).
 
 ## 🚀 Getting Started
 
 Before starting, make sure:
 
 - For `quantum_source = "real-device"`, you have IBM Quantum credentials for QRMI. See the
-  [QRMI Sampler guide](../../docs/howto/howto_qrmi_slurm_sampler.md).
-- You have completed [How to Set Up the MDX Workflow Server for QCSC Execution](../../docs/howto/howto_setup_mdx_server.md).
+  [QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md).
+- You have completed [How to Set Up the MDX Workflow Server for QCSC Execution](../../../docs/howto/howto_setup_mdx_server.md).
 - You have built the DICE executable under `packages/qcsc-prefect-dice/native` and know its absolute path.
 
-From the repository root, install the local qcsc-prefect packages and the SKQD workflow:
+From the repository root, install the local qcsc-prefect packages and the SQD workflow:
 
 ```bash
 cd /path/to/qcsc-prefect
@@ -25,13 +25,13 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-qiskit
 
 uv pip install -e algorithms/qcsc_workflow_utility
-uv pip install -e algorithms/skqd
+uv pip install -e algorithms/open_loop/sqd
 ```
 
 After installation, you can deploy the workflow in a Prefect server:
 
 ```bash
-skqd-deploy
+sqd-deploy
 ```
 
 In the Prefect UI, the flow parameters now include:
@@ -47,7 +47,7 @@ Before running on Miyabi or Fugaku, create the DICE-related blocks, the
 `QrmiRuntimeBlock`. Start by copying the example config:
 
 ```bash
-cp algorithms/skqd/skqd_blocks.example.toml algorithms/skqd/skqd_blocks.toml
+cp algorithms/open_loop/sqd/sqd_blocks.example.toml algorithms/open_loop/sqd/sqd_blocks.toml
 ```
 
 The `[runtime]` and `[runtime.qrmi]` tables at the end of the file describe the
@@ -64,10 +64,10 @@ Then create the blocks:
 
 ```bash
 export QRMI_IBM_QCS_IAM_APIKEY="<your API key>"  # only with a [runtime] table for IQP
-python algorithms/skqd/create_blocks.py --config algorithms/skqd/skqd_blocks.toml --hpc-target miyabi
+python algorithms/open_loop/sqd/create_blocks.py --config algorithms/open_loop/sqd/sqd_blocks.toml --hpc-target miyabi
 ```
 
-For Fugaku, start from `algorithms/skqd/skqd_blocks.fugaku.example.toml` and pass
+For Fugaku, start from `algorithms/open_loop/sqd/sqd_blocks.fugaku.example.toml` and pass
 `--hpc-target fugaku` instead. Its `[runtime]` tables are commented out, so it works
 for random mode as copied; uncomment them for `quantum_source = "real-device"`.
 
@@ -84,21 +84,25 @@ dice_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/D
 On Fugaku, `work_dir` and `dice_executable` should point to a shared path that
 compute nodes can read, for example a `/vol...` location.
 
+See the [Run Hybrid Workflow](../../../docs/tutorials/run_sqd_workflow.md) tutorial for the end-to-end steps.
+
 ## Quantum sampling
 
 With `quantum_source = "real-device"`, the flow loads the `QrmiRuntimeBlock` named by
-`runner_name` and sends all `krylov_dim` Trotter circuits in one `sampler()` call. Result
-`i` belongs to circuit `i`.
+`runner_name` and sends the LUCJ circuit untranspiled in one `sampler()` call. With
+`quantum_source = "random"`, it returns pseudo-random bitstrings before any circuit is
+built.
 
-The circuits are sent before transpilation. The runtime transpiles each one against the
-actual Target with the SKQD hook `skqd_dice.transpilation:transpile`, using the
-optimization level and SABRE settings in the `circuit` parameters. The flow sets this
-hook and its configuration, so the block's `transpiler` and `transpile_config` are not
-used. Where the hook runs depends on the block's scheduler:
+The ffsim pre-init stage runs in the workflow process (the runtime's `prepare` hook).
+The runtime then transpiles the circuit against the actual Target with the SQD hook
+`sqd_dice.transpilation:transpile`, using the optimization level and SABRE settings in
+the `circuit` parameters. The flow sets these hooks and their configuration, so the
+block's `transpiler` and `transpile_config` are not used. Where the hook runs depends on
+the block's scheduler:
 
 - `scheduler = "iqp"`: in the workflow process. Install QRMI there
   (`pip install "qrmi[ibm]"`, Linux only). The process must reach IBM Quantum.
-- `scheduler = "slurm"`: on the compute node. Install this package (`algorithms/skqd`)
+- `scheduler = "slurm"`: on the compute node. Install this package (`algorithms/open_loop/sqd`)
   in the compute-node Python as well, so that the hook can be imported.
 
 `create_blocks.py` creates the block from the `[runtime]` table of the TOML file, as
@@ -107,7 +111,7 @@ shown in [Getting Started](#-getting-started). Other keys of the table are
 `<resource>_` prefix, and `QRMI_IBM_QCS_IAM_APIKEY` is read from the environment. The
 block stores the API key as a secret. For Slurm, set `scheduler = "slurm"`, `root_dir`
 and the three block names described in the
-[QRMI Sampler guide](../../docs/howto/howto_qrmi_slurm_sampler.md), and leave out
+[QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md), and leave out
 `[runtime.qrmi]`; no API key is read.
 
 ## Solver selection
@@ -130,3 +134,16 @@ DICE settings, including the default `spin_sq = 0.0`, are unchanged.
 
 [`default_params/n2_sbd.json`](./default_params/n2_sbd.json) is an N2 example for SBD with
 `spin_sq = null` and random sampling.
+
+## 🧭 MPI Parameter Tuning
+
+The [perf](./perf/) module also includes example code for implementing a meta workflow.
+This workflow internally runs SQD workflows with different flow parameters, and measures the weak and strong scaling of the DICE solver.
+
+## 🧑‍💻 Contribution Guidelines
+
+This package is a reference implementation of the SQD experiment described in the publication.
+It is considered feature-complete and is now in maintenance mode.
+
+Further contributions are limited to bug fixes and improvements to Prefect usage patterns.
+Workflow developers may use this as a testbed for workflow technology research.

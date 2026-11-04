@@ -74,7 +74,7 @@ packages/qcsc-prefect-sbd/native/diag
 Set the absolute path to this executable in the SBD block configuration file:
 
 ```toml
-# algorithms/sbd/sbd_blocks.toml (or the block config of another algorithm)
+# algorithms/closed_loop/sqd_de/sbd_blocks.toml (or the block config of another algorithm)
 sbd_executable = "/abs/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 ```
 
