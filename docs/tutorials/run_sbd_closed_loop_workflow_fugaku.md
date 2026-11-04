@@ -120,7 +120,9 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
-  -e packages/qcsc-prefect-executor
+  -e packages/qcsc-prefect-executor \
+  -e packages/qcsc-prefect-dice \
+  -e packages/qcsc-prefect-sbd
 
 uv pip install -e algorithms/qcsc_workflow_utility
 uv pip install -e algorithms/sbd
@@ -150,7 +152,7 @@ Navigate to native source and build. This procedure can also be executed on the 
 
 <img src="../images/icon-login-fugaku.png" alt="login" width="70"/>  or  <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
-cd /path/to/work/qcsc-prefect/algorithms/sbd/native
+cd /path/to/work/qcsc-prefect/packages/qcsc-prefect-sbd/native
 bash ./build_sbd_fugaku.sh
 ```
 
@@ -166,7 +168,7 @@ realpath ./diag
 Example output:
 
 ```text
-/path/to/work/qcsc-prefect/algorithms/sbd/native/diag
+/path/to/work/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag
 ```
 
 We will use this path in the next step.
@@ -225,7 +227,7 @@ Edit `algorithms/sbd/sbd_blocks.toml` and update at least:
 | `group` | `raXXXXXX` | Fugaku Group ID |
 | `queue` | `small` | Fugaku resource group (`rscgrp`) |
 | `work_dir` | `/volxxxxx/mdt6/data/raxxxxx/uxxxxx/sbd_jobs` | Job working directory |
-| `sbd_executable` | `/volxxxxx/mdt6/data/raxxxxx/uxxxxx/qcsc-prefect/algorithms/sbd/native/diag` | Absolute path to executable |
+| `sbd_executable` | `/volxxxxx/mdt6/data/raxxxxx/uxxxxx/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag` | Absolute path to executable |
 | `num_nodes` | `2` | Number of allocated nodes for this tutorial |
 | `launcher` | `mpiexec` | MPI launcher |
 | `mpiprocs` | `2` | Number of MPI processes |

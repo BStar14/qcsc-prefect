@@ -6,7 +6,7 @@ hpc_target = "fugaku"
 group = "ra000000"
 queue = "small"
 work_dir = "/vol0000/mdt6/data/ra000000/u12345/sbd_jobs"
-sbd_executable = "/vol0000/mdt6/data/ra000000/u12345/qcsc-prefect/algorithms/sbd/native/diag"
+sbd_executable = "/vol0000/mdt6/data/ra000000/u12345/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 
 # Tutorial baseline execution profile
 launcher = "mpiexec"

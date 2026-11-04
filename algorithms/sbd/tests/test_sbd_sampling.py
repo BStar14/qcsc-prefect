@@ -14,11 +14,11 @@ from prefect.context import TagsContext
 from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime, QrmiRuntimeBlock
 from qcsc_prefect.integrations.qiskit.qrmi import iqp as iqp_mod
 from qcsc_prefect.integrations.qiskit.qrmi.compile import compile_pubs
+from qcsc_prefect_sbd import SBDResult
 from qiskit.primitives import PrimitiveResult, SamplerPubResult
 from qiskit.primitives.containers import BitArray, DataBin
 from sbd import sampling, sqd
 from sbd.flow_params import CircuitParameters
-from sbd.solver_job import SBDResult
 from sbd.transpilation import TRANSPILER
 from sbd_helpers import NORB, line_target, lucj_circuit, ucj_parameters
 

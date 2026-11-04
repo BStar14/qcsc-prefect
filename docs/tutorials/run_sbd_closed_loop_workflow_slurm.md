@@ -157,7 +157,9 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
-  -e packages/qcsc-prefect-executor
+  -e packages/qcsc-prefect-executor \
+  -e packages/qcsc-prefect-dice \
+  -e packages/qcsc-prefect-sbd
 ```
 
 Install the workflow utility and SBD packages:
@@ -191,7 +193,7 @@ compatible with the Slurm compute nodes where it will run.
 Navigate to the native solver directory:
 
 ``` bash
-cd algorithms/sbd/native
+cd packages/qcsc-prefect-sbd/native
 ```
 
 Run the Slurm build script:
@@ -214,7 +216,7 @@ build is reproducible.
 After a successful build, you should see output similar to:
 
 ``` text
-Build completed: /path/to/qcsc-prefect/algorithms/sbd/native/diag
+Build completed: /path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag
 ```
 
 Verify the executable:
@@ -279,7 +281,7 @@ At minimum, configure:
 | `project` | `"default"` | Slurm account/project, if required |
 | `queue` | `"normal"` | Slurm partition |
 | `work_dir` | `"/path/to/sbd_jobs"` | Shared job working directory |
-| `sbd_executable` | `"/path/to/qcsc-prefect/algorithms/sbd/native/diag"` | Absolute path to the compiled solver |
+| `sbd_executable` | `"/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"` | Absolute path to the compiled solver |
 
 A minimal configuration looks like:
 
@@ -288,7 +290,7 @@ hpc_target = "slurm"
 project = "default"
 queue = "normal"
 work_dir = "/path/to/sbd_jobs"
-sbd_executable = "/path/to/qcsc-prefect/algorithms/sbd/native/diag"
+sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 
 launcher = "srun"
 walltime = "00:15:00"
@@ -523,7 +525,7 @@ Prefect Blocks.
 Rebuild the native solver:
 
 ``` bash
-cd algorithms/sbd/native
+cd packages/qcsc-prefect-sbd/native
 bash build_sbd_slurm.sh
 ```
 

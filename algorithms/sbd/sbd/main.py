@@ -12,6 +12,7 @@ from prefect.cache_policies import RUN_ID, Inputs
 from prefect.futures import PrefectFutureList
 from prefect.task_runners import ConcurrentTaskRunner, ProcessPoolTaskRunner
 from pydantic import BaseModel, Field
+from qcsc_prefect_sbd import SBDSolverJob
 from qcsc_workflow_utility.chem import (
     ElectronicProperties,
     NpStrict1DArrayF64,
@@ -23,7 +24,6 @@ from .data_io import extend_table_artifact
 from .flow_params import FlowParameters
 from .lucj import initialize_ucj_parameters
 from .np_type_extension import NpStrict2DArrayBool
-from .solver_job import SBDSolverJob
 from .sqd import walker_sqd
 
 MODULE_RNG = np.random.default_rng(seed=4574)

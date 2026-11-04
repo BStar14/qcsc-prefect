@@ -7,7 +7,7 @@ The old `prefect-sbd` / `prefect-miyabi` runtime path is replaced by:
 
 - `qcsc_prefect_blocks` (`CommandBlock`, `ExecutionProfileBlock`, `HPCProfileBlock`)
 - `qcsc_prefect_executor.run_job_from_blocks(...)`
-- local `SBD Solver Job` block (`sbd.solver_job.SBDSolverJob`)
+- `SBD Solver Job` block (`qcsc_prefect_sbd.SBDSolverJob`, from `packages/qcsc-prefect-sbd`)
 
 Compatibility notes from old `prefect_sbd.sbd_job`:
 
@@ -27,12 +27,12 @@ Build examples:
 
 ```bash
 # Miyabi
-cd /work/gz00/z12345/qcsc-prefect/algorithms/sbd/native
+cd /work/gz00/z12345/qcsc-prefect/packages/qcsc-prefect-sbd/native
 bash ./build_sbd.sh
 realpath ./diag
 
 # Fugaku
-cd /work/gz00/z12345/qcsc-prefect/algorithms/sbd/native
+cd /work/gz00/z12345/qcsc-prefect/packages/qcsc-prefect-sbd/native
 bash ./build_sbd_fugaku.sh
 realpath ./diag
 ```
@@ -51,7 +51,9 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
   -e packages/qcsc-prefect-executor \
-  -e packages/qcsc-prefect-qiskit
+  -e packages/qcsc-prefect-dice \
+  -e packages/qcsc-prefect-qiskit \
+  -e packages/qcsc-prefect-sbd
 
 # algorithm dependencies
 uv pip install -e algorithms/qcsc_workflow_utility
@@ -111,7 +113,7 @@ python algorithms/sbd/create_blocks.py --config algorithms/sbd/sbd_blocks.toml -
 `sbd_executable` should point to your built binary, for example:
 
 ```toml
-sbd_executable = "/work/project/qcsc-prefect/algorithms/sbd/native/diag"
+sbd_executable = "/work/project/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 ```
 
 For memory stability on Miyabi, start from:

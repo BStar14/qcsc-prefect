@@ -27,6 +27,7 @@ plugins:
             - packages/qcsc-prefect-executor/src
             - packages/qcsc-prefect-dice/src
             - packages/qcsc-prefect-qiskit/src
+            - packages/qcsc-prefect-sbd/src
           options:
             docstring_style: google
             merge_init_into_class: true

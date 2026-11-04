@@ -230,7 +230,9 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
-  -e packages/qcsc-prefect-executor
+  -e packages/qcsc-prefect-executor \
+  -e packages/qcsc-prefect-dice \
+  -e packages/qcsc-prefect-sbd
 ```
 
 Install the workflow utility and SBD packages into the active QFw environment:
@@ -306,7 +308,7 @@ The native SBD executable must be built for the architecture and software enviro
 From the qcsc-prefect repository root, navigate to:
 
 ```bash
-cd algorithms/sbd/native
+cd packages/qcsc-prefect-sbd/native
 ```
 
 Build the solver using the Slurm build script:
@@ -361,7 +363,7 @@ Configure the target for the QFw-SLURM environment.
 | `project` | `"default"` | Slurm account/project, if required |
 | `queue` | `"normal"` | Slurm partition |
 | `work_dir` | `"/path/to/sbd_jobs"` | Shared job working directory |
-| `sbd_executable` | `"/path/to/qcsc-prefect/algorithms/sbd/native/diag"` | Absolute path to the compiled solver |
+| `sbd_executable` | `"/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"` | Absolute path to the compiled solver |
 
 A minimal configuration looks like:
 
@@ -370,7 +372,7 @@ hpc_target = "slurm"
 project = "default"
 queue = "normal"
 work_dir = "/path/to/sbd_jobs"
-sbd_executable = "/path/to/qcsc-prefect/algorithms/sbd/native/diag"
+sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 
 launcher = "srun"
 walltime = "00:15:00"

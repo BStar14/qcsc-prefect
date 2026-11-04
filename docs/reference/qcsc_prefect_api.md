@@ -251,3 +251,13 @@ packages. Native Qiskit primitives are documented separately in
 ::: qcsc_prefect_dice.io_utils.read_dice_output_files
     options:
       show_source: false
+
+## SBD API
+
+::: qcsc_prefect_sbd.solver_job.SBDSolverJob
+    options:
+      show_source: false
+
+::: qcsc_prefect_sbd.solver_job.SBDResult
+    options:
+      show_source: false
