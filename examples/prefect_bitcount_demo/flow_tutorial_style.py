@@ -25,7 +25,7 @@ except ModuleNotFoundError:
 @flow(name="miyabi_tutorial")
 async def main(
     quantum_source: QuantumSource = "real-device",
-    runtime_block_name: str = "ibm-runner",
+    runtime_block_name: str = "qrmi-runtime",
     bitcounter_block_name: str = "miyabi-tutorial",
     options_variable_name: str = "miyabi-tutorial",
     hpc_profile_block_override: str | None = None,
@@ -63,9 +63,9 @@ if __name__ == "__main__":
         "--quantum-source",
         choices=("real-device", "random"),
         default="real-device",
-        help="Choose IBM Quantum Runtime sampling or deterministic random bitstrings.",
+        help="Choose QrmiRuntime sampling or deterministic random bitstrings.",
     )
-    parser.add_argument("--runtime-block", default="ibm-runner")
+    parser.add_argument("--runtime-block", default="qrmi-runtime")
     parser.add_argument("--bitcounter-block", default="miyabi-tutorial")
     parser.add_argument("--options-variable", default="miyabi-tutorial")
     parser.add_argument("--hpc-profile-block-override", default=None)

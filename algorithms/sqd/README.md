@@ -6,7 +6,8 @@ This package provides implementation for the QCSC algorithm demonstrated in the 
 
 Before starting, make sure:
 
-- You have completed [How to Set Up IBM Quantum Access Credentials for Prefect](../../docs/howto/howto_setup_prefect_qiskit.md).
+- For `quantum_source = "real-device"`, you have IBM Quantum credentials for QRMI. See the
+  [QRMI Sampler guide](../../docs/howto/howto_qrmi_slurm_sampler.md).
 - You have completed [How to Set Up the MDX Workflow Server for QCSC Execution](../../docs/howto/howto_setup_mdx_server.md).
 - You have built the DICE executable under `packages/qcsc-prefect-dice/native` and know its absolute path.
 
@@ -20,7 +21,8 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
   -e packages/qcsc-prefect-executor \
-  -e packages/qcsc-prefect-dice
+  -e packages/qcsc-prefect-dice \
+  -e packages/qcsc-prefect-qiskit
 
 uv pip install -e algorithms/qcsc_workflow_utility
 uv pip install -e algorithms/sqd
@@ -36,20 +38,38 @@ In the Prefect UI, the flow parameters now include:
 
 - `quantum_source`: choose `real-device` or `random`
 - `random_seed`: base seed used when `quantum_source = "random"`
-- `runner_name`: defaults to the `QuantumRuntime` block `ibm-runner`
+- `runner_name`: defaults to the `QrmiRuntimeBlock` `qrmi-runtime`
 
-Set `quantum_source = "random"` when you want to skip IBM Quantum Runtime and use deterministic pseudo-random bitstrings instead.
+Set `quantum_source = "random"` when you want to skip quantum sampling and use deterministic pseudo-random bitstrings instead.
 
-Before running on Miyabi or Fugaku, create the DICE-related blocks and
-`sampler_options` variable:
+Before running on Miyabi or Fugaku, create the DICE-related blocks, the
+`sampler_options` variable and, for `quantum_source = "real-device"`, the
+`QrmiRuntimeBlock`. Start by copying the example config:
 
 ```bash
 cp algorithms/sqd/sqd_blocks.example.toml algorithms/sqd/sqd_blocks.toml
+```
+
+The `[runtime]` and `[runtime.qrmi]` tables at the end of the file describe the
+`QrmiRuntimeBlock`:
+
+- For `quantum_source = "random"` only, delete both tables. No QRMI settings or API key
+  are needed, and an existing runtime block is left unchanged.
+- For `quantum_source = "real-device"` with `scheduler = "iqp"`, set `resource` and the
+  `[runtime.qrmi]` values, and put the API key in the environment. It must not be
+  written in the file. See [Quantum sampling](#quantum-sampling) for the details and for
+  `scheduler = "slurm"`.
+
+Then create the blocks:
+
+```bash
+export QRMI_IBM_QCS_IAM_APIKEY="<your API key>"  # only with a [runtime] table for IQP
 python algorithms/sqd/create_blocks.py --config algorithms/sqd/sqd_blocks.toml --hpc-target miyabi
 ```
 
 For Fugaku, start from `algorithms/sqd/sqd_blocks.fugaku.example.toml` and pass
-`--hpc-target fugaku` instead.
+`--hpc-target fugaku` instead. Its `[runtime]` tables are commented out, so it works
+for random mode as copied; uncomment them for `quantum_source = "real-device"`.
 
 For a Fugaku build, use `packages/qcsc-prefect-dice/native/build_dice_fugaku.sh`
 as the starting point and make sure the same runtime libraries are reflected in
@@ -65,6 +85,34 @@ On Fugaku, `work_dir` and `dice_executable` should point to a shared path that
 compute nodes can read, for example a `/vol...` location.
 
 See the [Run Hybrid Workflow](../../docs/tutorials/run_sqd_workflow.md) tutorial for the end-to-end steps.
+
+## Quantum sampling
+
+With `quantum_source = "real-device"`, the flow loads the `QrmiRuntimeBlock` named by
+`runner_name` and sends the LUCJ circuit untranspiled in one `sampler()` call. With
+`quantum_source = "random"`, it returns pseudo-random bitstrings before any circuit is
+built.
+
+The ffsim pre-init stage runs in the workflow process (the runtime's `prepare` hook).
+The runtime then transpiles the circuit against the actual Target with the SQD hook
+`sqd_dice.transpilation:transpile`, using the optimization level and SABRE settings in
+the `circuit` parameters. The flow sets these hooks and their configuration, so the
+block's `transpiler` and `transpile_config` are not used. Where the hook runs depends on
+the block's scheduler:
+
+- `scheduler = "iqp"`: in the workflow process. Install QRMI there
+  (`pip install "qrmi[ibm]"`, Linux only). The process must reach IBM Quantum.
+- `scheduler = "slurm"`: on the compute node. Install this package (`algorithms/sqd`)
+  in the compute-node Python as well, so that the hook can be imported.
+
+`create_blocks.py` creates the block from the `[runtime]` table of the TOML file, as
+shown in [Getting Started](#-getting-started). Other keys of the table are
+`QrmiRuntimeBlock` fields. For IQP, `[runtime.qrmi]` holds QRMI's settings without the
+`<resource>_` prefix, and `QRMI_IBM_QCS_IAM_APIKEY` is read from the environment. The
+block stores the API key as a secret. For Slurm, set `scheduler = "slurm"`, `root_dir`
+and the three block names described in the
+[QRMI Sampler guide](../../docs/howto/howto_qrmi_slurm_sampler.md), and leave out
+`[runtime.qrmi]`; no API key is read.
 
 ## 🧭 MPI Parameter Tuning
 
