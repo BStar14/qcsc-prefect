@@ -114,6 +114,27 @@ and the three block names described in the
 [QRMI Sampler guide](../../docs/howto/howto_qrmi_slurm_sampler.md), and leave out
 `[runtime.qrmi]`; no API key is read.
 
+## Solver selection
+
+The flow uses DICE by default (`DiceSHCISolverJob` named by `solver_name`). To use SBD,
+set `solver_block_ref` to `sbd_solver_job/<name>`; `dice_shci_solver_job/<name>` selects
+DICE explicitly. The slug selects the block class, and an unknown slug is rejected.
+
+DICE and SBD take the same arguments but do not solve the same problem. SBD:
+
+- solves closed-shell systems only, and uses one determinant set for alpha and beta;
+- needs the Hartree-Fock determinant first;
+- has no total spin target, so `spin_sq` must be `null` in the molecule settings.
+
+Input that SBD cannot solve fails with `ValueError` before sampling. For SBD, the flow
+puts the Hartree-Fock determinant first and keeps the subspace size limit: one slot for
+Hartree-Fock and `int(sqrt(subspace_dim)) - 1` others. The subspace therefore always
+includes Hartree-Fock and is not the same as the one DICE gets for the same settings.
+DICE settings, including the default `spin_sq = 0.0`, are unchanged.
+
+[`default_params/n2_sbd.json`](./default_params/n2_sbd.json) is an N2 example for SBD with
+`spin_sq = null` and random sampling.
+
 ## 🧭 MPI Parameter Tuning
 
 The [perf](./perf/) module also includes example code for implementing a meta workflow.

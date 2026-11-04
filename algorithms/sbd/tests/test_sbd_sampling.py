@@ -241,13 +241,14 @@ def walker(monkeypatch, tmp_path):
             ab_indices=[(0, 0)],
             carryover=np.zeros((0, NORB), dtype=bool),
             sqd_dim=16,
-            solver_block_name="solver",
+            solver_block_ref=run.solver_block_ref,
             quantum_source=quantum_source,
             random_seed=random_seed,
         )
 
     run.solver = solver
     run.options = OPTIONS
+    run.solver_block_ref = "sbd_solver_job/solver"
     return run
 
 
@@ -385,3 +386,50 @@ def module(name, obj):
 def test_unknown_quantum_source_is_rejected(walker):
     with pytest.raises(ValueError, match="Unsupported quantum_source"):
         walker("other")
+
+
+def test_walker_records_sbd_with_carryover(walker):
+    _, telemetry = walker("random")
+    assert (telemetry["solver"], telemetry["carryover"]) == ("SBD", "sbd")
+
+
+def test_walker_with_dice_returns_an_empty_carryover(walker, monkeypatch):
+    from qcsc_prefect_dice import DiceSHCISolverJob
+    from qiskit_addon_sqd.fermion import SCIResult
+
+    loaded = []
+    inputs = []
+
+    class FakeDice:
+        async def run(self, **kwargs):
+            inputs.append(kwargs)
+            occupancy = np.full(NORB, 0.5)
+            return SCIResult(
+                energy=-2.0, sci_state=None, orbital_occupancies=(occupancy, occupancy)
+            )
+
+    def load(cls, name):
+        loaded.append(name)
+        return FakeDice()
+
+    monkeypatch.setattr(DiceSHCISolverJob, "load", classmethod(load))
+    walker.solver_block_ref = "dice_shci_solver_job/dice"
+
+    (energy, carryover), telemetry = walker("random")
+
+    assert loaded == ["dice"]
+    assert walker.solver.ci_strings == []  # the SBD fake is not used
+    # DICE gets the same subspace as SBD would: one set, Hartree-Fock first.
+    (call,) = inputs
+    alpha, beta = call["ci_strings"]
+    assert np.array_equal(alpha, beta) and alpha[0] == 0b11
+    assert "spin_sq" not in call
+    assert energy == -1.5
+    assert carryover.shape == (0, NORB) and carryover.dtype == bool
+    assert (telemetry["solver"], telemetry["carryover"]) == ("DICE", "none")
+
+
+def test_walker_rejects_an_unknown_solver_slug(walker):
+    walker.solver_block_ref = "other_solver/x"
+    with pytest.raises(ValueError, match="solver_block_ref"):
+        walker("random")

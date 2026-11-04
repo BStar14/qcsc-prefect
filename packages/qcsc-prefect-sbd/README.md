@@ -37,6 +37,14 @@ result = await solver.run(
 print(result.energy, result.carryover_bitstrings.shape)
 ```
 
+`SBDSolverJob.run` takes the same arguments as `DiceSHCISolverJob.run`, but SBD solves a
+narrower problem. `run` raises `ValueError` (see `check_sbd_input`) when:
+
+- `nelec` is open-shell (`nelec[0] != nelec[1]`);
+- `ci_strings[0]` and `ci_strings[1]` differ (SBD reads only the first set);
+- the first determinant is not Hartree-Fock, `(1 << nelec[0]) - 1`;
+- `spin_sq` is not `None` (SBD has no total spin target).
+
 The block refers to a `CommandBlock`, an `ExecutionProfileBlock` and an `HPCProfileBlock`
 by name. `algorithms/sbd/create_blocks.py` creates all four blocks for Miyabi, Fugaku or
 Slurm.

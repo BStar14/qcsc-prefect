@@ -17,10 +17,15 @@ from prefect.variables import Variable
 from pydantic import BaseModel, Field
 from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
 from qcsc_prefect_dice import DiceSHCISolverJob
+from qcsc_prefect_sbd import SBDSolverJob, check_sbd_input
 from qcsc_workflow_utility import (
+    DICE_SLUG,
+    SBD_SLUG,
     ElectronicProperties,
     compute_molecular_integrals_from_fcidump,
     compute_molecular_integrals_from_geometry,
+    solver_class,
+    to_sbd_closed_shell,
 )
 from qiskit import QuantumCircuit, QuantumRegister
 from qiskit.circuit.library import PauliEvolutionGate
@@ -53,9 +58,12 @@ class MoleculeGeometry(BaseModel):
         description="Whether to use symmetry, otherwise string of point group name.",
         title="Symmetry",
     )
-    spin_sq: float = Field(
+    spin_sq: float | None = Field(
         default=0.0,
-        description="Target value for the total spin squared for the ground state.",
+        description=(
+            "Target value for the total spin squared for the ground state. "
+            "Set None (null) for no target; the SBD solver requires None."
+        ),
         title="Total Spin Squared",
     )
 
@@ -71,9 +79,12 @@ class FCIDumpFile(BaseModel):
         ),
         title="FCIDump File",
     )
-    spin_sq: float = Field(
+    spin_sq: float | None = Field(
         default=0.0,
-        description="Target value for the total spin squared for the ground state.",
+        description=(
+            "Target value for the total spin squared for the ground state. "
+            "Set None (null) for no target; the SBD solver requires None."
+        ),
         title="Total Spin Squared",
     )
 
@@ -216,6 +227,11 @@ def _resolve_shots(
     return int(params.get("shots", default_shots))
 
 
+def _hartree_fock_strings(num_elec_a: int) -> tuple[np.ndarray, np.ndarray]:
+    hartree_fock = np.array([(1 << num_elec_a) - 1], dtype=np.longlong)
+    return hartree_fock, hartree_fock
+
+
 @flow
 async def skqd_2501_09702(
     parameters: Parameters,
@@ -224,16 +240,22 @@ async def skqd_2501_09702(
     option_name: str = "sampler_options",
     cache_compute_integrals: bool = False,
     cache_sampling: bool = False,
+    solver_block_ref: str | None = None,
 ):
     """SKQD Experiment from arXiv:2501.09702.
 
     Args:
         parameters: Workflow parameters.
         runner_name: Name of QrmiRuntimeBlock to load.
-        solver_name: Name of DiceSHCISolverJob block to load.
+        solver_name: Name of DiceSHCISolverJob block to load when ``solver_block_ref``
+            is not set.
         option_name: Name of Variable storing sampler primitive options to load.
         cache_compute_integrals: Set True to cache compute_molecular_integrals task.
         cache_sampling: Set True to cache sample_bitstrings task.
+        solver_block_ref: Solver block as ``dice_shci_solver_job/<name>`` or
+            ``sbd_solver_job/<name>``. Defaults to ``dice_shci_solver_job/<solver_name>``.
+            SBD needs a closed-shell molecule with ``spin_sq`` set to None; its subspace
+            always starts with the Hartree-Fock determinant.
 
     Returns:
         Minimum ground state energy solved by SKQD.
@@ -261,6 +283,22 @@ async def skqd_2501_09702(
     else:
         raise TypeError("Unsupported molecule type")
 
+    # Select the solver before sampling, so that SBD input that it cannot solve fails
+    # before any quantum job is submitted.
+    solver_cls, solver_block_name = solver_class(
+        solver_block_ref or f"{DICE_SLUG}/{solver_name}",
+        {DICE_SLUG: DiceSHCISolverJob, SBD_SLUG: SBDSolverJob},
+    )
+    use_sbd = solver_cls is SBDSolverJob
+    logger.info("Solver: %s (block %s)", "SBD" if use_sbd else "DICE", solver_block_name)
+    sci_solver = await solver_cls.load(solver_block_name)
+    if use_sbd:
+        check_sbd_input(
+            ci_strings=_hartree_fock_strings(elec_props.num_electrons[0]),
+            nelec=elec_props.num_electrons,
+            spin_sq=elec_props.spin_sq,
+        )
+
     # sample bitstrings
     bit_array = await sample_bitstrings.with_options(
         cache_policy=INPUTS if cache_sampling else NO_CACHE,
@@ -278,7 +316,6 @@ async def skqd_2501_09702(
     n_alpha, n_beta = elec_props.num_electrons
 
     # Run configuration recovery loop
-    sci_solver = await DiceSHCISolverJob.load(solver_name)
     skqd_artifact = []
     current_occupancies = elec_props.initial_occupancy
     best_result = None
@@ -306,15 +343,25 @@ async def skqd_2501_09702(
         # Convert bitstrings to CI strings and diagonalize
         coros = []
         subspace_dims = []
-        for ci_strings in subsample(
+        batches = subsample(
             bitstring_matrix=bitstrings_post,
             probabilities=probs_post,
             subspace_dim=parameters.skqd.subspace_dim,
             num_batches=parameters.skqd.num_batches,
             rng=rng,
             open_shell=elec_props.open_shell,
-        ):
+        )
+        if use_sbd:
+            # SBD needs the Hartree-Fock determinant first and one set for alpha and beta.
+            batches = to_sbd_closed_shell(
+                batches,
+                subspace_dim=parameters.skqd.subspace_dim,
+                num_elec_a=n_alpha,
+                rng=rng,
+            )
+        for ci_strings in batches:
             subspace_dims.append(int(len(ci_strings[0]) * len(ci_strings[1])))
+            # SBD has no spin target and rejects any spin_sq other than None.
             coro = sci_solver.run(
                 ci_strings=ci_strings,
                 one_body_tensor=elec_props.one_body_tensor,

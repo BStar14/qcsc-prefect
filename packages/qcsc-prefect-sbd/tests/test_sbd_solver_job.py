@@ -201,3 +201,55 @@ def test_run_sbd_inner_fails_on_nonzero_exit(monkeypatch, tmp_path: Path):
                 nelec=(1, 1),
             )
         )
+
+
+HF_2 = 0b11  # Hartree-Fock determinant for two electrons per spin.
+
+
+@pytest.mark.parametrize(
+    "ci_strings,nelec,spin_sq,message",
+    [
+        ((np.array([HF_2, 5]), np.array([HF_2, 5])), (2, 1), None, "closed-shell"),
+        ((np.array([HF_2, 5]), np.array([HF_2, 6])), (2, 2), None, "must be the same"),
+        ((np.array([HF_2, 5]), np.array([HF_2])), (2, 2), None, "must be the same"),
+        ((np.array([5, HF_2]), np.array([5, HF_2])), (2, 2), None, "Hartree-Fock"),
+        ((np.array([], dtype=int), np.array([], dtype=int)), (2, 2), None, "Hartree-Fock"),
+        ((np.array([HF_2, 5]), np.array([HF_2, 5])), (2, 2), 0.0, "spin_sq"),
+        ((np.array([HF_2, 5]), np.array([HF_2, 5])), (2, 2), 0.75, "spin_sq"),
+    ],
+)
+def test_run_rejects_input_sbd_cannot_solve(monkeypatch, ci_strings, nelec, spin_sq, message):
+    calls = []
+
+    async def fake_run_job_from_blocks(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(exit_status=0)
+
+    monkeypatch.setattr(mod, "run_job_from_blocks", fake_run_job_from_blocks)
+    solver = SBDSolverJob(root_dir="/unused")
+    with pytest.raises(ValueError, match=message):
+        asyncio.run(
+            solver.run(
+                ci_strings=ci_strings,
+                one_body_tensor=np.eye(4),
+                two_body_tensor=np.zeros((4,) * 4),
+                norb=4,
+                nelec=nelec,
+                spin_sq=spin_sq,
+            )
+        )
+    assert calls == []
+
+
+def test_open_shell_is_rejected_by_electron_count_not_by_arrays():
+    # Same alpha and beta sets with HF first, but nelec says open-shell.
+    with pytest.raises(ValueError, match="closed-shell"):
+        mod.check_sbd_input(
+            ci_strings=(np.array([0b111]), np.array([0b111])), nelec=(3, 2), spin_sq=None
+        )
+
+
+def test_valid_closed_shell_input_passes():
+    mod.check_sbd_input(
+        ci_strings=(np.array([HF_2, 5, 6]), [HF_2, 5, 6]), nelec=(2, 2), spin_sq=None
+    )

@@ -76,6 +76,43 @@ def _build_solver_args(solver: "SBDSolverJob") -> list[str]:
     return args
 
 
+def check_sbd_input(
+    *,
+    ci_strings: tuple[np.ndarray, np.ndarray],
+    nelec: tuple[int, int],
+    spin_sq: float | None,
+) -> None:
+    """Reject input that the SBD solver would silently treat differently from DICE.
+
+    SBD solves closed-shell problems only. It reads only ``ci_strings[0]`` (the beta set
+    is assumed to be the same) and requires the Hartree-Fock determinant first. It has
+    no total spin target.
+    """
+    if spin_sq is not None:
+        raise ValueError(
+            f"SBD has no spin_sq target; got spin_sq={spin_sq!r}. Set spin_sq to None "
+            "(null) in the molecule settings to use SBD."
+        )
+    n_alpha, n_beta = (int(n) for n in nelec)
+    if n_alpha != n_beta:
+        raise ValueError(
+            f"SBD supports closed-shell systems only; got nelec=({n_alpha}, {n_beta})."
+        )
+    alpha, beta = (np.asarray(strings).reshape(-1) for strings in ci_strings)
+    if not np.array_equal(alpha, beta):
+        raise ValueError(
+            "SBD uses one determinant set for alpha and beta; ci_strings[0] and "
+            "ci_strings[1] must be the same."
+        )
+    hartree_fock = (1 << n_alpha) - 1
+    if alpha.size == 0 or int(alpha[0]) != hartree_fock:
+        first = int(alpha[0]) if alpha.size else None
+        raise ValueError(
+            f"SBD requires the Hartree-Fock determinant {hartree_fock} first in "
+            f"ci_strings; got {first}."
+        )
+
+
 def _prep_files(
     *,
     work_dir: Path,
@@ -236,8 +273,15 @@ class SBDSolverJob(Block):
         two_body_tensor: np.ndarray,
         norb: int,
         nelec: tuple[int, int],
+        spin_sq: float | None = None,
     ) -> SBDResult:
-        """Run SBD solver job and return parsed outputs."""
+        """Run SBD solver job and return parsed outputs.
+
+        The arguments match ``DiceSHCISolverJob.run``, but SBD solves a narrower problem.
+        Input it cannot solve raises ``ValueError`` instead of silently giving a
+        different calculation; see ``check_sbd_input``.
+        """
+        check_sbd_input(ci_strings=ci_strings, nelec=nelec, spin_sq=spin_sq)
         return await _run_sbd_inner(
             solver=self,
             ci_strings=ci_strings,

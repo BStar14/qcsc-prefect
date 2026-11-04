@@ -1,0 +1,21 @@
+{
+  "molecule": {
+    "fcidump_file": "algorithms/sbd/data/fcidump_N2_MO.txt",
+    "spin_sq": null
+  },
+  "circuit": {
+    "use_reset_mitigation": false,
+    "optimization_level": 3,
+    "sabre_max_iterations": 8,
+    "sabre_swap_trials": 10,
+    "sabre_layout_trials": 512,
+    "n_lucj_layers": 1
+  },
+  "sqd": {
+    "subspace_dim": 40000,
+    "num_batches": 2,
+    "max_iterations": 2
+  },
+  "quantum_source": "random",
+  "random_seed": 24
+}
