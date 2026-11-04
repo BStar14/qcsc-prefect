@@ -149,5 +149,9 @@ class FlowParameters(BaseModel):
 
     solver_block_ref: str = Field(
         default="sbd_solver_job/davidson-solver",
-        description="Solver block reference in '<block_type_slug>/<block_document_name>' format.",
+        description=(
+            "Solver block reference in '<block_type_slug>/<block_document_name>' format: "
+            "'sbd_solver_job/<name>' (with carryover) or 'dice_shci_solver_job/<name>' "
+            "(without carryover; a different variant, results are not expected to match)."
+        ),
     )

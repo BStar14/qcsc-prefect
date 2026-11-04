@@ -204,6 +204,20 @@ submits (iterations x walkers) jobs. With `iqp`, each job waits in the IBM Quant
 by itself. The sampling task carries the Prefect tag `res: quantum`, which can be used
 with a Prefect concurrency limit.
 
+## Solver selection
+
+`solver_block_ref` selects the eigensolver of every walker:
+
+- `sbd_solver_job/<name>` (default `sbd_solver_job/davidson-solver`): SBD. Each solve
+  returns carryover determinants, which are kept in the next generation's subspace.
+- `dice_shci_solver_job/<name>`: DICE, **without carryover**. The walker returns an
+  empty carryover, so each generation subsamples without it. This is a different
+  variant from SBD with carryover; results are not expected to match.
+
+The selection is logged at the start of the flow (`solver=..., carryover=...`) and is
+recorded in every row of the `sqd-telemetry` artifact. In both cases the subspace starts
+with the Hartree-Fock determinant and uses one set for alpha and beta.
+
 ## Optional integrations
 
 - If `s3-sqd` block is configured (`prefect-aws` S3 block), intermediate arrays

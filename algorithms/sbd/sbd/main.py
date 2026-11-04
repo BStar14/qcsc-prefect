@@ -12,7 +12,7 @@ from prefect.cache_policies import RUN_ID, Inputs
 from prefect.futures import PrefectFutureList
 from prefect.task_runners import ConcurrentTaskRunner, ProcessPoolTaskRunner
 from pydantic import BaseModel, Field
-from qcsc_prefect_sbd import SBDSolverJob
+from qcsc_workflow_utility import parse_block_ref  # noqa: F401  (kept for importers)
 from qcsc_workflow_utility.chem import (
     ElectronicProperties,
     NpStrict1DArrayF64,
@@ -24,7 +24,7 @@ from .data_io import extend_table_artifact
 from .flow_params import FlowParameters
 from .lucj import initialize_ucj_parameters
 from .np_type_extension import NpStrict2DArrayBool
-from .sqd import walker_sqd
+from .sqd import load_solver_class, solver_record, walker_sqd
 
 MODULE_RNG = np.random.default_rng(seed=4574)
 THREAD_ENV = {
@@ -124,22 +124,20 @@ def riken_sqd_de(
     logger.info("Task runner mode: %s", os.getenv("SBD_TASK_RUNNER", "ray").strip().lower())
 
     # ★ fail-fast: solver block existence & sanity check
-    slug, name = parse_block_ref(parameters.solver_block_ref)
-    if slug != "sbd_solver_job":
-        raise ValueError(
-            f"solver_block_ref must be 'sbd_solver_job/<name>'. got: {parameters.solver_block_ref}"
-        )
-
+    solver_cls, name = load_solver_class(parameters.solver_block_ref)
     try:
-        solver = SBDSolverJob.load(name)
+        solver = solver_cls.load(name)
     except Exception:
         logger.exception("Failed to load solver block: %s", parameters.solver_block_ref)
         raise
 
+    record = solver_record(solver_cls)
     logger.info(
-        "Solver OK: ref=%s mode=%s",
+        "Solver OK: ref=%s solver=%s carryover=%s mode=%s",
         parameters.solver_block_ref,
-        getattr(solver, "solver_mode", "unknown"),
+        record["solver"],
+        record["carryover"],
+        getattr(solver, "solver_mode", "n/a"),
     )
 
     telemetry_data = []
@@ -228,8 +226,6 @@ def differential_evolution_trial(
             n_lucj_layers=parameters.circ_params.n_lucj_layers,
         )
 
-    _, solver_block_name = parse_block_ref(parameters.solver_block_ref)
-
     futs = PrefectFutureList()
     for walker_index, ucj_parameter in enumerate(trial_populations):
         prefect_fut = walker_sqd.submit(
@@ -242,7 +238,7 @@ def differential_evolution_trial(
             ab_indices=ab_indices,
             carryover=state.carryover,
             sqd_dim=parameters.sqd_dim,
-            solver_block_name=solver_block_name,
+            solver_block_ref=parameters.solver_block_ref,
             quantum_source=parameters.quantum_source,
             random_seed=parameters.random_seed,
         )
@@ -343,13 +339,6 @@ def selection(
             new_state.energies[walker_idx] = trial_energies[walker_idx]
             new_state.populations[walker_idx] = trial_populations[walker_idx]
     return new_state
-
-
-def parse_block_ref(ref: str) -> tuple[str, str]:
-    parts = ref.split("/", 1)
-    if len(parts) != 2 or not parts[0] or not parts[1]:
-        raise ValueError(f"Invalid solver_block_ref: {ref}")
-    return parts[0], parts[1]
 
 
 def deploy():

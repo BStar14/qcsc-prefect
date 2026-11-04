@@ -12,7 +12,9 @@ import numpy as np
 from ffsim.qiskit import PRE_INIT
 from prefect import get_run_logger, task
 from prefect.variables import Variable
-from qcsc_prefect_sbd import SBDResult, SBDSolverJob
+from qcsc_prefect_dice import DiceSHCISolverJob
+from qcsc_prefect_sbd import SBDSolverJob
+from qcsc_workflow_utility import DICE_SLUG, SBD_SLUG, solver_class
 from qcsc_workflow_utility.chem import ElectronicProperties, NpStrict1DArrayF64
 from qiskit.primitives.containers import BitArray
 from qiskit_addon_sqd.configuration_recovery import (
@@ -51,16 +53,18 @@ def walker_sqd(
     ab_indices: list[tuple[int, int]],
     carryover: NpStrict2DArrayBool,
     sqd_dim: int,
-    solver_block_name: str,
+    solver_block_ref: str,
     quantum_source: str,
     random_seed: int,
 ) -> tuple[tuple[float, NpStrict2DArrayBool], dict[str, Any]]:
     logger = get_run_logger()
-    davidson_solver = SBDSolverJob.load(solver_block_name)
+    solver_cls, solver_block_name = load_solver_class(solver_block_ref)
+    davidson_solver = solver_cls.load(solver_block_name)
 
     telemetry = {
         "trial_index": trial_index,
         "walker_index": walker_index,
+        **solver_record(solver_cls),
     }
 
     options = Variable.get("sqd_options", default={"params": {"shots": 100_000}})
@@ -280,8 +284,9 @@ def walker_sqd(
         norb=elec_props.num_orbitals,
         num_elec_a=elec_props.num_electrons[0],
     )
-    # Run SBD immediately
-    sbd_result: SBDResult = asyncio.run(
+    # Run the eigensolver immediately. The Hartree-Fock determinant is first, as SBD
+    # requires; DICE accepts the same input.
+    sbd_result = asyncio.run(
         davidson_solver.run(
             ci_strings=(ci_strings, ci_strings),
             one_body_tensor=elec_props.one_body_tensor,
@@ -292,6 +297,12 @@ def walker_sqd(
     )
     logger.debug("Completed diagonalization.")
     energy = sbd_result.energy + elec_props.nuclear_repulsion_energy
+    # DICE produces no carryover; the next generation then subsamples without it.
+    next_carryover = getattr(
+        sbd_result,
+        "carryover_bitstrings",
+        np.zeros((0, elec_props.num_orbitals), dtype=bool),
+    )
 
     report_s3 = save_ndarray(
         file_prefix="sqd_data",
@@ -300,7 +311,7 @@ def walker_sqd(
         recovered_bitstrings=bitstrings,
         alphadets=ci_strings,
         avg_occupancy=sbd_result.orbital_occupancies[0],
-        carryover=sbd_result.carryover_bitstrings,
+        carryover=next_carryover,
     )
     logger.debug(f"Saved SQD data in '{report_s3}'.")
 
@@ -312,7 +323,23 @@ def walker_sqd(
         last_updated=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     )
 
-    return ((energy, sbd_result.carryover_bitstrings), telemetry)
+    return ((energy, next_carryover), telemetry)
+
+
+SOLVER_CLASSES = {SBD_SLUG: SBDSolverJob, DICE_SLUG: DiceSHCISolverJob}
+
+
+def load_solver_class(solver_block_ref: str):
+    """Solver block class selected by the slug of ``solver_block_ref``, and its name."""
+    return solver_class(solver_block_ref, SOLVER_CLASSES)
+
+
+def solver_record(solver_cls) -> dict[str, str]:
+    """Solver and carryover mode recorded at the flow start and in the telemetry."""
+    if solver_cls is DiceSHCISolverJob:
+        # A different variant from SBD with carryover; results are not expected to match.
+        return {"solver": "DICE", "carryover": "none"}
+    return {"solver": "SBD", "carryover": "sbd"}
 
 
 @task
