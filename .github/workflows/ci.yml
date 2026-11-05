@@ -93,6 +93,20 @@ jobs:
       - name: Run algorithm tests
         run: uv run --no-sync pytest algorithms
 
+      - name: Install native SBD build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libopenmpi-dev openmpi-bin libopenblas-dev
+
+      - name: Build and test native SBD CPU driver
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          bash packages/qcsc-prefect-sbd/native/build_sbd_slurm.sh
+          export SBD_NATIVE_BINARY="$PWD/packages/qcsc-prefect-sbd/native/diag"
+          uv run --no-sync pytest packages/qcsc-prefect-sbd/tests/test_sbd_native.py -q
+
   # Single required status check for branch protection, independent of the matrix.
   ci-ok:
     name: CI OK

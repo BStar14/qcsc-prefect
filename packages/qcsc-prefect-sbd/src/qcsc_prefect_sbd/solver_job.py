@@ -64,6 +64,8 @@ def _build_solver_args(solver: "SBDSolverJob") -> list[str]:
         str(solver.tolerance),
         "--carryover_ratio",
         str(solver.carryover_ratio),
+        "--carryover_type",
+        "1",
         "--dump_matrix_form_wf",
         "matrixformwf.txt",
         "--rdm",

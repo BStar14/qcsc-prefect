@@ -146,6 +146,7 @@ def test_solver_args(mode, extra):
     assert args[:2] == ["--task_comm_size", "1"]
     assert args[args.index("--block") + 1] == "4"
     assert args[args.index("--rdm") + 1] == "0"
+    assert args[args.index("--carryover_type") + 1] == "1"
     if extra:
         assert args[args.index("--adetfile") : args.index("--adetfile") + 2] == extra
         assert "--carryoverfile" in args

@@ -1,8 +1,40 @@
 # Custom Program for Selected Basis Diagonalization
 
 This submodule provides a custom C++ implementation for configuration recovery,
-adapted from the [selected basis diagonalization sample](https://github.com/r-ccs-cms/sbd/tree/main/samples/selected_basis_diagonalization) in the SBD project.
+adapted from the [selected basis diagonalization sample](https://github.com/r-ccs-cms/sbd/tree/95bf45a5be9ffd977fac7b0aaa359833caf3401a/apps/chemistry_tpb_selected_basis_diagonalization) in the SBD project.
 Refer to the upstream repository for detailed information about the original software.
+
+## SBD API version
+
+The driver uses upstream SBD's `det_vector<size_t, det_kind::half>` API for input and
+carryover determinants. All four build scripts use the revision in `SBD_REVISION`,
+currently `95bf45a5be9ffd977fac7b0aaa359833caf3401a` (upstream `main` as of 2026-11-04).
+The revision is shared so that existing checkouts and all target platforms build
+against the same API. Older SBD versions using nested `std::vector` determinants are
+not compatible with this driver.
+
+The scripts fetch the revision if it is missing and check it out without discarding
+local changes. `SBD_COMMIT` can override the revision when testing a compatible SBD
+update. Record the printed commit with your test results. Updating the default means
+updating `SBD_REVISION` and checking the native solver tests before using the new API.
+
+The Python-facing input/output files, including determinant byte order and carryover
+padding, are unchanged. The native compatibility tests cover MPI broadcast, energy,
+occupancies and the carryover round trip with a small analytic Hamiltonian.
+
+The Python wrapper explicitly passes `--carryover_type 1`; upstream defaults to type
+0, which produces no carryover even when `--carryover_ratio` is set. User arguments
+are appended afterward and can override the carryover type intentionally.
+
+After building the CPU executable, run them with:
+
+```bash
+SBD_NATIVE_BINARY="$(realpath ./diag)" python -m pytest ../tests/test_sbd_native.py -q
+```
+
+The tests launch one and two MPI ranks locally, without a scheduler or QPU. CI builds
+the CPU driver with Open MPI and OpenBLAS and runs the same tests on Ubuntu. Fugaku's
+compiler and scheduler execution still need to be checked on Fugaku.
 
 ## Output Files
 
