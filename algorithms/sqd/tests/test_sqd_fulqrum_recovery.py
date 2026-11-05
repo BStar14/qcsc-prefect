@@ -138,6 +138,72 @@ def test_best_occupancies_seed_the_next_round(monkeypatch):
     np.testing.assert_allclose(outcome.best_result.orbital_occupancies[0], np.full(norb, 0.2))
 
 
+def _counting_solve(norb, energies):
+    calls = []
+
+    async def solve(ci_strings):
+        calls.append(ci_strings)
+        occ = np.full(norb, 0.1 * len(calls))
+        return SCIResult(
+            energy=energies[len(calls) - 1], sci_state=None, orbital_occupancies=(occ, occ)
+        )
+
+    return solve, calls
+
+
+def test_resume_runs_only_the_remaining_rounds_and_reports_them():
+    norb = 5
+    mol = dict(norb=norb, nelec=(2, 2), e_nuc=1.0)
+    solve, calls = _counting_solve(norb, [-2.0, -3.0, -1.0, -1.5])
+    ends = []
+    outcome = _run(
+        _raw_samples(norb, shots=500),
+        mol,
+        solve,
+        subspace_dim=9,
+        num_batches=2,
+        max_iterations=4,
+        start_round=2,
+        best_energy=-10.0,
+        on_round_end=lambda *args: ends.append(args),
+    )
+    assert len(calls) == 4
+    assert [r["round"] for r in outcome.records] == [2, 2, 3, 3]
+    assert outcome.round_energies == [-2.0, -0.5]
+    # The stored best is a floor; no round of this call beats it.
+    assert outcome.best_energy == -10.0 and outcome.best_result is None
+    assert [(n, best) for n, _, best in ends] == [(3, -10.0), (4, -10.0)]
+    # Call 2 (E=-3) is the best of round 2, so its occupancies seed round 3.
+    np.testing.assert_allclose(ends[0][1][0], np.full(norb, 0.2))
+
+
+def test_resume_reports_a_better_round_than_the_stored_best():
+    norb = 5
+    mol = dict(norb=norb, nelec=(2, 2), e_nuc=0.0)
+    solve, _ = _counting_solve(norb, [-4.0, -1.0])
+    outcome = _run(
+        _raw_samples(norb, shots=500),
+        mol,
+        solve,
+        subspace_dim=9,
+        max_iterations=3,
+        start_round=2,
+        best_energy=-3.0,
+    )
+    assert outcome.best_energy == -4.0 and outcome.best_result.energy == -4.0
+
+
+def test_resume_of_a_finished_run_returns_the_stored_best():
+    async def never(_):
+        raise AssertionError("solver must not be called")
+
+    mol = dict(norb=4, nelec=(1, 1), e_nuc=0.0)
+    outcome = _run(
+        _raw_samples(4, shots=50), mol, never, max_iterations=3, start_round=3, best_energy=-7.0
+    )
+    assert outcome.best_energy == -7.0 and outcome.records == []
+
+
 def test_no_valid_bitstrings_raises(monkeypatch):
     monkeypatch.setattr(
         recovery,

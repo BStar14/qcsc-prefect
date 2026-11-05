@@ -374,8 +374,9 @@ class _SolveFermion:
         return SCIResult(energy=energy, sci_state=state, orbital_occupancies=occ)
 
 
-def test_sqd_loop_diagonalizes_with_the_solver_block(lih, offline):
+def test_sqd_loop_diagonalizes_with_the_solver_block(lih, offline, tmp_path):
     solver = _SolveFermion()
+    solver.root_dir = str(tmp_path)
     bool_array = sampling.random_bool_array(
         flow_params.SamplingParameters(quantum_source="random", shots=3000), lih.num_orbitals
     )
@@ -393,9 +394,153 @@ def test_sqd_loop_diagonalizes_with_the_solver_block(lih, offline):
         assert call["one_body_tensor"] is lih.one_body_tensor
         assert call["spin_sq"] == lih.spin_sq
         assert call["norb"] == 6 and call["nelec"] == (2, 2)
-    ((artifact),) = offline
+    artifact, checkpoint = offline
     assert artifact["key"] == "my-artifact"
+    assert checkpoint["key"] == postprocess.CHECKPOINT_ARTIFACT_KEY
+    assert checkpoint["table"][0]["checkpoint"].startswith(str(tmp_path))
     assert [row["round"] for row in artifact["table"]] == [0, 0, 1, 1]
     assert energy == pytest.approx(min(row["energy"] for row in artifact["table"]))
     # LiH/STO-3G: SQD is variational, a few mHa above FCI (-7.882 Ha) at most here.
     assert -7.8825 < energy < -7.80
+
+
+# ---------------------------------------------------------------- Post-process checkpoint
+
+
+class _Crash(RuntimeError):
+    pass
+
+
+@pytest.fixture
+def ckpt_run(monkeypatch, tmp_path, lih, offline):
+    """Call sqd_loop as the flow run ``run_id`` with a solver block rooted in tmp_path."""
+    bool_array = sampling.random_bool_array(
+        flow_params.SamplingParameters(quantum_source="random", shots=3000), lih.num_orbitals
+    )
+
+    def run(run_id, solver=None, molecule=lih, **sqd):
+        monkeypatch.setattr(postprocess, "flow_run", SimpleNamespace(get_id=lambda: run_id))
+        solver = solver or _SolveFermion()
+        solver.root_dir = str(tmp_path)
+        offline.clear()
+        params = flow_params.SQDParameters(**{"subspace_dim": 64, "num_batches": 2, **sqd})
+        energy = asyncio.run(
+            postprocess.sqd_loop.fn(bool_array, molecule, params, solver, "recovery")
+        )
+        return energy, solver, {a["key"]: a["table"] for a in offline}
+
+    run.root = tmp_path / postprocess.CHECKPOINT_SUBDIR
+    return run
+
+
+class _CrashingSolve(_SolveFermion):
+    def __init__(self, crash_at):
+        super().__init__()
+        self.crash_at = crash_at
+
+    async def run(self, **kwargs):
+        if len(self.calls) == self.crash_at:
+            raise _Crash("walltime")
+        return await super().run(**kwargs)
+
+
+def _ckpt(path):
+    with np.load(path / "ckpt_t00_w0.npz") as raw:
+        return int(raw["next_step"]), float(raw["best_energy"])
+
+
+def test_retry_resumes_after_the_last_completed_round(ckpt_run):
+    with pytest.raises(_Crash):
+        ckpt_run("run-a", _CrashingSolve(crash_at=4), max_iterations=4)
+    assert _ckpt(ckpt_run.root / "run-a")[0] == 2
+
+    energy, solver, artifacts = ckpt_run("run-a", max_iterations=4)
+    assert len(solver.calls) == 4  # rounds 3 and 4 only
+    assert [row["round"] for row in artifacts["recovery"]] == [2, 2, 3, 3]
+    assert _ckpt(ckpt_run.root / "run-a") == (4, pytest.approx(energy))
+    (row,) = artifacts[postprocess.CHECKPOINT_ARTIFACT_KEY]
+    assert row["completed_iterations"] == 4 and row["resumed_from"] is None
+    assert -7.8825 < energy < -7.80
+
+
+def test_resume_checkpoint_continues_another_run_with_more_rounds(ckpt_run):
+    first, _, artifacts = ckpt_run("run-a", max_iterations=2)
+    given = artifacts[postprocess.CHECKPOINT_ARTIFACT_KEY][0]["checkpoint"]
+    before = (ckpt_run.root / "run-a" / "ckpt_t00_w0.npz").read_bytes()
+
+    energy, solver, artifacts = ckpt_run("run-b", max_iterations=5, resume_checkpoint=given)
+    assert len(solver.calls) == 6  # rounds 3 to 5
+    assert [row["round"] for row in artifacts["recovery"]] == [2, 2, 3, 3, 4, 4]
+    assert energy <= first
+    assert (ckpt_run.root / "run-a" / "ckpt_t00_w0.npz").read_bytes() == before
+    assert _ckpt(ckpt_run.root / "run-b")[0] == 5
+    assert artifacts[postprocess.CHECKPOINT_ARTIFACT_KEY][0]["resumed_from"] == given
+
+
+def test_resume_checkpoint_accepts_the_folder(ckpt_run):
+    ckpt_run("run-a", max_iterations=1)
+    _, solver, _ = ckpt_run(
+        "run-b", max_iterations=2, resume_checkpoint=str(ckpt_run.root / "run-a")
+    )
+    assert len(solver.calls) == 2
+
+
+def test_a_retry_before_the_first_new_round_still_resumes(ckpt_run):
+    ckpt_run("run-a", max_iterations=2)
+    given = str(ckpt_run.root / "run-a")
+    with pytest.raises(_Crash):
+        ckpt_run("run-b", _CrashingSolve(crash_at=0), max_iterations=4, resume_checkpoint=given)
+    assert _ckpt(ckpt_run.root / "run-b")[0] == 2
+    # The retry of run-b finds its own copy, even without resume_checkpoint.
+    _, solver, _ = ckpt_run("run-b", max_iterations=4)
+    assert len(solver.calls) == 4
+
+
+@pytest.mark.parametrize(
+    "change, match",
+    [(dict(subspace_dim=100), "subspace_dim"), (dict(num_batches=3), "num_batches")],
+)
+def test_resume_checkpoint_of_other_settings_is_refused_before_any_solve(ckpt_run, change, match):
+    ckpt_run("run-a", max_iterations=1)
+    solver = _SolveFermion()
+    with pytest.raises(ValueError, match=match):
+        ckpt_run(
+            "run-b",
+            solver,
+            max_iterations=3,
+            resume_checkpoint=str(ckpt_run.root / "run-a"),
+            **change,
+        )
+    assert solver.calls == []
+
+
+def test_resume_checkpoint_of_another_molecule_is_refused(ckpt_run, lih):
+    ckpt_run("run-a", max_iterations=1)
+    other = lih.model_copy(update={"nuclear_repulsion_energy": lih.nuclear_repulsion_energy + 1})
+    with pytest.raises(ValueError, match="Hamiltonian"):
+        ckpt_run(
+            "run-b",
+            molecule=other,
+            max_iterations=2,
+            resume_checkpoint=str(ckpt_run.root / "run-a"),
+        )
+
+
+def test_resume_checkpoint_without_source_json_is_refused(ckpt_run):
+    ckpt_run("run-a", max_iterations=1)
+    (ckpt_run.root / "run-a" / "source.json").unlink()
+    with pytest.raises(ValueError, match="no source.json"):
+        ckpt_run("run-b", max_iterations=2, resume_checkpoint=str(ckpt_run.root / "run-a"))
+
+
+def test_own_checkpoint_of_other_settings_is_moved_aside(ckpt_run):
+    ckpt_run("run-a", max_iterations=1)
+    _, solver, _ = ckpt_run("run-a", max_iterations=1, subspace_dim=100)
+    assert len(solver.calls) == 2  # started again at round 1
+    assert [p.name.startswith("run-a.prev-") for p in ckpt_run.root.iterdir()].count(True) == 1
+
+
+def test_checkpoint_off_writes_nothing(ckpt_run):
+    _, _, artifacts = ckpt_run("run-a", max_iterations=1, checkpoint=False)
+    assert not ckpt_run.root.exists()
+    assert postprocess.CHECKPOINT_ARTIFACT_KEY not in artifacts
