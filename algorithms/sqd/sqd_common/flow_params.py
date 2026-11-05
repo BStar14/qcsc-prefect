@@ -285,6 +285,29 @@ class SQDParameters(BaseModel):
         title="Max Iteration",
         ge=1,
     )
+    checkpoint: bool = Field(
+        default=True,
+        description=(
+            "Save the recovery state after every iteration, so a Retry of this run continues "
+            "from the last completed iteration. Disk use: each run writes one ckpt_t00_w0.npz "
+            "and source.json under <solver block root_dir>/sqd_checkpoints/<flow run id>/, "
+            "about 16 x (number of orbitals) bytes plus a few kB, rewritten in place. That is "
+            "under 1 MB even for 1000 orbitals, but one folder is added per run and never "
+            "removed. The solver job directories next to it are much larger."
+        ),
+        title="Checkpoint Recovery",
+    )
+    resume_checkpoint: str | None = Field(
+        default=None,
+        description=(
+            "Continue the recovery of another run from its ckpt_t00_w0.npz (or the folder "
+            "that holds it, with its source.json). The samples, the Hamiltonian, Subspace "
+            "Dimension and Batch Number must be the same as in that run; only Max Iteration "
+            "may change. A checkpoint with 32 completed iterations and Max Iteration 200 "
+            "continues at iteration 33/200. The file is only read."
+        ),
+        title="Resume from Checkpoint",
+    )
 
 
 class FlowParameters(BaseModel):

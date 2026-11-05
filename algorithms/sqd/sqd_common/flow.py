@@ -14,7 +14,8 @@
 Prefect draws an edge between two tasks when the result of one is passed
 unchanged into the other, so each stage hands its return value straight on.
 The Map, Optimize and Execute results are persisted. Retrying a failed flow
-run therefore reuses them and repeats only ``sqd_loop``.
+run therefore reuses them and repeats only ``sqd_loop``, which continues from
+its checkpoint after the last completed recovery round.
 """
 
 from prefect import get_run_logger
