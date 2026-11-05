@@ -210,9 +210,10 @@ __marimo__/
 .bobmodes
 
 # Native SBD build outputs
-algorithms/sbd/native/diag
-algorithms/sbd/native/*.o
-algorithms/sbd/native/sbd/
+packages/qcsc-prefect-sbd/native/diag
+packages/qcsc-prefect-sbd/native/diag-gpu
+packages/qcsc-prefect-sbd/native/*.o
+packages/qcsc-prefect-sbd/native/sbd/
 .DS_Store
 .vscode/sftp.json
 

@@ -21,7 +21,8 @@ qcsc-prefect/
 │   ├── qcsc-prefect-executor
 │   ├── qcsc-prefect-qiskit
 │   ├── qcsc-prefect-dice
-│   └── qcsc-prefect-fulqrum
+│   ├── qcsc-prefect-fulqrum
+│   └── qcsc-prefect-sbd
 ├── pyproject.toml
 └── .pre-commit-config.yaml
 ```
@@ -45,6 +46,15 @@ qcsc-prefect/
   Optional DICE SHCI solver integration.
 - `packages/qcsc-prefect-fulqrum/`
   Optional fulqrum subspace eigensolver integration, a drop-in alternative to DICE for SQD.
+- `packages/qcsc-prefect-sbd/`
+  Optional SBD Davidson solver integration (`SBDSolverJob`).
+- `algorithms/`
+  Reference QCSC workflows. Each one has its own `pyproject.toml` and README and is
+  installed on its own.
+  - `open_loop/sqd`, `open_loop/skqd`: sample once, then diagonalize (DICE or SBD).
+  - `closed_loop/sqd_de`: SQD with differential evolution of the circuit parameters
+    (SBD or DICE).
+  - `qcsc_workflow_utility`: chemistry and solver helpers shared by the workflows.
 - `examples/`
   End-to-end runnable examples for Miyabi and Fugaku.
 - `docs/`
@@ -70,6 +80,12 @@ Install the core packages plus the Python-side DICE integration with:
 
 ```bash
 pip install "qcsc-prefect[dice]"
+```
+
+Install the core packages plus the Python-side SBD integration with:
+
+```bash
+pip install "qcsc-prefect[sbd]"
 ```
 
 Install all optional integrations with:
@@ -164,7 +180,7 @@ It is not a uv workspace member, because uv would resolve its `[solver]` extra f
 `uv sync --all-packages`. Its tests still run with `uv run pytest`.
 
 See [Fulqrum Integration](./docs/howto/howto_use_fulqrum_prefect.md) for the block setup and
-[algorithms/sqd](./algorithms/sqd/README.md) for the `sqd_fulqrum` workflow.
+[algorithms/open_loop/sqd](./algorithms/open_loop/sqd/README.md) for the `sqd_fulqrum` workflow.
 
 ## Documentation
 

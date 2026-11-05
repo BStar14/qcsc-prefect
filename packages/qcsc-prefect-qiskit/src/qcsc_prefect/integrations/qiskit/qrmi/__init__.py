@@ -1,5 +1,6 @@
-"""QRMI Batch sampling through Slurm; no QRMI import on the workflow host."""
+"""QRMI sampling through Slurm or directly on IQP; QRMI is imported only when sampling."""
 
+from .block import QrmiRuntimeBlock
 from .runtime import PreparedCircuit, QrmiRuntime
 
-__all__ = ["PreparedCircuit", "QrmiRuntime"]
+__all__ = ["PreparedCircuit", "QrmiRuntime", "QrmiRuntimeBlock"]

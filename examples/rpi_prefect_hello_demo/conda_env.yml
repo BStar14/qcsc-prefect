@@ -11,4 +11,3 @@ dependencies:
       - cloudpickle
       - uv
       - qcsc-prefect
-      - prefect-qiskit

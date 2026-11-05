@@ -230,14 +230,16 @@ uv pip install --no-deps \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-adapters \
   -e packages/qcsc-prefect-blocks \
-  -e packages/qcsc-prefect-executor
+  -e packages/qcsc-prefect-executor \
+  -e packages/qcsc-prefect-dice \
+  -e packages/qcsc-prefect-sbd
 ```
 
 Install the workflow utility and SBD packages into the active QFw environment:
 
 ```bash
 uv pip install -e algorithms/qcsc_workflow_utility
-uv pip install -e algorithms/sbd
+uv pip install -e algorithms/closed_loop/sqd_de
 ```
 
 Check the installation:
@@ -306,7 +308,7 @@ The native SBD executable must be built for the architecture and software enviro
 From the qcsc-prefect repository root, navigate to:
 
 ```bash
-cd algorithms/sbd/native
+cd packages/qcsc-prefect-sbd/native
 ```
 
 Build the solver using the Slurm build script:
@@ -343,14 +345,14 @@ mkdir -p /path/to/sbd_jobs
 Create the local Slurm configuration:
 
 ```bash
-cp /path/to/qcsc-prefect/algorithms/sbd/sbd_blocks.slurm.example.toml \
-   /path/to/qcsc-prefect/algorithms/sbd/sbd_blocks.toml
+cp /path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd_blocks.slurm.example.toml \
+   /path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 Edit the configuration:
 
 ```bash
-vim /path/to/qcsc-prefect/algorithms/sbd/sbd_blocks.toml
+vim /path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 Configure the target for the QFw-SLURM environment.
@@ -361,7 +363,7 @@ Configure the target for the QFw-SLURM environment.
 | `project` | `"default"` | Slurm account/project, if required |
 | `queue` | `"normal"` | Slurm partition |
 | `work_dir` | `"/path/to/sbd_jobs"` | Shared job working directory |
-| `sbd_executable` | `"/path/to/qcsc-prefect/algorithms/sbd/native/diag"` | Absolute path to the compiled solver |
+| `sbd_executable` | `"/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"` | Absolute path to the compiled solver |
 
 A minimal configuration looks like:
 
@@ -370,7 +372,7 @@ hpc_target = "slurm"
 project = "default"
 queue = "normal"
 work_dir = "/path/to/sbd_jobs"
-sbd_executable = "/path/to/qcsc-prefect/algorithms/sbd/native/diag"
+sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 
 launcher = "srun"
 walltime = "00:15:00"
@@ -405,8 +407,8 @@ Use the Slurm SBD configuration created in the previous step to create the reusa
 Create the classical execution blocks:
 
 ```bash
-python /path/to/qcsc-prefect/algorithms/sbd/create_blocks.py \
-  --config /path/to/qcsc-prefect/algorithms/sbd/sbd_blocks.toml
+python /path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/create_blocks.py \
+  --config /path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 The script creates the reusable configuration needed by `SBDSolverJob`
@@ -523,7 +525,7 @@ Example:
 
 | Field | Value / Example |
 |---|---|
-| FCIDump File | `/path/to/qcsc-prefect/algorithms/sbd/data/fcidump_N2_MO.txt` |
+| FCIDump File | `/path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/data/fcidump_N2_MO.txt` |
 | SQD Subspace Dimension | `10000` |
 | Differential Evolution Iterations | `1` |
 | Quantum Source | `qfw` |
@@ -694,7 +696,7 @@ Install the `qcsc-prefect` workflow packages:
 cd /path/to/qcsc-prefect
 
 uv pip install -e algorithms/qcsc_workflow_utility
-uv pip install -e algorithms/sbd
+uv pip install -e algorithms/closed_loop/sqd_de
 ```
 
 Then verify:

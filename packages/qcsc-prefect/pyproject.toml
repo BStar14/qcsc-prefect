@@ -29,9 +29,13 @@ qiskit = [
 dice = [
     "qcsc-prefect-dice==0.3.0",
 ]
+sbd = [
+    "qcsc-prefect-sbd==0.3.0",
+]
 all = [
     "qcsc-prefect-dice==0.3.0",
     "qcsc-prefect-qiskit==0.3.0",
+    "qcsc-prefect-sbd==0.3.0",
 ]
 
 [project.urls]
