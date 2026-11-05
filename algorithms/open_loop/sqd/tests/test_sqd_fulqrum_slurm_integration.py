@@ -21,7 +21,6 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -43,9 +42,10 @@ from qcsc_prefect_fulqrum import block_utils, solver_job  # noqa: E402
 from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform  # noqa: E402
 from qiskit_addon_sqd.fermion import SCIResult, solve_fermion  # noqa: E402
 from sqd_common import recovery  # noqa: E402
+from sqd_common.block_config import load_block_config  # noqa: E402
 from sqd_fulqrum import create_blocks  # noqa: E402
 
-EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_fulqrum_blocks.slurm.example.toml"
+EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_blocks.example.toml"
 ROOT = Path(os.getenv("SQD_FULQRUM_SLURM_ROOT", "/data/sqd-fulqrum-integration"))
 TIMEOUT = float(os.getenv("FULQRUM_SLURM_TIMEOUT", "600"))
 
@@ -88,8 +88,8 @@ def store(monkeypatch):
     monkeypatch.setattr(slurm_run, "create_table_artifact", fake_artifact)
     monkeypatch.setattr(solver_job, "_logger", lambda: _LoggerStub())
 
-    with EXAMPLE.open("rb") as f:
-        config = tomllib.load(f)
+    config = load_block_config(EXAMPLE)
+    config.pop("qrmi", None)
     config.update(
         work_dir=str(ROOT),
         walltime="00:10:00",

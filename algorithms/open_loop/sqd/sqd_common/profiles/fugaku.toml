@@ -1,0 +1,23 @@
+# System profile: Fugaku (PJM). Selected with profile = "fugaku".
+# Settings in your sqd_blocks.toml override the ones here.
+
+hpc_target = "fugaku"
+walltime = "01:00:00"
+num_nodes = 1
+pre_commands = []
+fugaku_gfscache = "/vol0004:/vol0002"
+# Load the same runtime packages that were used to build the solver.
+fugaku_spack_modules = []
+fugaku_mpi_options_for_pjm = ["max-proc-per-node=1"]
+fugaku_pjm_resources = ["freq=2000,eco_state=2"]
+
+# fulqrum: one OpenMP process per subspace.
+launcher = "single"
+mpiprocs = 1
+ompthreads = 4
+
+# DICE: MPI. Used with solver = "dice".
+[dice]
+launcher = "mpiexec"
+mpiprocs = 2
+mpi_options = ["-n", "2"]

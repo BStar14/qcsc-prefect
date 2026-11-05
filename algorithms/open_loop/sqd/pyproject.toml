@@ -55,6 +55,9 @@ packages = ["sqd_common", "sqd_dice", "sqd_fulqrum"]
 include-package-data = true
 zip-safe = false
 
+[tool.setuptools.package-data]
+sqd_common = ["profiles/*.toml"]
+
 [project.scripts]
 sqd-deploy = "sqd_common.main:deploy"
 sqd-create-blocks = "sqd_common.create_blocks:main"

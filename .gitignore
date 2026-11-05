@@ -219,3 +219,7 @@ packages/qcsc-prefect-sbd/native/sbd/
 
 # Local fulqrum Docker/Slurm testbed
 packages/qcsc-prefect-fulqrum/native/docker/
+
+# Copied SQD block configs: user and site paths
+algorithms/open_loop/sqd/sqd_blocks.toml
+algorithms/open_loop/sqd/sqd_fulqrum_blocks.slurm.toml

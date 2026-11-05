@@ -183,8 +183,8 @@ For DICE or SBD, also install their packages and the extra, for example
 ### SQD with the fulqrum eigensolver
 
 Each batch is one scheduler job running `qcsc-fulqrum-solve` (one OpenMP process).
-The default target is a generic Slurm cluster; `local`, `miyabi` and `fugaku` also
-work, given a fulqrum build on that system.
+The default target is a generic Slurm cluster; Miyabi and Fugaku also work, given a
+fulqrum build on that system.
 
 1. **Compute nodes:** build fulqrum, then install `qcsc-prefect-fulqrum` into that
    environment with `--no-deps`. Note the path of its `qcsc-fulqrum-solve` entry
@@ -192,13 +192,13 @@ work, given a fulqrum build on that system.
 2. **Submit host:** install the workflow as above.
 3. Log in to Prefect Cloud on the submit host (`prefect cloud login`, or set
    `PREFECT_API_URL` and `PREFECT_API_KEY`).
-4. Create the blocks:
+4. Create the blocks (see [Block configuration](#block-configuration)):
 
    ```bash
-   cp algorithms/open_loop/sqd/sqd_fulqrum_blocks.slurm.example.toml algorithms/open_loop/sqd/sqd_fulqrum_blocks.slurm.toml
-   # edit queue, work_dir, fulqrum_executable, ompthreads, and [qrmi] or [runtime]
-   sqd-create-blocks --config algorithms/open_loop/sqd/sqd_fulqrum_blocks.slurm.toml --dry-run
-   sqd-create-blocks --config algorithms/open_loop/sqd/sqd_fulqrum_blocks.slurm.toml
+   cp algorithms/open_loop/sqd/sqd_blocks.example.toml algorithms/open_loop/sqd/sqd_blocks.toml
+   # edit queue, work_dir, fulqrum_executable and the [qrmi] resource and python_executable
+   sqd-create-blocks --config algorithms/open_loop/sqd/sqd_blocks.toml --dry-run
+   sqd-create-blocks --config algorithms/open_loop/sqd/sqd_blocks.toml
    ```
 
    `--dry-run` prints the resolved settings without contacting Prefect. `work_dir`
@@ -220,30 +220,43 @@ scheduler output.
 
 ### SQD with the DICE eigensolver
 
-Create the DICE blocks for Miyabi or Fugaku:
+Create the DICE blocks for Miyabi or Fugaku from the same example. Set
+`solver = "dice"`, `profile = "miyabi"` (or `"fugaku"`), `project` (your group), and
+`dice_executable` in the `[dice]` table:
 
 ```bash
 cp algorithms/open_loop/sqd/sqd_blocks.example.toml algorithms/open_loop/sqd/sqd_blocks.toml
 export QRMI_IBM_QCS_IAM_APIKEY="<your API key>"  # only with a [runtime] table for IQP
-sqd-create-blocks --solver dice --config algorithms/open_loop/sqd/sqd_blocks.toml --hpc-target miyabi
+sqd-create-blocks --config algorithms/open_loop/sqd/sqd_blocks.toml
 ```
 
-For Fugaku, start from `algorithms/open_loop/sqd/sqd_blocks.fugaku.example.toml` and pass
-`--hpc-target fugaku`. Its `[runtime]` tables are commented out, so it works for
-random mode as copied. For a Fugaku build, use
+The `miyabi` and `fugaku` profiles set the DICE MPI launcher and process count. The
+`[qrmi]` table is for a Slurm cluster, so on these systems replace it with `[runtime]`
+(IQP from the workflow host), or remove both for random mode. For a Fugaku build, use
 `packages/qcsc-prefect-dice/native/build_dice_fugaku.sh` as the starting point and
 reflect the same runtime libraries in `fugaku_spack_modules`, `modules` or
-`environments` in the TOML. Set `dice_executable` to the built binary, for example:
-
-```toml
-dice_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice"
-```
+`environments`.
 
 On Fugaku, `work_dir` and `dice_executable` should point to a shared path that
 compute nodes can read, for example a `/vol...` location.
 
 Then start a run of the `sqd` deployment with `default_params/n2_dice.json`, whose
 `solver_block_ref` is `dice_shci_solver_job/sqd-solver`.
+
+### Block configuration
+
+`sqd_blocks.example.toml` sorts the settings by how often you change them:
+
+| Tier | Where | Settings |
+| --- | --- | --- |
+| Your settings | top of the file | `solver`, `profile`, `queue`, `project`, `work_dir`, `fulqrum_executable`, `eigensolver`, `[dice] dice_executable`, `[qrmi] resource` and `python_executable` |
+| System profile | `sqd_common/profiles/<profile>.toml`, or your own file given by path | `hpc_target`, `launcher`, `num_nodes`, `mpiprocs`, `ompthreads`, `walltime`, `modules`, `pre_commands`, the `fugaku_*` keys, the DICE MPI settings (`[dice]`), the QRMI job's `walltime`, `ompthreads` and `timeout_seconds` (`[qrmi]`) |
+| Advanced | the commented `[advanced]` table | block names, `runtime_block_name`, `script_filename`, `metrics_artifact_key`, `timeout_seconds`, solver tuning |
+
+Later layers override earlier ones: the profile, then `[advanced]`, then the top
+level of your file, then its `[<solver>]` table. Any profile key can be set in your
+file to override it, and any setting can also be given as a CLI flag. A config
+without `profile` or `solver` is read as before, as one flat table.
 
 ### SQD with the SBD eigensolver
 
@@ -269,13 +282,18 @@ runs depends on the block's scheduler:
   (`pip install "qrmi[ibm]"`, Linux only). The process must reach IBM Quantum.
 - `scheduler = "slurm"`: on the compute node, inside a Slurm job that holds the QPU.
   The Python that runs the QRMI worker needs QRMI and its `task_runner`,
-  `qcsc-prefect-qiskit` (the worker), and this package from the same revision. The
-  hook imports only Qiskit and qiskit-ibm-runtime, so ffsim, Prefect-Qiskit and the
-  solvers are not needed there:
+  `qcsc-prefect-qiskit` (the worker, which imports Prefect), and this package from the
+  same revision. The hook imports only Qiskit and qiskit-ibm-runtime, so ffsim,
+  Prefect-Qiskit and the solvers are not needed there. Install them into that Python,
+  check the imports, and set its path as `python_executable` in the `[qrmi]` table. If
+  the QRMI worker environment already has `qcsc-prefect-qiskit`, only the last three
+  commands are needed:
 
   ```bash
   uv pip install -e packages/qcsc-prefect-qiskit
   uv pip install --no-deps -e algorithms/open_loop/sqd
+  python -c "import qrmi, qcsc_prefect.integrations.qiskit.qrmi.worker, sqd_common.transpile"
+  which python task_runner
   ```
 
   The QPU is held while the node compiles, so give the QRMI execution profile enough
@@ -288,8 +306,8 @@ runs depends on the block's scheduler:
   `--qrmi-python-executable`; fulqrum TOML only): creates the command, execution
   profile and HPC profile blocks of the QRMI Slurm job, separate from the solver's
   because they request the QPU (`slurm_qpu`), plus a `scheduler = "slurm"` runtime
-  block that names them. See the commented table in
-  `sqd_fulqrum_blocks.slurm.example.toml` and the
+  block that names them. This is the default: `sqd_blocks.example.toml` has the table
+  active, with a placeholder `resource`. See also the
   [QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md) for Batch
   mode and shared storage.
 - `[runtime]`: any `QrmiRuntimeBlock` fields. For IQP, `[runtime.qrmi]` holds QRMI's
@@ -312,6 +330,9 @@ Without either table, an existing block is kept.
 | `sqd-fulqrum-create-blocks`, `sqd-create-blocks` (DICE) | `sqd-create-blocks` (fulqrum), `sqd-create-blocks --solver dice` |
 | `pip install "sqd_dice[fulqrum,qrmi]"` | `pip install sqd` (fulqrum and QRMI included); `sqd[dice]`, `sqd[sbd]`, `sqd[all]` |
 | `default_params/fulqrum_n2*.json`, `dice_n2.json` | `default_params/n2*.json` |
+| `sqd_fulqrum_blocks.slurm.example.toml`, `sqd_blocks.fugaku.example.toml` | One `sqd_blocks.example.toml` with `solver`, `profile` and `[advanced]`; flat configs still work |
+| `circuit.optimization_level`, `circuit.sabre_*` | `circuit.transpiler.*`, with `circuit.configure_transpiler: true` |
+| `circuit.max_ab_pairs` | Removed; the heavy-hex pattern keeps at most 5 alpha-beta pairs |
 
 Old parameter files fail validation with a message that names the replacement.
 The resume key of a checkpoint now includes the solver type, so a checkpoint

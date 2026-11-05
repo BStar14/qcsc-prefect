@@ -8,12 +8,11 @@ a flow parameter, not a block setting.
 from __future__ import annotations
 
 import argparse
-import json
-import tomllib
 from pathlib import Path
 from typing import Any
 
 from qcsc_prefect_dice import create_dice_blocks
+from sqd_common.block_config import load_block_config
 from sqd_common.runtime_block import (
     build_runtime_block,
     runtime_block_name,
@@ -71,14 +70,8 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _load_config_file(path: Path | None) -> dict[str, Any]:
-    if path is None:
-        return {}
-    if not path.exists():
-        raise FileNotFoundError(f"Config file was not found: {path}")
-    if path.suffix.lower() == ".json":
-        return json.loads(path.read_text(encoding="utf-8"))
-    with path.open("rb") as f:
-        return tomllib.load(f)
+    """The config file with its profile and ``[advanced]`` merged in."""
+    return load_block_config(path)
 
 
 def _pick_value(*values: Any) -> Any:

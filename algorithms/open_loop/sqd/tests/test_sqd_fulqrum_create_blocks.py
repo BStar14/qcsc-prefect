@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import inspect
 import json
-import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from sqd_common.block_config import load_block_config
 from sqd_fulqrum import create_blocks
 
-EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_fulqrum_blocks.slurm.example.toml"
+EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_blocks.example.toml"
 
 
 def _resolve(argv=(), config=None):
@@ -17,8 +18,8 @@ def _resolve(argv=(), config=None):
 
 
 def _example_config():
-    with EXAMPLE.open("rb") as f:
-        return tomllib.load(f)
+    """The example with its profile merged in, as create_blocks reads it."""
+    return load_block_config(EXAMPLE)
 
 
 def test_example_toml_resolves_to_expected_settings():
@@ -161,8 +162,12 @@ def test_missing_or_invalid_settings(config, message):
 def test_dry_run_prints_settings_without_prefect(capsys):
     create_blocks.main(["--config", str(EXAMPLE), "--dry-run"])
     printed = json.loads(capsys.readouterr().out)
-    assert set(printed) == {"blocks"}
+    # The example keeps [qrmi] active, so the QRMI job and its runtime block resolve too.
+    assert set(printed) == {"blocks", "qrmi_blocks", "runtime_block"}
     assert printed["blocks"]["solver_block_name"] == "sqd-fulqrum-solver"
+    assert printed["qrmi_blocks"]["resource"] == "YOUR_QRMI_RESOURCE"
+    assert printed["runtime_block"]["name"] == "qrmi-runtime"
+    assert printed["runtime_block"]["scheduler"] == "slurm"
 
 
 def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
@@ -189,6 +194,14 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
     ):
         monkeypatch.setattr(cls, "save", fake_save, raising=False)
     monkeypatch.setattr(block_utils, "register_fulqrum_block_types", lambda: None)
+    # The example's [qrmi] table also saves the QRMI job and runtime blocks; stub them.
+    qrmi_saved = []
+    monkeypatch.setattr(create_blocks, "create_qrmi_blocks", qrmi_saved.append)
+    monkeypatch.setattr(
+        create_blocks,
+        "build_runtime_block",
+        lambda settings: SimpleNamespace(save=lambda name, overwrite: qrmi_saved.append(name)),
+    )
 
     create_blocks.main(["--config", str(EXAMPLE)])
 
@@ -211,4 +224,5 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
     assert solver.execution_profile_block_name == "exec-sqd-fulqrum-slurm"
     assert solver.hpc_profile_block_name == "hpc-slurm-sqd-fulqrum"
     assert solver.return_sci_state is False
+    assert qrmi_saved[0]["resource"] == "YOUR_QRMI_RESOURCE" and qrmi_saved[1] == "qrmi-runtime"
     assert "Saved blocks for SQD fulqrum workflow" in capsys.readouterr().out

@@ -8,18 +8,37 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from sqd_common.block_config import load_block_config
 from sqd_fulqrum import create_blocks
 
-EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_fulqrum_blocks.slurm.example.toml"
+EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_blocks.example.toml"
 QRMI = {"resource": "test_heron", "python_executable": "/opt/venvs/qrmi/bin/python"}
 
 
 def _config(**qrmi):
-    with EXAMPLE.open("rb") as f:
-        config = tomllib.load(f)
+    """The example config with its default [qrmi] table replaced by ``qrmi``, or removed."""
+    config = load_block_config(EXAMPLE)
+    config.pop("qrmi")
     if qrmi:
         config["qrmi"] = qrmi
     return config
+
+
+def test_example_keeps_the_qrmi_table_active():
+    with EXAMPLE.open("rb") as f:
+        config = tomllib.load(f)
+    assert config["qrmi"] == {
+        "resource": "YOUR_QRMI_RESOURCE",
+        "python_executable": "/opt/venvs/qrmi/bin/python",
+    }
+    assert "runtime" not in config
+    # The profile adds the QRMI job's walltime, threads and timeout.
+    merged = load_block_config(EXAMPLE)["qrmi"]
+    assert (merged["walltime"], merged["ompthreads"], merged["timeout_seconds"]) == (
+        "00:30:00",
+        4,
+        3600,
+    )
 
 
 def _resolve(argv=(), config=None):
@@ -29,7 +48,7 @@ def _resolve(argv=(), config=None):
     return create_blocks.resolve_qrmi_settings(args, config, block_kwargs)
 
 
-def test_example_without_qrmi_table_creates_no_qrmi_blocks():
+def test_config_without_qrmi_table_creates_no_qrmi_blocks():
     assert _resolve() is None
 
 
@@ -207,3 +226,19 @@ def test_main_saves_separate_qrmi_blocks(tmp_path, monkeypatch, capsys):
     assert settings["root_dir"] == "/data/sqd-fulqrum/qrmi"
     assert settings["hpc_profile_block_name"] == "hpc-slurm-sqd-fulqrum-qrmi"
     assert "QRMI runtime block: qrmi-runtime (scheduler=slurm)" in capsys.readouterr().out
+
+
+def test_qrmi_keys_without_their_header_get_a_hint(tmp_path):
+    # In the example, a commented-out [qrmi] header leaves its keys in [dice].
+    text = EXAMPLE.read_text().replace("\n[qrmi]\n", "\n# [qrmi]\n")
+    path = tmp_path / "blocks.toml"
+    path.write_text(text)
+    with pytest.raises(RuntimeError, match=r"python_executable, resource in \[dice\].*header"):
+        create_blocks.main(["--config", str(path), "--dry-run"])
+
+
+def test_duplicate_keys_get_a_hint(tmp_path):
+    path = tmp_path / "blocks.toml"
+    path.write_text('walltime = "01:00:00"\n# [qrmi]\nwalltime = "00:30:00"\n')
+    with pytest.raises(RuntimeError, match=r"Invalid TOML in .*blocks\.toml.*header line"):
+        create_blocks.main(["--config", str(path), "--dry-run"])
