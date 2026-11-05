@@ -1,48 +1,72 @@
-# SQD workflow with the DICE solver on Miyabi. Copy this file and run:
-#   sqd-create-blocks --solver dice --config <copy> --hpc-target miyabi
-# Select the solver in each run with solver_block_ref = "dice_shci_solver_job/<solver_block_name>".
+# Prefect blocks of the SQD workflow. Copy this file, edit your settings below and run:
+#   sqd-create-blocks --config sqd_blocks.toml
+# Add --dry-run to print the resolved settings without saving anything.
+#
+# The settings come in three tiers:
+#   1. Your settings (this file): paths, queue, solver and the QPU resource.
+#   2. A system profile (`profile`): scheduler and resource settings such as nodes,
+#      threads, walltime and modules. A key set in this file overrides the profile.
+#   3. [advanced] (end of this file): block names, timeouts and solver tuning.
 
-hpc_target = "miyabi"
-group = "your-group"
-queue = "your-queue"
-work_dir = "/work/your-group/your-user/sqd-work"
-dice_executable = "/work/your-group/your-user/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice"
+# ---------------------------------------------------------------- 1. Your settings
 
-launcher = "mpiexec.hydra"
-walltime = "01:00:00"
-num_nodes = 1
-mpiprocs = 4
-ompthreads = 1
-modules = []
-mpi_options = ["-np", "4"]
-pre_commands = []
+solver = "fulqrum"                  # "fulqrum" or "dice" (needs sqd[dice])
+profile = "slurm"                   # "slurm", "miyabi", "fugaku", or a path to your profile
 
-command_block_name = "cmd-sqd-dice-solver"
-execution_profile_block_name = "exec-sqd-dice-mpi"
-hpc_profile_block_name = "hpc-miyabi-sqd-dice"
-solver_block_name = "sqd-solver"
-script_filename = "dice_solver.pbs"
-metrics_artifact_key = "miyabi-sqd-dice-metrics"
+queue = "normal"                    # Partition (Slurm) or resource group (Miyabi, Fugaku)
+# project = "YOUR_ACCOUNT"          # Slurm account; required as the group on Miyabi and Fugaku
+work_dir = "/data/sqd-fulqrum"      # Shared between the workflow host and the compute nodes
 
-select_cutoff = 5e-4
-davidson_tol = 1e-5
-energy_tol = 1e-10
-max_iter = 10
-return_sci_state = false
+# fulqrum: qcsc-fulqrum-solve of the compute-node environment that has fulqrum built
+fulqrum_executable = "/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve"
+eigensolver = "scipy"               # "primme" needs primme on the compute node
 
-# QrmiRuntimeBlock used for quantum_source = "real-device" (sampling.runtime_block_name of
-# each run). For random mode only, delete [runtime] and [runtime.qrmi]; an existing block is
-# then kept. The flow sets the SQD transpiler and its configuration itself.
-runtime_block_name = "qrmi-runtime"
+# Keys after a table header below belong to that table, so keep top-level keys above here.
 
-[runtime]
-# "iqp": submit from the workflow process. "slurm": use root_dir and three block names.
-scheduler = "iqp"
-resource = "ibm_kingston"
+# DICE: used only with solver = "dice".
+[dice]
+dice_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice"
 
-# QRMI settings without the "<resource>_" prefix. Set QRMI_IBM_QCS_IAM_APIKEY in the
+# QRMI sampler job in Slurm, the default sampling path. Creates its three blocks and the
+# qrmi-runtime block that real-device runs use. The QPU credentials stay in the cluster's
+# qrmi_config.json, so nothing secret goes in this file. The job's walltime, threads and
+# timeout come from the profile.
+[qrmi]
+resource = "YOUR_QRMI_RESOURCE"     # Slurm --qpu; must match the QRMI configuration
+# Compute-node Python that imports qrmi (with task_runner beside it), the worker
+# (qcsc-prefect-qiskit, which brings Prefect) and sqd_common
+python_executable = "/opt/venvs/qrmi/bin/python"
+
+# To sample from the workflow process through IBM Quantum (IQP) instead, comment out the
+# whole [qrmi] table above and uncomment [runtime]. Set QRMI_IBM_QCS_IAM_APIKEY in the
 # environment; it must not be written in this file.
-[runtime.qrmi]
-QRMI_IBM_QCS_ENDPOINT = "https://quantum.cloud.ibm.com/api/v1"
-QRMI_IBM_QCS_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
-QRMI_IBM_QCS_SERVICE_CRN = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"
+# [runtime]
+# scheduler = "iqp"
+# resource = "ibm_kingston"
+# [runtime.qrmi]
+# QRMI_IBM_QCS_ENDPOINT = "https://quantum.cloud.ibm.com/api/v1"
+# QRMI_IBM_QCS_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
+# QRMI_IBM_QCS_SERVICE_CRN = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"
+
+# ---------------------------------------------------------------- 3. Advanced
+# Uncomment a key to change its default. Block names default per solver and system; the
+# values shown are the fulqrum defaults on Slurm.
+# [advanced]
+# solver_block_name = "sqd-fulqrum-solver"
+# command_block_name = "cmd-sqd-fulqrum-solver"
+# execution_profile_block_name = "exec-sqd-fulqrum-slurm"
+# hpc_profile_block_name = "hpc-slurm-sqd-fulqrum"
+# runtime_block_name = "qrmi-runtime"
+# script_filename = "fulqrum_solver.slurm"
+# metrics_artifact_key = "slurm-sqd-fulqrum-metrics"
+# timeout_seconds = 7200            # Monitoring of each solver job
+# # fulqrum tuning
+# hamiltonian_format = "csr"        # "matrix_free" saves memory
+# tol = 1e-8
+# max_iter = 1000                   # Default: solver default
+# dense_max_dim = 64
+# return_sci_state = false          # The workflow only needs energies and occupancies
+# # DICE tuning
+# select_cutoff = 5e-4
+# davidson_tol = 1e-5
+# energy_tol = 1e-10

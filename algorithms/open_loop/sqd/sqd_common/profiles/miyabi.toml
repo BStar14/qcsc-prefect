@@ -1,0 +1,20 @@
+# System profile: Miyabi (PBS). Selected with profile = "miyabi".
+# Settings in your sqd_blocks.toml override the ones here.
+
+hpc_target = "miyabi"
+walltime = "01:00:00"
+num_nodes = 1
+modules = []
+pre_commands = []
+
+# fulqrum: one OpenMP process per subspace.
+launcher = "single"
+mpiprocs = 1
+ompthreads = 4
+
+# DICE: MPI. Used with solver = "dice".
+[dice]
+launcher = "mpiexec.hydra"
+mpiprocs = 4
+ompthreads = 1
+mpi_options = ["-np", "4"]

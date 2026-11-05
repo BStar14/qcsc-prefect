@@ -8,7 +8,7 @@ place, grouped by the Qiskit Patterns stage it controls.
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # QrmiRuntimeBlock that samples, and the IBM QuantumRuntime block that reloads a job.
 DEFAULT_QRMI_BLOCK_NAME = "qrmi-runtime"
@@ -18,22 +18,40 @@ DEFAULT_SOLVER_BLOCK_REF = "fulqrum_solver_job/sqd-fulqrum-solver"
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
+def _at(position: int) -> dict[str, int]:
+    """Field order in the Prefect run form, which otherwise sorts fields alphabetically."""
+    return {"position": position}
+
+
+def _shown_as_required(*names: str):
+    """Mark defaulted key fields as required in the run form, so that it highlights them."""
+
+    def extra(schema: dict[str, Any]) -> None:
+        required = schema.setdefault("required", [])
+        required.extend(name for name in names if name not in required)
+
+    return extra
+
+
 class MoleculeGeometry(BaseModel):
     """Molecule definition by geometry and basis."""
 
     atom: str = Field(
         description="Definition for molecule structure.",
         title="Atom",
+        json_schema_extra=_at(0),
     )
     basis: str = Field(
         default="6-31g",
         description="Name of basis set.",
         title="Basis Set",
+        json_schema_extra=_at(1),
     )
     symmetry: str | bool = Field(
         default=False,
         description="Whether to use symmetry, otherwise string of point group name.",
         title="Symmetry",
+        json_schema_extra=_at(2),
     )
     spin_sq: float | None = Field(
         default=0.0,
@@ -42,6 +60,7 @@ class MoleculeGeometry(BaseModel):
             "target. DICE uses it as a spin penalty, fulqrum ignores it, and SBD requires null."
         ),
         title="Total Spin Squared",
+        json_schema_extra=_at(3),
     )
     ccsd_maxiter: int = Field(
         default=4,
@@ -51,6 +70,7 @@ class MoleculeGeometry(BaseModel):
         ),
         title="CCSD Restarts",
         ge=1,
+        json_schema_extra=_at(4),
     )
 
 
@@ -63,6 +83,7 @@ class FCIDumpFile(BaseModel):
             "We assume these are precomputed in the MO basis."
         ),
         title="FCIDump File",
+        json_schema_extra=_at(0),
     )
 
     @field_validator("fcidump_file")
@@ -85,6 +106,7 @@ class FCIDumpFile(BaseModel):
             "target. DICE uses it as a spin penalty, fulqrum ignores it, and SBD requires null."
         ),
         title="Total Spin Squared",
+        json_schema_extra=_at(1),
     )
     ccsd_maxiter: int = Field(
         default=4,
@@ -94,6 +116,50 @@ class FCIDumpFile(BaseModel):
         ),
         title="CCSD Restarts",
         ge=1,
+        json_schema_extra=_at(2),
+    )
+
+
+class TranspilerParameters(BaseModel):
+    """Preset pass manager with a large SABRE layout search."""
+
+    optimization_level: int = Field(
+        default=3,
+        description="Optimization level of the preset pass manager.",
+        title="Optimization Level",
+        ge=0,
+        le=3,
+        json_schema_extra=_at(0),
+    )
+    sabre_layout_trials: int = Field(
+        default=10000,
+        description=(
+            "The number of random initial layouts tested, selecting the one that minimizes "
+            "SWAP gates."
+        ),
+        title="SABRE Layout Trials",
+        ge=1,
+        json_schema_extra=_at(1),
+    )
+    sabre_swap_trials: int = Field(
+        default=10,
+        description=(
+            "The number of routing trials for each layout, refining gate placement for "
+            "better routing."
+        ),
+        title="SABRE SWAP Trials",
+        ge=1,
+        json_schema_extra=_at(2),
+    )
+    sabre_max_iterations: int = Field(
+        default=8,
+        description=(
+            "The number of forward-backward routing iterations to refine the layout and "
+            "reduce routing costs."
+        ),
+        title="SABRE Max Iteration",
+        ge=1,
+        json_schema_extra=_at(3),
     )
 
 
@@ -105,29 +171,23 @@ class CircuitParameters(BaseModel):
         description="Number of repetition of the unit layer of LUCJ ansatz.",
         title="LUCJ Layers",
         ge=1,
+        json_schema_extra=_at(0),
     )
     compress: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Optimize the LUCJ parameters to minimize the error of the truncated "
             "double factorization of the CCSD t2 amplitudes."
         ),
         title="Compress LUCJ Parameters",
+        json_schema_extra=_at(1),
     )
     compress_maxiter: int = Field(
-        default=100,
+        default=20,
         description="Maximum number of optimizer iterations when Compress is on.",
         title="Compression Max Iteration",
         ge=1,
-    )
-    max_ab_pairs: int | None = Field(
-        default=None,
-        description=(
-            "Keep at most this many alpha-beta interaction pairs (every 4th orbital on a "
-            "heavy-hex lattice). Leave empty to keep all of them."
-        ),
-        title="Max Alpha-Beta Pairs",
-        ge=1,
+        json_schema_extra=_at(2),
     )
     use_reset_mitigation: bool = Field(
         default=False,
@@ -137,41 +197,45 @@ class CircuitParameters(BaseModel):
             "the quality of hardware reset instruction."
         ),
         title="Reset Mitigation",
+        json_schema_extra=_at(3),
     )
-    optimization_level: int = Field(
-        default=3,
-        description="Transpile: Optimization level of transpiler",
-        title="Optimization Level",
-        ge=0,
-        le=3,
-    )
-    sabre_max_iterations: int = Field(
-        default=8,
+    configure_transpiler: bool = Field(
+        default=False,
         description=(
-            "Transpile: The number of forward-backward routing iterations to refine "
-            "the layout and reduce routing costs."
+            "Use the Transpiler settings below. Off: optimization level 3 with the default "
+            "SABRE layout search (10000 layout trials, 10 SWAP trials, 8 iterations)."
         ),
-        title="SABRE Max Iteration",
-        ge=1,
+        title="Configure Transpiler",
+        json_schema_extra=_at(4),
     )
-    sabre_swap_trials: int = Field(
-        default=10,
-        description=(
-            "Transpile: The number of routing trials for each layout, refining gate "
-            "placement for better routing."
-        ),
-        title="SABRE SWAP Trials",
-        ge=1,
+    transpiler: TranspilerParameters = Field(
+        default_factory=TranspilerParameters,
+        description="Used only when Configure Transpiler is on.",
+        title="Transpiler",
+        json_schema_extra=_at(5),
     )
-    sabre_layout_trials: int = Field(
-        default=10000,
-        description=(
-            "Transpile: The number of random initial layouts tested, selecting the "
-            "one that minimizes SWAP gates."
-        ),
-        title="SABRE Layout Trials",
-        ge=1,
-    )
+
+    @property
+    def transpile_options(self) -> TranspilerParameters:
+        """The transpiler settings in effect: the configured ones, or the defaults."""
+        return self.transpiler if self.configure_transpiler else TranspilerParameters()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_moved_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "max_ab_pairs" in data:
+                raise ValueError(
+                    "circuit.max_ab_pairs was removed: the heavy-hex pattern keeps at most 5 "
+                    "alpha-beta pairs."
+                )
+            moved = sorted(set(data) & set(TranspilerParameters.model_fields))
+            if moved:
+                raise ValueError(
+                    f"circuit.{moved[0]} moved to circuit.transpiler.{moved[0]}: set "
+                    "configure_transpiler = true and the transpiler settings there."
+                )
+        return data
 
 
 class SamplingParameters(BaseModel):
@@ -184,18 +248,21 @@ class SamplingParameters(BaseModel):
             "bitstrings without a QPU."
         ),
         title="Quantum Source",
+        json_schema_extra=_at(0),
     )
     shots: int = Field(
-        default=100_000,
+        default=10_000,
         description="Number of shots.",
         title="Shots",
         ge=1,
+        json_schema_extra=_at(1),
     )
     random_seed: int = Field(
         default=24,
         description="RNG seed of the random bitstrings when Quantum Source is 'random'.",
         title="Random Seed",
         ge=0,
+        json_schema_extra=_at(3),
     )
     runtime_block_name: str = Field(
         default=DEFAULT_QRMI_BLOCK_NAME,
@@ -205,6 +272,7 @@ class SamplingParameters(BaseModel):
             "hook and its configuration from the Circuit settings."
         ),
         title="QRMI Runtime Block",
+        json_schema_extra=_at(2),
     )
     runner_name: str = Field(
         default=DEFAULT_RUNTIME_BLOCK_NAME,
@@ -213,6 +281,7 @@ class SamplingParameters(BaseModel):
             "Runtime Job ID. Not used for sampling."
         ),
         title="Quantum Runtime Block (reload)",
+        json_schema_extra=_at(6),
     )
     qiskit_runtime_job_id: str | None = Field(
         default=None,
@@ -222,6 +291,7 @@ class SamplingParameters(BaseModel):
             "credentials of the Quantum Runtime Block (reload)."
         ),
         title="Load from Qiskit Runtime Job ID",
+        json_schema_extra=_at(5),
     )
     qrmi_result_dir: str | None = Field(
         default=None,
@@ -231,6 +301,7 @@ class SamplingParameters(BaseModel):
             "artifact)."
         ),
         title="Load from QRMI Job Directory",
+        json_schema_extra=_at(4),
     )
 
     @model_validator(mode="after")
@@ -263,23 +334,33 @@ class SamplingParameters(BaseModel):
 class SQDParameters(BaseModel):
     """Configuration recovery and diagonalization settings."""
 
+    model_config = ConfigDict(
+        json_schema_extra=_shown_as_required("subspace_dim", "num_batches", "max_iterations")
+    )
+
     subspace_dim: int = Field(
+        default=90_000,
         description="Dimension d of subsampled bitstrings for diagonalization.",
         title="Subspace Dimension",
         ge=1,
+        json_schema_extra=_at(0),
     )
     num_batches: int = Field(
+        default=4,
         description=(
             "Number of batches of configurations used by the different calls to the "
             "eigenstate solver. Each batch is one solver job; they run concurrently."
         ),
         title="Batch Number",
         ge=1,
+        json_schema_extra=_at(1),
     )
     max_iterations: int = Field(
+        default=5,
         description="Number of self-consistent configuration recovery iterations.",
         title="Max Iteration",
         ge=1,
+        json_schema_extra=_at(2),
     )
     checkpoint: bool = Field(
         default=True,
@@ -292,6 +373,7 @@ class SQDParameters(BaseModel):
             "removed. The solver job directories next to it are much larger."
         ),
         title="Checkpoint Recovery",
+        json_schema_extra=_at(3),
     )
     resume_checkpoint: str | None = Field(
         default=None,
@@ -304,6 +386,7 @@ class SQDParameters(BaseModel):
             "continues at iteration 33/200. The file is only read."
         ),
         title="Resume from Checkpoint",
+        json_schema_extra=_at(4),
     )
 
 
@@ -317,20 +400,25 @@ class FlowParameters(BaseModel):
     molecule: MoleculeGeometry | FCIDumpFile = Field(
         description="PySCF definition of the molecule to solve for.",
         title="Molecule",
+        json_schema_extra=_at(0),
     )
     circuit: CircuitParameters = Field(
         default_factory=CircuitParameters,
         description="LUCJ ansatz and transpiler settings.",
         title="Circuit",
+        json_schema_extra=_at(1),
     )
     sampling: SamplingParameters = Field(
         default_factory=SamplingParameters,
         description="Quantum sampling source and settings.",
         title="Sampling",
+        json_schema_extra=_at(2),
     )
     sqd: SQDParameters = Field(
+        default_factory=SQDParameters,
         description="Configuration recovery and diagonalization settings.",
         title="SQD",
+        json_schema_extra=_at(3),
     )
     solver_block_ref: str = Field(
         default=DEFAULT_SOLVER_BLOCK_REF,
@@ -341,6 +429,7 @@ class FlowParameters(BaseModel):
             "Total Spin Squared null)."
         ),
         title="Solver Block",
+        json_schema_extra=_at(4),
     )
 
     @model_validator(mode="before")

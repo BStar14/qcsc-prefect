@@ -2,8 +2,8 @@
 
 Usage::
 
-    sqd-create-blocks --config sqd_fulqrum_blocks.slurm.toml            # fulqrum (default)
-    sqd-create-blocks --solver dice --config sqd_blocks.toml --hpc-target miyabi
+    sqd-create-blocks --config sqd_blocks.toml       # solver from the file (default fulqrum)
+    sqd-create-blocks --solver dice --config sqd_blocks.toml
 
 The remaining arguments go to the solver's own script (``sqd_fulqrum.create_blocks``
 or ``sqd_dice.create_blocks``). An SBD solver block is created with
@@ -14,13 +14,16 @@ or ``sqd_dice.create_blocks``). An SBD solver block is created with
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+from sqd_common.block_config import read_config_file, solver_of
 
 SOLVERS = ("fulqrum", "dice")
 
 
 def main(argv: list[str] | None = None) -> None:
     argv = list(sys.argv[1:] if argv is None else argv)
-    solver = "fulqrum"
+    solver = _config_solver(argv)
     if "--solver" in argv:
         index = argv.index("--solver")
         if index + 1 >= len(argv):
@@ -48,6 +51,19 @@ def main(argv: list[str] | None = None) -> None:
         create()
         return
     create(argv)
+
+
+def _config_solver(argv: list[str]) -> str:
+    """The ``solver`` of the ``--config`` file, else fulqrum."""
+    if "--config" not in argv:
+        return "fulqrum"
+    index = argv.index("--config")
+    if index + 1 >= len(argv):
+        return "fulqrum"
+    path = Path(argv[index + 1])
+    if not path.exists():
+        return "fulqrum"
+    return solver_of(read_config_file(path))
 
 
 if __name__ == "__main__":

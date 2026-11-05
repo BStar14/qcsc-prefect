@@ -39,12 +39,17 @@ class LUCJParameters(BaseModel):
         )
 
 
-def interaction_pairs(
-    norb: int, max_ab_pairs: int | None = None
-) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """Heavy-hex LUCJ interactions: alpha-alpha neighbours, alpha-beta every 4th orbital."""
+# Alpha-beta pairs kept on a heavy-hex (Heron) lattice.
+MAX_AB_PAIRS = 5
+
+
+def interaction_pairs(norb: int) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """Heavy-hex LUCJ interactions: alpha-alpha neighbours, alpha-beta every 4th orbital.
+
+    At most ``MAX_AB_PAIRS`` alpha-beta pairs are kept, starting from orbital 0.
+    """
     aa_indices = [(p, p + 1) for p in range(norb - 1)]
-    ab_indices = [(p, p) for p in range(0, norb, 4)][:max_ab_pairs]
+    ab_indices = [(p, p) for p in range(0, norb, 4)][:MAX_AB_PAIRS]
     return aa_indices, ab_indices
 
 
@@ -65,14 +70,14 @@ def get_lucj_params(
     factorization is optimized to reproduce t2 more closely.
 
     Args:
-        circuit_params: LUCJ layers, compression and interaction-pair settings.
+        circuit_params: LUCJ layers and compression settings.
         elec_props: Electronic properties with the CCSD t2 amplitudes.
 
     Returns:
         LUCJ operator parameters, including the system size.
     """
     logger = get_run_logger()
-    pairs = interaction_pairs(elec_props.num_orbitals, circuit_params.max_ab_pairs)
+    pairs = interaction_pairs(elec_props.num_orbitals)
     logger.info(
         "Getting LUCJ parameters: %d layer(s), %d alpha-alpha and %d alpha-beta pairs%s.",
         circuit_params.n_lucj_layers,
@@ -153,13 +158,18 @@ def build_lucj_circuit(
 def circuit_transpile_options(
     circuit_params: CircuitParameters, seed: int | np.random.Generator
 ) -> dict[str, int]:
-    """JSON-safe ``build_pass_manager`` options for the configured circuit."""
+    """JSON-safe ``build_pass_manager`` options for the configured circuit.
+
+    The transpiler settings apply only with ``configure_transpiler``; otherwise
+    the defaults of ``TranspilerParameters`` are used.
+    """
+    options = circuit_params.transpile_options
     return {
-        "optimization_level": circuit_params.optimization_level,
+        "optimization_level": options.optimization_level,
         "seed_transpiler": derive_seed(seed),
-        "sabre_max_iterations": circuit_params.sabre_max_iterations,
-        "sabre_layout_trials": circuit_params.sabre_layout_trials,
-        "sabre_swap_trials": circuit_params.sabre_swap_trials,
+        "sabre_max_iterations": options.sabre_max_iterations,
+        "sabre_layout_trials": options.sabre_layout_trials,
+        "sabre_swap_trials": options.sabre_swap_trials,
     }
 
 
