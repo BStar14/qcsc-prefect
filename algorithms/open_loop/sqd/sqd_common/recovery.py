@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -19,6 +19,11 @@ from qiskit_addon_sqd.fermion import SCIResult
 from sqd_common.subsample import postselect, subsample
 
 SolveFn = Callable[[tuple[np.ndarray, np.ndarray]], Awaitable[SCIResult]]
+# Maps the subsampled batches of a round, and the loop's RNG, to the batches solved.
+BatchTransformFn = Callable[
+    [Iterable[tuple[np.ndarray, np.ndarray]], np.random.Generator],
+    Iterable[tuple[np.ndarray, np.ndarray]],
+]
 # Called after each round with (next_round, occupancies for it, best total energy so far).
 RoundEndFn = Callable[[int, tuple[np.ndarray, np.ndarray], float], None]
 
@@ -60,6 +65,7 @@ async def run_configuration_recovery(
     start_round: int = 0,
     best_energy: float | None = None,
     on_round_end: RoundEndFn | None = None,
+    batch_transform: BatchTransformFn | None = None,
 ) -> RecoveryOutcome:
     """Run the SQD configuration recovery loop.
 
@@ -89,6 +95,9 @@ async def run_configuration_recovery(
         start_round: Number of rounds already completed by a checkpointed run.
         best_energy: Best total energy of those rounds.
         on_round_end: Called after each round, for example to write a checkpoint.
+        batch_transform: Rewrites the subsampled batches of each round before they are
+            solved, for a solver that needs another input form (SBD). It draws from
+            ``rng`` after the subsampling, so the subspaces of the next round change.
 
     Raises:
         RuntimeError: If no bitstring survives post-selection.
@@ -127,16 +136,17 @@ async def run_configuration_recovery(
                 "Pass a bit array that contains at least one valid bitstring."
             )
 
-        batches = list(
-            subsample(
-                bitstring_matrix=bitstrings_post,
-                probabilities=probs_post,
-                subspace_dim=subspace_dim,
-                num_batches=num_batches,
-                rng=rng,
-                open_shell=open_shell,
-            )
+        batches = subsample(
+            bitstring_matrix=bitstrings_post,
+            probabilities=probs_post,
+            subspace_dim=subspace_dim,
+            num_batches=num_batches,
+            rng=rng,
+            open_shell=open_shell,
         )
+        if batch_transform is not None:
+            batches = batch_transform(batches, rng)
+        batches = list(batches)
         results: list[SCIResult] = await asyncio.gather(*(solve(ci) for ci in batches))
 
         best_result_in_batch = min(results, key=lambda result: result.energy)

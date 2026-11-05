@@ -25,5 +25,5 @@
     "num_batches": 2,
     "max_iterations": 2
   },
-  "solver_block_name": "sqd-fulqrum-solver"
+  "solver_block_ref": "fulqrum_solver_job/sqd-fulqrum-solver"
 }

@@ -1,24 +1,13 @@
-"""Serve an SQD deployment from a source checkout.
+"""Serve the ``sqd`` deployment from a source checkout (same as ``sqd-deploy``).
 
 Usage (from the repository root)::
 
-    python algorithms/open_loop/sqd/deploy.py fulqrum   # same as sqd-fulqrum-deploy
-    python algorithms/open_loop/sqd/deploy.py dice      # same as sqd-deploy
+    python algorithms/open_loop/sqd/deploy.py
+
+Each run selects its solver with ``solver_block_ref`` in the flow parameters.
 """
 
-import sys
-
-
-def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in {"fulqrum", "dice"}:
-        raise SystemExit("Usage: python algorithms/open_loop/sqd/deploy.py {fulqrum|dice}")
-
-    if sys.argv[1] == "fulqrum":
-        from sqd_fulqrum.main import deploy
-    else:
-        from sqd_dice.main import deploy
-    deploy()
-
+from sqd_common.main import deploy
 
 if __name__ == "__main__":
-    main()
+    deploy()

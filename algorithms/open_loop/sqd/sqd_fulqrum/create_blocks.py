@@ -1,8 +1,14 @@
-"""Create the Prefect blocks required for the SQD fulqrum workflow.
+"""Create the Prefect blocks of the SQD workflow with the fulqrum solver.
 
-An optional ``[qrmi]`` table (Slurm only) also creates the three blocks of the
-QRMI sampler job and prints the ``qrmi_runtime_config`` to paste into the
-Sampling parameters of each run. Shots and sampler options are flow parameters.
+Sampling goes through a ``QrmiRuntimeBlock`` (``sampling.runtime_block_name`` of
+each run, default ``qrmi-runtime``). It is saved from one of two optional tables:
+
+- ``[qrmi]`` (Slurm only): the three blocks of the QRMI sampler job, plus a
+  ``scheduler="slurm"`` runtime block that names them.
+- ``[runtime]``: any ``QrmiRuntimeBlock`` fields, for example ``scheduler="iqp"``
+  with ``[runtime.qrmi]``; the API key comes from the environment.
+
+Shots are a flow parameter.
 """
 
 from __future__ import annotations
@@ -13,13 +19,20 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from sqd_common.runtime_block import (
+    build_runtime_block,
+    describe,
+    runtime_block_name,
+    runtime_block_settings,
+)
+
 HPC_TARGETS = ("slurm", "local", "miyabi", "fugaku")
 QRMI_WORKER_ARGS = ["-m", "qcsc_prefect.integrations.qiskit.qrmi.worker"]
 # Run settings that belong to the flow parameters, not to the blocks.
 FLOW_PARAMETER_KEYS = {
     "shots": "sampling.shots",
-    "sampler_options_json": "sampling.sampler_options",
-    "options_variable_name": "sampling.shots and sampling.sampler_options",
+    "sampler_options_json": "sampling.shots",
+    "options_variable_name": "sampling.shots",
 }
 QRMI_KEYS = frozenset(
     {
@@ -101,6 +114,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--qrmi-python-executable",
         help="Compute-node Python that runs the QRMI worker.",
+    )
+    parser.add_argument(
+        "--runtime-block-name",
+        help="Name of the QrmiRuntimeBlock to save (default: qrmi-runtime).",
     )
     parser.add_argument(
         "--dry-run",
@@ -329,9 +346,10 @@ def resolve_qrmi_settings(
     )
 
 
-def qrmi_runtime_config(qrmi: dict[str, Any]) -> dict[str, Any]:
-    """The ``qrmi_runtime_config`` flow argument that selects these blocks."""
+def qrmi_runtime_settings(qrmi: dict[str, Any]) -> dict[str, Any]:
+    """QrmiRuntimeBlock fields of a ``scheduler="slurm"`` runtime that uses these blocks."""
     runtime = {
+        "scheduler": "slurm",
         "root_dir": qrmi["root_dir"],
         "command_block_name": qrmi["command_block_name"],
         "execution_profile_block_name": qrmi["execution_profile_block_name"],
@@ -391,18 +409,36 @@ def create_qrmi_blocks(qrmi: dict[str, Any]) -> None:
     ).save(qrmi["hpc_profile_block_name"], overwrite=True)
 
 
+def resolve_runtime_settings(
+    config: dict[str, Any], qrmi: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """QrmiRuntimeBlock fields from ``[qrmi]`` or ``[runtime]``, or None without either."""
+    if qrmi is not None and "runtime" in config:
+        raise RuntimeError(
+            "Set either [qrmi] (a Slurm QRMI job) or [runtime] (any QrmiRuntimeBlock), not both."
+        )
+    if qrmi is not None:
+        return qrmi_runtime_settings(qrmi)
+    if "runtime" in config:
+        return runtime_block_settings(config["runtime"])
+    return None
+
+
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     config = _load_config_file(args.config)
     block_kwargs = resolve_settings(args, config)
     qrmi = resolve_qrmi_settings(args, config, block_kwargs)
+    runtime = resolve_runtime_settings(config, qrmi)
+    runtime_name = runtime_block_name(args.runtime_block_name, config)
 
     if args.dry_run:
         resolved = {"blocks": block_kwargs}
         if qrmi is not None:
             resolved["qrmi_blocks"] = qrmi
-            resolved["qrmi_runtime_config"] = qrmi_runtime_config(qrmi)
-        print(json.dumps(resolved, indent=2))
+        if runtime is not None:
+            resolved["runtime_block"] = {"name": runtime_name, **describe(runtime)}
+        print(json.dumps(resolved, indent=2, default=str))
         return
 
     from qcsc_prefect_fulqrum import create_fulqrum_blocks
@@ -410,6 +446,8 @@ def main(argv: list[str] | None = None) -> None:
     block_names = create_fulqrum_blocks(**block_kwargs)
     if qrmi is not None:
         create_qrmi_blocks(qrmi)
+    if runtime is not None:
+        build_runtime_block(runtime).save(runtime_name, overwrite=True)
 
     print(f"Saved blocks for SQD fulqrum workflow (target={block_kwargs['hpc_target']})")
     print(f"  SQD solver block: {block_names['solver_block_name']}")
@@ -423,8 +461,10 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  QRMI execution profile block: {qrmi['execution_profile_block_name']}")
         print(f"  QRMI HPC profile block: {qrmi['hpc_profile_block_name']}")
         print(f"  QRMI resource (slurm_qpu): {qrmi['resource']}")
-        print("To sample through QRMI, set sampling.qrmi_runtime_config of each run to:")
-        print(json.dumps(qrmi_runtime_config(qrmi), indent=2))
+    if runtime is not None:
+        print(f"  QRMI runtime block: {runtime_name} (scheduler={runtime['scheduler']})")
+        if runtime_name != "qrmi-runtime":
+            print(f"Set sampling.runtime_block_name of each run to {runtime_name!r}.")
 
 
 if __name__ == "__main__":

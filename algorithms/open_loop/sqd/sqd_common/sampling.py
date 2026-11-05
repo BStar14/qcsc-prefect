@@ -18,15 +18,10 @@ from qiskit.primitives.containers import BitArray
 from qiskit_addon_sqd.counts import generate_bit_array_uniform
 
 from sqd_common.flow_params import CircuitParameters, SamplingParameters
-from sqd_common.lucj import (
-    LUCJParameters,
-    build_lucj_circuit,
-    circuit_transpile_options,
-    transpile_lucj_circuit,
-)
+from sqd_common.lucj import LUCJParameters, build_lucj_circuit, circuit_transpile_options
 
 SAMPLING_ARTIFACT_KEY = "sqd-sampling-source"
-# Seed of the transpiler RNG. The QRMI node compiles with the same derived seed.
+# Seed of the transpiler RNG; the compilation hook gets the integer it draws.
 TRANSPILER_SEED = 24
 
 
@@ -89,8 +84,8 @@ async def record_sampling_source(*, bool_array: np.ndarray, shots: int, **source
         table=[row],
         key=SAMPLING_ARTIFACT_KEY,
         description=(
-            "Where the samples of this run came from. Paste qiskit_runtime_job_id or "
-            "qrmi_result_dir into the Sampling parameters of a new run to reuse them."
+            "Where the samples of this run came from. Paste qiskit_runtime_job_id (IQP) or "
+            "qrmi_result_dir (Slurm) into the Sampling parameters of a new run to reuse them."
         ),
     )
 
@@ -100,9 +95,21 @@ async def _load_runtime(runner_name: str) -> QuantumRuntime:
         return await QuantumRuntime.load(runner_name)
     except ValueError as exc:
         raise RuntimeError(
-            f"Quantum source 'real-device' requested but QuantumRuntime block "
-            f"'{runner_name}' is not defined. Set quantum_source='random' to use "
-            "deterministic random sampling instead."
+            f"QuantumRuntime block '{runner_name}' is not defined. It is needed only to "
+            "reload an IBM Quantum job by qiskit_runtime_job_id."
+        ) from exc
+
+
+async def _load_qrmi_runtime(block_name: str):
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    try:
+        return await QrmiRuntimeBlock.aload_runtime(block_name)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Quantum source 'real-device' requested but QrmiRuntimeBlock '{block_name}' "
+            "could not be loaded. Set quantum_source='random' to use deterministic random "
+            "sampling instead."
         ) from exc
 
 
@@ -117,76 +124,59 @@ async def quantum_sampling(
     circuit_params: CircuitParameters,
     sampling_params: SamplingParameters,
 ) -> np.ndarray:
-    """Build, compile and sample the LUCJ circuit on a quantum computer.
+    """Build the LUCJ circuit and sample it through the QRMI runtime block.
 
-    Without ``qrmi_runtime_config``, the circuit is compiled on the workflow
-    host for the Target of the ``runner_name`` QuantumRuntime block and sampled
-    through IBM Quantum Runtime. With it, the host prepares the circuit for QPY
-    and a QRMI Slurm job compiles it on the compute node with the same pass
-    manager and seed.
+    The host runs the ffsim pre-init passes and expands the circuit for QPY. The
+    block's scheduler decides where the SQD compilation hook runs: in this
+    process for ``iqp``, on the compute node for ``slurm``. Both compile with the
+    same pass manager and seed.
 
     Args:
         lucj_params: LUCJ operator parameters, including the system size.
         circuit_params: Circuit and transpiler settings.
-        sampling_params: Shots, runtime selection and sampler options.
+        sampling_params: Shots and the QRMI runtime block.
 
     Returns:
         Sampled bitstrings as a 2D bool array.
     """
+    from sqd_common.qrmi import compiled_circuit_summary, make_qrmi_runtime
+
     logger = get_run_logger()
     rng = np.random.default_rng(TRANSPILER_SEED)
     shots = sampling_params.shots
-    qrmi_config = sampling_params.qrmi_runtime_config
+    runtime = make_qrmi_runtime(
+        await _load_qrmi_runtime(sampling_params.runtime_block_name),
+        transpile_config=circuit_transpile_options(circuit_params, rng),
+    )
+    lucj_circ = build_lucj_circuit(lucj_params=lucj_params, circuit_params=circuit_params)
+    logger.info(
+        "Submitting sampler workload to QRMI resource %s (scheduler=%s, shots=%s).",
+        runtime.resource,
+        runtime.scheduler,
+        shots,
+    )
+    pub_result = await runtime.sampler(sampler_pubs=[(lucj_circ,)], shots=shots)
+    bool_array, num_shots = extract_bool_array(pub_result, circuit_params.use_reset_mitigation)
 
-    if qrmi_config is not None:
-        from sqd_common.qrmi import compiled_circuit_summary, make_qrmi_runtime
-
-        # The compute node compiles with the seed the host path would draw.
-        runtime = make_qrmi_runtime(
-            qrmi_config, transpile_config=circuit_transpile_options(circuit_params, rng)
-        )
-        lucj_circ = build_lucj_circuit(lucj_params=lucj_params, circuit_params=circuit_params)
-        logger.info(
-            "Submitting sampler workload to QRMI resource %s (shots=%s).", runtime.resource, shots
-        )
-        pub_result = await runtime.sampler(sampler_pubs=[(lucj_circ,)], shots=shots)
+    slurm = pub_result.metadata.get("qcsc_slurm")
+    if slurm is not None:
         summary = compiled_circuit_summary(pub_result)
         if summary is None:
             logger.warning("The compiled circuit (isa.qpy) is not readable from this host.")
         else:
             logger.info(summary)
-        bool_array, num_shots = extract_bool_array(pub_result, circuit_params.use_reset_mitigation)
-        record = pub_result.metadata.get("qcsc_slurm") or {}
-        await record_sampling_source(
-            bool_array=bool_array,
-            shots=num_shots,
-            source="qrmi",
-            resource=runtime.resource,
-            qrmi_result_dir=record.get("work_dir"),
-            slurm_job_id=record.get("job_id"),
-        )
-        return bool_array
-
-    runtime = await _load_runtime(sampling_params.runner_name)
-    lucj_circ = build_lucj_circuit(lucj_params=lucj_params, circuit_params=circuit_params)
-    isa_circuit = transpile_lucj_circuit(
-        circuit=lucj_circ,
-        target=await runtime.get_target(),
-        circuit_params=circuit_params,
-        seed=rng,
-    )
-    options = dict(sampling_params.sampler_options)
-    options["params"] = {**options.get("params", {}), "shots": shots}
-    logger.info("Submitting sampler workload to %s (shots=%s).", runtime.resource_name, shots)
-    pub_result = await runtime.sampler(sampler_pubs=[(isa_circuit,)], options=options)
-    bool_array, num_shots = extract_bool_array(pub_result, circuit_params.use_reset_mitigation)
+        source = dict(qrmi_result_dir=slurm.get("work_dir"), slurm_job_id=slurm.get("job_id"))
+    else:
+        iqp = pub_result.metadata.get("qcsc_qrmi") or {}
+        (report,) = iqp.get("pubs") or [{}]
+        logger.info(f"Instruction counts = {report.get('isa_ops')}")
+        source = dict(qiskit_runtime_job_id=iqp.get("job_id"))
     await record_sampling_source(
         bool_array=bool_array,
         shots=num_shots,
-        source="ibm-runtime",
-        resource=runtime.resource_name,
-        # The result carries no job ID; prefect-qiskit records it in job-metrics.
-        note="Job ID: see the job-metrics artifact of this run.",
+        source=f"qrmi-{runtime.scheduler}",
+        resource=runtime.resource,
+        **source,
     )
     return bool_array
 
@@ -258,7 +248,11 @@ async def load_qrmi_result(
             raise FileNotFoundError(f"QRMI job directory has no {path.name}: {job_dir}")
     request = json.loads(request_path.read_text(encoding="utf-8"))
     logger.info("Loading samples from QRMI job directory %s.", job_dir)
-    pub_result = decode_result(result_path, request["shots"], request["registers"])
+    registers = request["registers"]
+    # Schema 1 job directories hold one PUB's registers; schema 2 holds a list.
+    if isinstance(registers, dict):
+        registers = [registers]
+    pub_result = decode_result(result_path, request["shots"], registers)
     bool_array, num_shots = extract_bool_array(pub_result, circuit_params.use_reset_mitigation)
     await record_sampling_source(
         bool_array=bool_array,

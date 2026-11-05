@@ -1,10 +1,9 @@
-"""Run an SQD flow once from a FlowParameters JSON file, without a deployment.
+"""Run the ``sqd`` flow once from a FlowParameters JSON file, without a deployment.
 
 Usage::
 
     cd algorithms/open_loop/sqd
-    python exec.py fulqrum default_params/fulqrum_n2_random.json
-    python exec.py dice default_params/dice_n2.json
+    python exec.py default_params/n2_random.json
 """
 
 import asyncio
@@ -13,19 +12,15 @@ from pathlib import Path
 
 
 def main():
-    if len(sys.argv) != 3 or sys.argv[1] not in {"fulqrum", "dice"}:
-        raise SystemExit("Usage: python exec.py {fulqrum|dice} <params.json>")
+    if len(sys.argv) != 2:
+        raise SystemExit("Usage: python exec.py <params.json>")
 
-    if sys.argv[1] == "fulqrum":
-        from sqd_fulqrum.main import FlowParameters
-        from sqd_fulqrum.main import sqd_2405_05068_fulqrum as sqd_flow
-    else:
-        from sqd_dice.main import FlowParameters
-        from sqd_dice.main import sqd_2405_05068 as sqd_flow
+    from sqd_common.flow_params import FlowParameters
+    from sqd_common.main import sqd
 
-    json_file = Path(sys.argv[2]).expanduser().resolve()
+    json_file = Path(sys.argv[1]).expanduser().resolve()
     params = FlowParameters.model_validate_json(json_file.read_text())
-    print(asyncio.run(sqd_flow(parameters=params)))
+    print(asyncio.run(sqd(parameters=params)))
 
 
 if __name__ == "__main__":

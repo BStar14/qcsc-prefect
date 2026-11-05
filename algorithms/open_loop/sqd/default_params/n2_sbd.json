@@ -1,7 +1,7 @@
 {
   "molecule": {
     "fcidump_file": "algorithms/open_loop/sqd/data/n2_631g_fc.fcidump",
-    "spin_sq": 0.0,
+    "spin_sq": null,
     "ccsd_maxiter": 4
   },
   "circuit": {
@@ -16,14 +16,14 @@
     "sabre_layout_trials": 10000
   },
   "sampling": {
-    "quantum_source": "real-device",
-    "runner_name": "ibm-runner",
-    "qiskit_runtime_job_id": "YOUR_QISKIT_RUNTIME_JOB_ID"
+    "quantum_source": "random",
+    "shots": 10000,
+    "random_seed": 24
   },
   "sqd": {
-    "subspace_dim": 1000000,
-    "num_batches": 4,
-    "max_iterations": 5
+    "subspace_dim": 10000,
+    "num_batches": 2,
+    "max_iterations": 2
   },
-  "solver_block_name": "sqd-fulqrum-solver"
+  "solver_block_ref": "sbd_solver_job/sqd-sbd-solver"
 }

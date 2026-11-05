@@ -1,15 +1,16 @@
-"""SQD-owned QPY preparation and QrmiRuntime construction for QRMI sampling.
+"""SQD-owned QPY preparation and the SQD hooks of a QrmiRuntime.
 
-These helpers run on the workflow host. The compute-node compilation hook is
-``sqd_common.transpile:transpile_for_target``, which does not import ffsim.
+These helpers run on the workflow host. The compilation hook is
+``sqd_common.transpile:transpile_for_target``. It runs in the workflow process
+for ``scheduler="iqp"`` and on the compute node for ``scheduler="slurm"``, and
+imports neither ffsim nor Prefect.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import dataclasses
 from functools import partial
 from pathlib import Path
-from typing import Any
 
 from ffsim.qiskit import PRE_INIT
 from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiRuntime
@@ -19,7 +20,6 @@ from qiskit.primitives import PrimitiveResult
 from sqd_common.transpile import isa_gate_depth
 
 TRANSPILER = "sqd_common.transpile:transpile_for_target"
-RESERVED_KEYS = frozenset({"prepare", "transpiler", "transpile_config"})
 
 
 def prepare_sampler_circuit(circuit, *, transpile_config: dict) -> PreparedCircuit:
@@ -37,33 +37,28 @@ def prepare_sampler_circuit(circuit, *, transpile_config: dict) -> PreparedCircu
     raise RuntimeError("ffsim gates remain after ten decomposition rounds")
 
 
-def make_qrmi_runtime(
-    qrmi_runtime_config: Mapping[str, Any], transpile_config: dict
-) -> QrmiRuntime:
-    """Build a QrmiRuntime with the SQD preparation and compilation hooks.
+def make_qrmi_runtime(block_runtime: QrmiRuntime, transpile_config: dict) -> QrmiRuntime:
+    """Replace the hooks of a ``QrmiRuntimeBlock`` runtime with the SQD ones.
 
-    ``qrmi_runtime_config`` holds the QrmiRuntime fields chosen per run (job
-    root, block names, resource, monitoring). The hooks and their configuration
-    come from the workflow's circuit parameters, so they cannot be set here.
+    The block holds where to sample (scheduler, resource, Slurm blocks or IQP
+    settings). The preparation, the compilation hook and its configuration come
+    from the workflow's circuit parameters, so the block's ``transpiler`` and
+    ``transpile_config`` are replaced.
     """
-    reserved = RESERVED_KEYS & set(qrmi_runtime_config)
-    if reserved:
-        raise ValueError(
-            f"qrmi_runtime_config must not set {sorted(reserved)}: the SQD workflow supplies "
-            "its own compilation hooks, configured by parameters.circuit."
-        )
-    return QrmiRuntime(
-        **qrmi_runtime_config,
+    return dataclasses.replace(
+        block_runtime,
         prepare=partial(prepare_sampler_circuit, transpile_config=transpile_config),
         transpiler=TRANSPILER,
+        transpile_config={},
     )
 
 
 def compiled_circuit_summary(result: PrimitiveResult) -> str | None:
-    """Describe the circuit the compute node compiled, as the host path logs it.
+    """Describe the circuit a QRMI Slurm job compiled on the compute node.
 
-    Reads ``isa.qpy`` from the QRMI job directory recorded in the result
-    metadata. Returns None when the file is not readable from this host.
+    Reads ``isa.qpy`` from the job directory recorded in the result metadata.
+    Returns None for IQP, which compiles in this process and records its report
+    in the metadata, or when the file is not readable from this host.
     """
     work_dir = (result.metadata.get("qcsc_slurm") or {}).get("work_dir")
     path = Path(work_dir) / "isa.qpy" if work_dir else None

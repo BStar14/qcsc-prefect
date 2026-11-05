@@ -18,22 +18,26 @@ run therefore reuses them and repeats only ``sqd_loop``, which continues from
 its checkpoint after the last completed recovery round.
 """
 
+import numpy as np
 from prefect import get_run_logger
 from qcsc_workflow_utility import (
     ElectronicProperties,
     compute_molecular_integrals_from_fcidump,
     compute_molecular_integrals_from_geometry,
+    to_sbd_closed_shell,
 )
 
 from sqd_common.flow_params import FCIDumpFile, FlowParameters, MoleculeGeometry
 from sqd_common.lucj import get_lucj_params
 from sqd_common.postprocess import SolverBlock, sqd_loop
+from sqd_common.recovery import BatchTransformFn
 from sqd_common.sampling import (
     load_qrmi_result,
     load_runtime_job,
     quantum_sampling,
     random_bool_array,
 )
+from sqd_common.solvers import FULQRUM_SLUG, SBD_SLUG, solver_class, solver_slug
 
 
 async def load_solver_block(solver_cls: type, name: str) -> SolverBlock:
@@ -46,6 +50,45 @@ async def load_solver_block(solver_cls: type, name: str) -> SolverBlock:
         raise
     logger.info("Solver OK: %s '%s'.", solver_cls.__name__, name)
     return solver
+
+
+def check_solver_input(slug: str, elec_props: ElectronicProperties) -> None:
+    """Reject a molecule the selected solver cannot solve, before any quantum job.
+
+    SBD takes closed-shell systems with ``spin_sq`` None only. fulqrum has no spin
+    penalty, so it ignores ``spin_sq``.
+    """
+    if slug == SBD_SLUG:
+        from qcsc_prefect_sbd import check_sbd_input
+
+        hartree_fock = np.array([(1 << elec_props.num_electrons[0]) - 1], dtype=np.int64)
+        check_sbd_input(
+            ci_strings=(hartree_fock, hartree_fock),
+            nelec=elec_props.num_electrons,
+            spin_sq=elec_props.spin_sq,
+        )
+    elif slug == FULQRUM_SLUG and elec_props.spin_sq:
+        get_run_logger().warning(
+            f"spin_sq={elec_props.spin_sq} is ignored: the fulqrum solver applies no spin penalty."
+        )
+
+
+def batch_transform(
+    slug: str, subspace_dim: int, elec_props: ElectronicProperties
+) -> BatchTransformFn | None:
+    """SBD needs the Hartree-Fock determinant first and one set for alpha and beta."""
+    if slug != SBD_SLUG:
+        return None
+
+    def to_sbd(batches, rng):
+        return to_sbd_closed_shell(
+            batches,
+            subspace_dim=subspace_dim,
+            num_elec_a=elec_props.num_electrons[0],
+            rng=rng,
+        )
+
+    return to_sbd
 
 
 def compute_molecular_integrals(parameters: FlowParameters) -> ElectronicProperties:
@@ -68,27 +111,28 @@ def compute_molecular_integrals(parameters: FlowParameters) -> ElectronicPropert
     raise TypeError("Unsupported molecule type")
 
 
-async def run_sqd_pattern(
-    parameters: FlowParameters,
-    solver_cls: type,
-    artifact_key: str,
-) -> float:
+async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> float:
     """Run Map → Optimize → Execute → Post-process and return the lowest energy.
+
+    The solver block of ``parameters.solver_block_ref`` is loaded first and the
+    molecule is checked against it right after Map, so a bad block name or input
+    the solver cannot solve fails before any quantum job.
 
     Args:
         parameters: Flow parameters.
-        solver_cls: Solver block class to load ``parameters.solver_block_name`` with.
         artifact_key: Key of the configuration recovery table artifact.
 
     Returns:
         Minimum ground state energy solved by SQD.
     """
     logger = get_run_logger()
-    solver = await load_solver_block(solver_cls, parameters.solver_block_name)
+    slug, block_name = solver_slug(parameters.solver_block_ref)
+    solver = await load_solver_block(solver_class(slug), block_name)
     sampling = parameters.sampling
 
     # Map
     elec_props = compute_molecular_integrals(parameters)
+    check_solver_input(slug, elec_props)
 
     if sampling.quantum_source == "random":
         # No circuit runs, so the flow skips Optimize and Execute.
@@ -125,4 +169,5 @@ async def run_sqd_pattern(
         sqd_params=parameters.sqd,
         solver=solver,
         artifact_key=artifact_key,
+        batch_transform=batch_transform(slug, parameters.sqd.subspace_dim, elec_props),
     )

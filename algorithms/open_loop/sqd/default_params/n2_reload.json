@@ -17,14 +17,13 @@
   },
   "sampling": {
     "quantum_source": "real-device",
-    "shots": 100000,
     "runner_name": "ibm-runner",
-    "sampler_options": {}
+    "qiskit_runtime_job_id": "YOUR_QISKIT_RUNTIME_JOB_ID"
   },
   "sqd": {
-    "subspace_dim": 400000,
+    "subspace_dim": 1000000,
     "num_batches": 4,
     "max_iterations": 5
   },
-  "solver_block_name": "sqd-fulqrum-solver"
+  "solver_block_ref": "fulqrum_solver_job/sqd-fulqrum-solver"
 }

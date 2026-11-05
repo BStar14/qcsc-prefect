@@ -10,7 +10,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+# QrmiRuntimeBlock that samples, and the IBM QuantumRuntime block that reloads a job.
+DEFAULT_QRMI_BLOCK_NAME = "qrmi-runtime"
 DEFAULT_RUNTIME_BLOCK_NAME = "ibm-runner"
+DEFAULT_SOLVER_BLOCK_REF = "fulqrum_solver_job/sqd-fulqrum-solver"
 # Repository root of a source checkout (algorithms/open_loop/sqd/sqd_common/ is four levels down).
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -32,11 +35,11 @@ class MoleculeGeometry(BaseModel):
         description="Whether to use symmetry, otherwise string of point group name.",
         title="Symmetry",
     )
-    spin_sq: float = Field(
+    spin_sq: float | None = Field(
         default=0.0,
         description=(
-            "Target value for the total spin squared for the ground state. "
-            "The DICE solver uses it as a spin penalty; fulqrum ignores it."
+            "Target value for the total spin squared for the ground state, or null for no "
+            "target. DICE uses it as a spin penalty, fulqrum ignores it, and SBD requires null."
         ),
         title="Total Spin Squared",
     )
@@ -75,11 +78,11 @@ class FCIDumpFile(BaseModel):
             return str(path)
         return str(REPO_ROOT / path)
 
-    spin_sq: float = Field(
+    spin_sq: float | None = Field(
         default=0.0,
         description=(
-            "Target value for the total spin squared for the ground state. "
-            "The DICE solver uses it as a spin penalty; fulqrum ignores it."
+            "Target value for the total spin squared for the ground state, or null for no "
+            "target. DICE uses it as a spin penalty, fulqrum ignores it, and SBD requires null."
         ),
         title="Total Spin Squared",
     )
@@ -194,37 +197,29 @@ class SamplingParameters(BaseModel):
         title="Random Seed",
         ge=0,
     )
+    runtime_block_name: str = Field(
+        default=DEFAULT_QRMI_BLOCK_NAME,
+        description=(
+            "QrmiRuntimeBlock that samples the circuit, through IQP from the workflow "
+            "process or in a Slurm job (its scheduler). The flow sets the transpiler "
+            "hook and its configuration from the Circuit settings."
+        ),
+        title="QRMI Runtime Block",
+    )
     runner_name: str = Field(
         default=DEFAULT_RUNTIME_BLOCK_NAME,
         description=(
-            "QuantumRuntime block for IBM Quantum Runtime sampling. Not used with "
-            "QRMI Runtime Config."
+            "IBM QuantumRuntime block whose credentials read the job of Load from Qiskit "
+            "Runtime Job ID. Not used for sampling."
         ),
-        title="Quantum Runtime Block",
-    )
-    sampler_options: dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Extra IBM Quantum Runtime sampler options, merged with Shots "
-            "(for example {'options': {'dynamical_decoupling': {'enable': true}}}). "
-            "Not supported with QRMI."
-        ),
-        title="Sampler Options",
-    )
-    qrmi_runtime_config: dict[str, Any] | None = Field(
-        default=None,
-        description=(
-            "QrmiRuntime settings to sample through QRMI on Slurm (root_dir, "
-            "command_block_name, execution_profile_block_name, hpc_profile_block_name, "
-            "resource). Leave empty to use the Quantum Runtime Block."
-        ),
-        title="QRMI Runtime Config",
+        title="Quantum Runtime Block (reload)",
     )
     qiskit_runtime_job_id: str | None = Field(
         default=None,
         description=(
-            "Load the samples of a finished IBM Quantum Runtime job instead of sampling. "
-            "Uses the credentials of the Quantum Runtime Block."
+            "Load the samples of a finished IBM Quantum job (for example the job_id of an "
+            "IQP run in the sqd-sampling-source artifact) instead of sampling. Uses the "
+            "credentials of the Quantum Runtime Block (reload)."
         ),
         title="Load from Qiskit Runtime Job ID",
     )
@@ -232,7 +227,8 @@ class SamplingParameters(BaseModel):
         default=None,
         description=(
             "Load the samples of a finished QRMI Slurm job instead of sampling. "
-            "Give its job directory (the work_dir in the sqd-sampling-source artifact)."
+            "Give its job directory (the qrmi_result_dir in the sqd-sampling-source "
+            "artifact)."
         ),
         title="Load from QRMI Job Directory",
     )
@@ -246,22 +242,22 @@ class SamplingParameters(BaseModel):
         ]
         if len(reloads) > 1:
             raise ValueError("Set at most one of qiskit_runtime_job_id and qrmi_result_dir.")
-        if self.quantum_source == "random":
-            conflicts = reloads + (
-                ["qrmi_runtime_config"] if self.qrmi_runtime_config is not None else []
-            )
-            if conflicts:
-                raise ValueError(f"Quantum Source 'random' cannot be combined with {conflicts[0]}.")
-        if self.qrmi_runtime_config is not None and self.qiskit_runtime_job_id is not None:
-            raise ValueError(
-                "qiskit_runtime_job_id loads an IBM Quantum Runtime job; "
-                "use qrmi_result_dir with qrmi_runtime_config."
-            )
-        if self.qrmi_runtime_config is not None and self.sampler_options:
-            raise ValueError("sampler_options are not supported with qrmi_runtime_config.")
-        if "shots" in self.sampler_options.get("params", {}):
-            raise ValueError("Set shots with the Shots parameter, not in sampler_options.")
+        if self.quantum_source == "random" and reloads:
+            raise ValueError(f"Quantum Source 'random' cannot be combined with {reloads[0]}.")
         return self
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_removed_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            removed = {
+                "qrmi_runtime_config": "save a QrmiRuntimeBlock and set runtime_block_name",
+                "sampler_options": "QRMI takes only the Shots parameter",
+            }
+            for name, hint in removed.items():
+                if name in data:
+                    raise ValueError(f"sampling.{name} was removed in sqd 2.0: {hint}.")
+        return data
 
 
 class SQDParameters(BaseModel):
@@ -314,7 +310,7 @@ class FlowParameters(BaseModel):
     """Parameters of an SQD workflow run, grouped by Qiskit Patterns stage.
 
     Map: ``molecule``. Optimize and Execute: ``circuit`` and ``sampling``.
-    Post-process: ``sqd`` and ``solver_block_name``.
+    Post-process: ``sqd`` and ``solver_block_ref``.
     """
 
     molecule: MoleculeGeometry | FCIDumpFile = Field(
@@ -335,7 +331,24 @@ class FlowParameters(BaseModel):
         description="Configuration recovery and diagonalization settings.",
         title="SQD",
     )
-    solver_block_name: str = Field(
-        description="Name of the solver block that diagonalizes each subspace.",
+    solver_block_ref: str = Field(
+        default=DEFAULT_SOLVER_BLOCK_REF,
+        description=(
+            "Solver block that diagonalizes each subspace, as '<block type slug>/<block "
+            "name>': fulqrum_solver_job/<name> (default), dice_shci_solver_job/<name> "
+            "(needs sqd[dice]) or sbd_solver_job/<name> (needs sqd[sbd]; closed shell, "
+            "Total Spin Squared null)."
+        ),
         title="Solver Block",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_solver_block_name(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "solver_block_name" in data:
+            raise ValueError(
+                "solver_block_name was removed in sqd 2.0: set solver_block_ref to "
+                f"'fulqrum_solver_job/{data['solver_block_name']}' (or "
+                "dice_shci_solver_job/..., sbd_solver_job/...)."
+            )
+        return data

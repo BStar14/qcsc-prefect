@@ -1,34 +1,43 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sqd_dice"
-version = "1.4.0"
-description = "Prefect workflow of SQD experiment from arXiv:2405.05068."
+name = "sqd"
+version = "2.0.0"
+description = "Prefect workflow of the SQD experiment from arXiv:2405.05068 with the fulqrum, DICE or SBD solver."
+readme = "README.md"
+license = "Apache-2.0"
 authors = [
-    { name = "Naoki Kanazawa", email = "knzwnao@jp.ibm.com" }
+    { name = "Naoki Kanazawa", email = "knzwnao@jp.ibm.com" },
+    { name = "Boseong Kim", email = "boseong.kim@ibm.com" },
 ]
 maintainers = [
-    { name = "Naoki Kanazawa", email = "knzwnao@jp.ibm.com" }
+    { name = "Boseong Kim", email = "boseong.kim@ibm.com" },
 ]
 requires-python = ">=3.11"
+# Installed from a source checkout only; the qcsc-prefect packages come from the
+# path sources below. The compute node needs the fulqrum build separately
+# (packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh).
 dependencies = [
     "ffsim",
-    "Jinja2",
-    "qiskit-addon-sqd",
-    "prefect-qiskit",
+    "numpy",
     "prefect",
+    "prefect-qiskit",
+    "pydantic",
     "pydantic_numpy",
-    "qcsc-prefect-dice",
+    "qiskit",
+    "qiskit-addon-sqd>=0.12.0",
+    "qiskit-ibm-runtime",
+    "qcsc-prefect-fulqrum==0.3.0",
+    "qcsc-prefect-qiskit[slurm]==0.3.0",
     "qcsc_workflow_utility",
 ]
 
 [project.optional-dependencies]
-# sqd_fulqrum workflow. The compute node needs the fulqrum build separately
-# (packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh).
-fulqrum = ["qcsc-prefect-fulqrum==0.3.0"]
-qrmi = ["qcsc-prefect-qiskit[slurm]==0.3.0"]
+dice = ["qcsc-prefect-dice==0.3.0"]
+sbd = ["qcsc-prefect-sbd==0.3.0"]
+all = ["sqd[dice,sbd]"]
 
 [tool.uv.sources]
 qcsc-prefect-core = { path = "../../../packages/qcsc-prefect-core", editable = true }
@@ -38,6 +47,7 @@ qcsc-prefect-executor = { path = "../../../packages/qcsc-prefect-executor", edit
 qcsc-prefect-dice = { path = "../../../packages/qcsc-prefect-dice", editable = true }
 qcsc-prefect-fulqrum = { path = "../../../packages/qcsc-prefect-fulqrum", editable = true }
 qcsc-prefect-qiskit = { path = "../../../packages/qcsc-prefect-qiskit", editable = true }
+qcsc-prefect-sbd = { path = "../../../packages/qcsc-prefect-sbd", editable = true }
 qcsc_workflow_utility = { path = "../../qcsc_workflow_utility", editable = true }
 
 [tool.setuptools]
@@ -46,7 +56,5 @@ include-package-data = true
 zip-safe = false
 
 [project.scripts]
-sqd-deploy = "sqd_dice.main:deploy"
-sqd-create-blocks = "sqd_dice.create_blocks:main"
-sqd-fulqrum-deploy = "sqd_fulqrum.main:deploy"
-sqd-fulqrum-create-blocks = "sqd_fulqrum.create_blocks:main"
+sqd-deploy = "sqd_common.main:deploy"
+sqd-create-blocks = "sqd_common.create_blocks:main"

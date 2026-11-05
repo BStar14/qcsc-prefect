@@ -1,6 +1,8 @@
-"""Create the Prefect blocks required for the SQD workflow.
+"""Create the Prefect blocks of the SQD workflow with the DICE solver.
 
-Shots and sampler options are flow parameters, not block settings.
+An optional ``[runtime]`` table also saves the ``QrmiRuntimeBlock`` that samples
+(``sampling.runtime_block_name`` of each run, default ``qrmi-runtime``). Shots are
+a flow parameter, not a block setting.
 """
 
 from __future__ import annotations
@@ -12,6 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from qcsc_prefect_dice import create_dice_blocks
+from sqd_common.runtime_block import (
+    build_runtime_block,
+    runtime_block_name,
+    runtime_block_settings,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -48,6 +55,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--execution-profile-block-name")
     parser.add_argument("--hpc-profile-block-name")
     parser.add_argument("--solver-block-name")
+    parser.add_argument("--runtime-block-name")
 
     parser.add_argument("--select-cutoff", type=float)
     parser.add_argument("--davidson-tol", type=float)
@@ -136,8 +144,8 @@ def _default_mpi_options(*, hpc_target: str, mpiprocs: int) -> list[str]:
 # Run settings that belong to the flow parameters, not to the blocks.
 FLOW_PARAMETER_KEYS = {
     "shots": "sampling.shots",
-    "sampler_options_json": "sampling.sampler_options",
-    "options_variable_name": "sampling.shots and sampling.sampler_options",
+    "sampler_options_json": "sampling.shots",
+    "options_variable_name": "sampling.shots",
 }
 
 
@@ -150,6 +158,9 @@ def main() -> None:
                 f"'{key}' is not a block setting. Set {parameter} in the flow "
                 "parameters of each run instead."
             )
+    # Validate [runtime] before saving any block.
+    runtime = runtime_block_settings(config["runtime"]) if "runtime" in config else None
+    runtime_name = runtime_block_name(args.runtime_block_name, config)
 
     hpc_target = (
         str(_pick_value(args.hpc_target, config.get("hpc_target"), "miyabi")).strip().lower()
@@ -265,6 +276,11 @@ def main() -> None:
     print(f"  HPC profile block: {block_names['hpc_profile_block_name']}")
     print(f"  Work directory: {Path(str(work_dir)).expanduser().resolve()}")
     print(f"  DICE executable: {Path(str(dice_executable)).expanduser().resolve()}")
+    solver_ref = f"dice_shci_solver_job/{block_names['solver_block_name']}"
+    print(f"  Flow parameter: solver_block_ref = '{solver_ref}'")
+    if runtime is not None:
+        build_runtime_block(runtime).save(runtime_name, overwrite=True)
+        print(f"  QRMI runtime block: {runtime_name} (scheduler={runtime['scheduler']})")
 
 
 if __name__ == "__main__":

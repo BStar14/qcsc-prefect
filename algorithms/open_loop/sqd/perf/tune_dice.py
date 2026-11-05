@@ -11,7 +11,10 @@ from prefect.artifacts import ArtifactFilter, create_table_artifact
 from pydantic import BaseModel, Field
 from qcsc_prefect_blocks.common.blocks import ExecutionProfileBlock
 from qcsc_prefect_dice import DiceSHCISolverJob
-from sqd_dice.main import FlowParameters, sqd_2405_05068
+from qcsc_workflow_utility import DICE_SLUG
+from sqd_common.flow_params import FlowParameters
+from sqd_common.main import sqd
+from sqd_common.solvers import solver_slug
 
 
 async def _maybe_await(value):
@@ -65,10 +68,17 @@ async def main(
 
     Args:
         base_parameters: Base parameter of the SQD experiment. Its
-            ``solver_block_name`` is the DiceSHCISolverJob block to tune.
+            ``solver_block_ref`` (``dice_shci_solver_job/<name>``) is the
+            DiceSHCISolverJob block to tune.
         experiments: Parameters to overwrite.
     """
     logger = get_run_logger()
+    slug, base_solver_name = solver_slug(base_parameters.solver_block_ref)
+    if slug != DICE_SLUG:
+        raise ValueError(
+            f"base_parameters.solver_block_ref must be '{DICE_SLUG}/<name>'; "
+            f"got {base_parameters.solver_block_ref!r}."
+        )
 
     records = []
     for experiment in experiments:
@@ -78,9 +88,7 @@ async def main(
         tmp_exec_name = f"tmp-exec-{uuid.uuid4().hex}"
 
         # Create temporary solver configuration
-        current_solver = await _maybe_await(
-            DiceSHCISolverJob.load(base_parameters.solver_block_name)
-        )
+        current_solver = await _maybe_await(DiceSHCISolverJob.load(base_solver_name))
         current_exec = await _maybe_await(
             ExecutionProfileBlock.load(current_solver.execution_profile_block_name)
         )
@@ -95,13 +103,13 @@ async def main(
 
         # Update parameters
         current_params = base_parameters.model_copy(deep=True)
-        current_params.solver_block_name = tmp_name
+        current_params.solver_block_ref = f"{DICE_SLUG}/{tmp_name}"
         current_params.sqd.subspace_dim = experiment.subspace_dim
         current_params.sqd.max_iterations = 1
         current_params.sqd.num_batches = 1
 
         try:
-            state = await sqd_2405_05068(
+            state = await sqd(
                 parameters=current_params,
                 return_state=True,
             )

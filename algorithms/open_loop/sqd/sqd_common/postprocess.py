@@ -25,7 +25,7 @@ from sqd_common.checkpoint import (
     write_source,
 )
 from sqd_common.flow_params import SQDParameters
-from sqd_common.recovery import SolveFn, run_configuration_recovery
+from sqd_common.recovery import BatchTransformFn, SolveFn, run_configuration_recovery
 
 # Seed of the configuration recovery and subsampling RNG.
 RECOVERY_SEED = 24
@@ -35,7 +35,10 @@ CHECKPOINT_SUBDIR = "sqd_checkpoints"
 
 
 class SolverBlock(Protocol):
-    """A solver block (DICE, fulqrum) that diagonalizes one CI subspace per call."""
+    """A solver block (fulqrum, DICE, SBD) that diagonalizes one CI subspace per call.
+
+    The recovery loop reads only ``energy`` and ``orbital_occupancies`` of the result.
+    """
 
     async def run(
         self,
@@ -121,6 +124,7 @@ async def sqd_loop(
     sqd_params: SQDParameters,
     solver: SolverBlock,
     artifact_key: str,
+    batch_transform: BatchTransformFn | None = None,
 ) -> float:
     """Self-consistent configuration recovery and subspace diagonalization.
 
@@ -141,6 +145,7 @@ async def sqd_loop(
         sqd_params: Subspace dimension, batches, recovery rounds and checkpointing.
         solver: Solver block that diagonalizes one subspace per call.
         artifact_key: Key of the table artifact with one row per solved subspace.
+        batch_transform: Rewrites each round's subspaces for the solver (SBD).
 
     Returns:
         Lowest energy found, including the nuclear repulsion energy.
@@ -153,17 +158,21 @@ async def sqd_loop(
     run_dir = checkpoint_run_dir(solver)
 
     # A retry's own checkpoint first, then the one the user named, else round 1.
-    resumed_from = run_dir / CKPT_NAME
+    # ``resumed_from`` names another run's checkpoint only; a retry keeps the one its
+    # source.json recorded.
+    loaded_from, resumed_from = run_dir / CKPT_NAME, None
     state = _own_checkpoint(run_dir, key, logger)
-    if state is None and sqd_params.resume_checkpoint:
-        resumed_from, state = _given_checkpoint(sqd_params.resume_checkpoint, key)
+    if state is not None:
+        resumed_from = (read_source(run_dir) or {}).get("resumed_from")
+    elif sqd_params.resume_checkpoint:
+        loaded_from, state = _given_checkpoint(sqd_params.resume_checkpoint, key)
+        resumed_from = str(loaded_from)
     if state is None:
-        resumed_from = None
         occupancies, start_round, best_energy = elec_props.initial_occupancy, 0, None
         rng = np.random.default_rng(RECOVERY_SEED)
     else:
         logger.info(
-            f"[ckpt] RESUME from {resumed_from}: completed {state.next_step} step(s), "
+            f"[ckpt] RESUME from {loaded_from}: completed {state.next_step} step(s), "
             f"best_energy so far={state.best_energy:.8f}"
         )
         occupancies, start_round, best_energy = (
@@ -177,7 +186,7 @@ async def sqd_loop(
     if sqd_params.checkpoint:
         try:
             run_dir.mkdir(parents=True, exist_ok=True)
-            write_source(run_dir, key, resumed_from=resumed_from and str(resumed_from))
+            write_source(run_dir, key, resumed_from=resumed_from)
         except OSError as exc:  # checkpointing must never break the calculation
             logger.warning(f"[ckpt] checkpointing off: cannot write {run_dir} ({exc})")
         else:
@@ -185,7 +194,7 @@ async def sqd_loop(
             def on_round_end(next_round, round_occupancies, best):
                 save_checkpoint(run_dir / CKPT_NAME, round_occupancies, next_round, best, logger)
 
-            if state is not None and resumed_from != run_dir / CKPT_NAME:
+            if state is not None and loaded_from != run_dir / CKPT_NAME:
                 # Copy the resumed state, so a retry of this run finds it before round k+1 ends.
                 on_round_end(start_round, occupancies, best_energy)
 
@@ -206,6 +215,7 @@ async def sqd_loop(
         start_round=start_round,
         best_energy=best_energy,
         on_round_end=on_round_end,
+        batch_transform=batch_transform,
     )
     await create_table_artifact(table=outcome.records, key=artifact_key)
     if on_round_end is not None:
@@ -216,7 +226,7 @@ async def sqd_loop(
                     completed_iterations=max(start_round, sqd_params.max_iterations),
                     max_iterations=sqd_params.max_iterations,
                     best_energy=outcome.best_energy,
-                    resumed_from=resumed_from and str(resumed_from),
+                    resumed_from=resumed_from,
                 )
             ],
             key=CHECKPOINT_ARTIFACT_KEY,
