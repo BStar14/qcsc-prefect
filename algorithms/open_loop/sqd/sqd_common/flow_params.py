@@ -298,7 +298,8 @@ class SQDParameters(BaseModel):
         description=(
             "Continue the recovery of another run from its ckpt_t00_w0.npz (or the folder "
             "that holds it, with its source.json). The samples, the Hamiltonian, Subspace "
-            "Dimension and Batch Number must be the same as in that run; only Max Iteration "
+            "Dimension, Batch Number and the solver type (the slug of Solver Block) must be "
+            "the same as in that run; only Max Iteration and the solver block name "
             "may change. A checkpoint with 32 completed iterations and Max Iteration 200 "
             "continues at iteration 33/200. The file is only read."
         ),

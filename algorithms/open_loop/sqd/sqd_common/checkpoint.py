@@ -10,9 +10,10 @@ seeds the next round:
   return none
 
 ``source.json`` next to it holds the resume key: the samples, the Hamiltonian,
-``subspace_dim`` and ``num_batches`` the checkpoint belongs to. A checkpoint is
-resumed only by a run with the same key. ``max_iterations`` may change, which
-is how a run adds rounds.
+``subspace_dim``, ``num_batches`` and the solver (its block type) the checkpoint
+belongs to. A checkpoint is resumed only by a run with the same key.
+``max_iterations`` may change, which is how a run adds rounds, and so may the
+solver block's name and job settings.
 
 This module has no Prefect dependency.
 """
@@ -81,11 +82,15 @@ def load_checkpoint(path: Path) -> RecoveryCheckpoint:
         )
 
 
-def resume_key(bool_array: np.ndarray, elec_props, sqd_params) -> dict:
-    """What a checkpoint belongs to: the samples, the Hamiltonian and the subspace settings.
+def resume_key(bool_array: np.ndarray, elec_props, sqd_params, *, solver: str) -> dict:
+    """What a checkpoint belongs to: the samples, the Hamiltonian, the subspace settings
+    and the solver.
 
     The Hamiltonian enters through quantities that do not change with the sign or
     rotation of the orbitals, so integrals recomputed from the same geometry match.
+    ``solver`` is the solver block type (``fulqrum_solver_job``, ...): solvers can give
+    different subspaces (SBD puts Hartree-Fock first) and energies, so a recovery
+    continues only with the solver that started it.
     """
     bool_array = np.asarray(bool_array, dtype=bool)
     return {
@@ -98,6 +103,7 @@ def resume_key(bool_array: np.ndarray, elec_props, sqd_params) -> dict:
         "nuclear_repulsion_energy": float(elec_props.nuclear_repulsion_energy),
         "subspace_dim": int(sqd_params.subspace_dim),
         "num_batches": int(sqd_params.num_batches),
+        "solver": str(solver),
     }
 
 
@@ -117,7 +123,7 @@ def key_mismatch(old: dict, new: dict) -> list[str]:
         close(k) for k in ("one_body_eigenvalues", "two_body_norm", "nuclear_repulsion_energy")
     ):
         diff.append("Hamiltonian")
-    diff += [k for k in ("subspace_dim", "num_batches") if old.get(k) != new.get(k)]
+    diff += [k for k in ("subspace_dim", "num_batches", "solver") if old.get(k) != new.get(k)]
     return diff
 
 

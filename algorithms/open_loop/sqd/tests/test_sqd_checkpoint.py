@@ -55,15 +55,24 @@ def test_a_failed_save_is_logged_not_raised(tmp_path, caplog):
     assert "checkpoint save failed" in caplog.text
 
 
+def _key(samples=None, props=None, sqd=None, solver="fulqrum_solver_job"):
+    return checkpoint.resume_key(
+        _samples() if samples is None else samples,
+        props or _elec_props(),
+        sqd or _sqd(),
+        solver=solver,
+    )
+
+
 def test_key_matches_the_same_hamiltonian_in_another_orbital_basis():
     props = _elec_props()
-    key = checkpoint.resume_key(_samples(), props, _sqd())
+    key = _key(props=props)
     # Orbital rotation and sign flips change the tensors but not the Hamiltonian.
     q, _ = np.linalg.qr(np.random.default_rng(7).normal(size=(NORB, NORB)))
     rotated = SimpleNamespace(**vars(props))
     rotated.one_body_tensor = q.T @ props.one_body_tensor @ q
     rotated.two_body_tensor = np.einsum("pqrs,pi,qj,rk,sl->ijkl", props.two_body_tensor, q, q, q, q)
-    assert checkpoint.key_mismatch(key, checkpoint.resume_key(_samples(), rotated, _sqd())) == []
+    assert checkpoint.key_mismatch(key, _key(props=rotated)) == []
 
 
 @pytest.mark.parametrize(
@@ -73,21 +82,23 @@ def test_key_matches_the_same_hamiltonian_in_another_orbital_basis():
         (dict(props=_elec_props(3)), ["Hamiltonian"]),
         (dict(sqd=_sqd(subspace_dim=25)), ["subspace_dim"]),
         (dict(sqd=_sqd(num_batches=3)), ["num_batches"]),
+        (dict(solver="sbd_solver_job"), ["solver"]),
     ],
 )
-def test_key_rejects_other_samples_hamiltonian_and_subspace(change, expected):
-    key = checkpoint.resume_key(_samples(), _elec_props(), _sqd())
-    other = checkpoint.resume_key(
-        change.get("samples", _samples()),
-        change.get("props", _elec_props()),
-        change.get("sqd", _sqd()),
-    )
-    assert checkpoint.key_mismatch(key, other) == expected
+def test_key_rejects_other_samples_hamiltonian_subspace_and_solver(change, expected):
+    assert checkpoint.key_mismatch(_key(), _key(**change)) == expected
+
+
+def test_key_without_a_solver_is_refused():
+    # source.json written before the solver joined the resume key.
+    old = _key()
+    del old["solver"]
+    assert checkpoint.key_mismatch(old, _key()) == ["solver"]
 
 
 def test_source_round_trip(tmp_path):
     assert checkpoint.read_source(tmp_path) is None
-    key = checkpoint.resume_key(_samples(), _elec_props(), _sqd())
+    key = _key()
     checkpoint.write_source(tmp_path, key, resumed_from=None)
     source = checkpoint.read_source(tmp_path)
     assert checkpoint.key_mismatch(source, key) == [] and source["resumed_from"] is None

@@ -389,6 +389,9 @@ def test_load_qrmi_result_requires_result_file(tmp_path):
 
 
 class _SolveFermion:
+    # A fulqrum block in the resume key; subclasses that stand in for it inherit it.
+    _block_type_slug = "fulqrum_solver_job"
+
     def __init__(self):
         self.calls = []
 
@@ -541,6 +544,49 @@ def test_resume_checkpoint_of_other_settings_is_refused_before_any_solve(ckpt_ru
             **change,
         )
     assert solver.calls == []
+
+
+class _OtherSolver(_SolveFermion):
+    _block_type_slug = "sbd_solver_job"
+
+
+class _SameTypeOtherBlock(_SolveFermion):
+    """Another block of the same type, for example with a longer walltime."""
+
+
+def test_solver_kind_is_the_block_type_slug():
+    from qcsc_prefect_fulqrum import FulqrumSolverJob
+
+    assert postprocess.solver_kind(FulqrumSolverJob.model_construct()) == "fulqrum_solver_job"
+    assert postprocess.solver_kind(_OtherSolver()) == "sbd_solver_job"
+
+
+def test_resume_checkpoint_of_another_solver_is_refused_before_any_solve(ckpt_run):
+    ckpt_run("run-a", max_iterations=1)
+    solver = _OtherSolver()
+    with pytest.raises(ValueError, match="other solver.*solver type"):
+        ckpt_run("run-b", solver, max_iterations=3, resume_checkpoint=str(ckpt_run.root / "run-a"))
+    assert solver.calls == []
+
+
+def test_retry_with_another_solver_starts_over(ckpt_run, caplog):
+    ckpt_run("run-a", max_iterations=1)
+    with caplog.at_level(logging.WARNING, logger=LOGGER.name):
+        _, solver, _ = ckpt_run("run-a", _OtherSolver(), max_iterations=2)
+    assert len(solver.calls) == 4  # rounds 1 and 2
+    assert "other solver" in caplog.text
+    assert any(p.name.startswith("run-a.prev-") for p in ckpt_run.root.iterdir())
+
+
+def test_resume_with_another_block_of_the_same_type_continues(ckpt_run):
+    ckpt_run("run-a", max_iterations=1)
+    _, solver, _ = ckpt_run(
+        "run-b",
+        _SameTypeOtherBlock(),
+        max_iterations=2,
+        resume_checkpoint=str(ckpt_run.root / "run-a"),
+    )
+    assert len(solver.calls) == 2  # round 2 only
 
 
 def test_resume_checkpoint_of_another_molecule_is_refused(ckpt_run, lih):

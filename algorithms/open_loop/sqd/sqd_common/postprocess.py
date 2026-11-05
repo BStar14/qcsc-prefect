@@ -67,6 +67,16 @@ def make_block_solver(solver: SolverBlock, elec_props: ElectronicProperties) -> 
     return solve
 
 
+def solver_kind(solver: SolverBlock) -> str:
+    """The block type slug of a solver block (``fulqrum_solver_job``, ...), for the resume key.
+
+    The slug, not the block name, identifies the solver: another block of the same
+    type, for example with a longer walltime, continues the same recovery.
+    """
+    cls = type(solver)
+    return str(getattr(cls, "_block_type_slug", None) or cls.__name__).replace("-", "_")
+
+
 def checkpoint_run_dir(solver: SolverBlock) -> Path:
     """Checkpoint folder of this flow run: ``<root_dir>/sqd_checkpoints/<flow run id>``.
 
@@ -111,8 +121,8 @@ def _given_checkpoint(value: str, key: dict) -> tuple[Path, RecoveryCheckpoint]:
     if diff:
         raise ValueError(
             f"resume_checkpoint: {path} belongs to other {', '.join(diff)}. Resume it with "
-            "the same samples, molecule, Subspace Dimension and Batch Number; only Max "
-            "Iteration may change."
+            "the same samples, molecule, Subspace Dimension, Batch Number and solver type; "
+            "only Max Iteration and the solver block's name and job settings may change."
         )
     return path, load_checkpoint(path)
 
@@ -154,7 +164,7 @@ async def sqd_loop(
         ValueError: If ``resume_checkpoint`` belongs to other samples or settings.
     """
     logger = get_run_logger()
-    key = resume_key(bool_array, elec_props, sqd_params)
+    key = resume_key(bool_array, elec_props, sqd_params, solver=solver_kind(solver))
     run_dir = checkpoint_run_dir(solver)
 
     # A retry's own checkpoint first, then the one the user named, else round 1.

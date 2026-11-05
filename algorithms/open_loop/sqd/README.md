@@ -121,7 +121,10 @@ with the `pip install` command to run.
 
   `source.json` holds the resume key. The new run must use the same samples (the
   same `qrmi_result_dir`, `qiskit_runtime_job_id` or random seed and shots), the
-  same Hamiltonian, `subspace_dim` and `num_batches`. Otherwise it fails before
+  same Hamiltonian, `subspace_dim` and `num_batches`, and the same solver type (the
+  slug of `solver_block_ref`): SBD draws other subspaces than fulqrum or DICE, so a
+  recovery continues only with the solver that started it. The solver block's name
+  and job settings, such as its walltime, may change. Otherwise the run fails before
   any solver job and names what differs. The given checkpoint is only read; the
   new run writes its own. If a run's own checkpoint no longer matches, it is moved
   to `<flow run id>.prev-<time>/` and the recovery starts at round 1.
@@ -304,7 +307,9 @@ Without either table, an existing block is kept.
 | `default_params/fulqrum_n2*.json`, `dice_n2.json` | `default_params/n2*.json` |
 
 Old parameter files fail validation with a message that names the replacement.
-Checkpoints written by 1.x resume unchanged.
+The resume key of a checkpoint now includes the solver type, so a checkpoint
+written before 2.0 is not resumed: a Retry moves it aside and starts at round 1,
+and `resume_checkpoint` refuses it.
 
 ## Tests
 
