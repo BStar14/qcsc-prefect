@@ -36,9 +36,10 @@ sqd_loop [post-process] ◄─────────────────�
   FCIDUMP file, CCSD amplitudes and the initial orbital occupancies. The CCSD kernel
   restarts `ccsd_maxiter` times from its previous amplitudes.
 - **Optimize** (`get_lucj_params`): LUCJ parameters from the CCSD t2 amplitudes,
-  restricted to the interactions a heavy-hex lattice implements without SWAP gates.
-  `compress` optimizes the truncated factorization and `max_ab_pairs` caps the
-  alpha-beta interactions.
+  restricted to the interactions a heavy-hex lattice implements without SWAP gates
+  (alpha-beta pairs every 4th orbital, at most 5).
+  `compress` (on by default, `compress_maxiter` 20) optimizes the truncated
+  factorization.
 - **Execute** (`quantum_sampling`): builds the LUCJ circuit and samples it through the
   QRMI runtime block, which compiles it for the backend Target (see
   [Quantum sampling](#quantum-sampling)). `load_qrmi_result` and `load_runtime_job`
@@ -60,15 +61,21 @@ the solver cannot solve fails before any quantum job.
 
 ## 🎛️ Flow parameters
 
-The flow takes one argument, `parameters`, grouped by stage:
+The flow takes one argument, `parameters`. The Prefect Cloud run form shows its groups
+and fields in this order, following the Qiskit Patterns stages:
 
 | Group | Fields |
 | --- | --- |
 | `molecule` | `{atom, basis, symmetry}` or `{fcidump_file}`, plus `spin_sq` (number or `null`) and `ccsd_maxiter` (default 4) |
-| `circuit` | `n_lucj_layers`, `compress`, `compress_maxiter`, `max_ab_pairs`, `use_reset_mitigation`, transpiler settings |
-| `sampling` | `quantum_source`, `shots`, `random_seed`, `runtime_block_name`, `qiskit_runtime_job_id`, `qrmi_result_dir`, `runner_name` (reload only) |
-| `sqd` | `subspace_dim`, `num_batches`, `max_iterations`, `checkpoint` (default on), `resume_checkpoint` |
+| `circuit` | `n_lucj_layers` (1), `compress` (on), `compress_maxiter` (20), `use_reset_mitigation`, `configure_transpiler` (off) and `transpiler` |
+| `sampling` | `quantum_source`, `shots` (10000), `runtime_block_name`, `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (reload only) |
+| `sqd` | `subspace_dim` (90000), `num_batches` (4), `max_iterations` (5), `checkpoint` (on), `resume_checkpoint` |
 | `solver_block_ref` | `<block type slug>/<block name>`, default `fulqrum_solver_job/sqd-fulqrum-solver` |
+
+Only `molecule` must be set. The form still marks the three `sqd` fields as required,
+so that they stand out. `circuit.transpiler` holds the optimization level and the SABRE
+layout search (layout trials 10000, SWAP trials 10, max iterations 8). It applies only
+when `configure_transpiler` is on; otherwise these defaults are used.
 
 `default_params/` holds complete examples for N2 (6-31G, 1s cores frozen, 16 orbitals,
 32 qubits), whose integrals are in `data/n2_631g_fc.fcidump`

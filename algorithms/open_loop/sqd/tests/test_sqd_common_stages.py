@@ -68,9 +68,10 @@ def test_flow_parameters_defaults():
     params = _flow_parameters()
     assert params.molecule.ccsd_maxiter == 4
     assert params.molecule.spin_sq == 0.0
-    assert params.circuit.compress is False and params.circuit.max_ab_pairs is None
+    assert params.circuit.compress is True and params.circuit.compress_maxiter == 20
+    assert params.circuit.configure_transpiler is False
     assert params.sampling.quantum_source == "real-device"
-    assert params.sampling.shots == 100_000
+    assert params.sampling.shots == 10_000
     assert params.sampling.runtime_block_name == "qrmi-runtime"
     assert params.sampling.runner_name == "ibm-runner"
     assert params.solver_block_ref == "fulqrum_solver_job/sqd-fulqrum-solver"
@@ -114,14 +115,89 @@ def test_sampling_parameters_reject_conflicts(kwargs, match):
         flow_params.SamplingParameters(**kwargs)
 
 
+def test_only_the_molecule_is_needed():
+    params = flow_params.FlowParameters(molecule={"atom": LIH, "basis": "sto-3g"})
+    sqd = params.sqd
+    assert (sqd.subspace_dim, sqd.num_batches, sqd.max_iterations) == (90_000, 4, 5)
+
+
+def test_transpiler_settings_apply_only_when_configured():
+    custom = flow_params.TranspilerParameters(sabre_layout_trials=7, optimization_level=1)
+    off = flow_params.CircuitParameters(transpiler=custom)
+    on = flow_params.CircuitParameters(configure_transpiler=True, transpiler=custom)
+    assert off.transpile_options == flow_params.TranspilerParameters()
+    assert on.transpile_options == custom
+    options = lucj.circuit_transpile_options(off, 5)
+    assert options == {
+        "optimization_level": 3,
+        "seed_transpiler": 5,
+        "sabre_max_iterations": 8,
+        "sabre_layout_trials": 10000,
+        "sabre_swap_trials": 10,
+    }
+    assert lucj.circuit_transpile_options(on, 5)["sabre_layout_trials"] == 7
+
+
+@pytest.mark.parametrize(
+    "circuit, match",
+    [
+        ({"max_ab_pairs": 2}, "max_ab_pairs was removed"),
+        ({"sabre_layout_trials": 10}, "circuit.transpiler.sabre_layout_trials"),
+        ({"optimization_level": 1}, "configure_transpiler = true"),
+    ],
+)
+def test_circuit_parameters_reject_moved_fields(circuit, match):
+    with pytest.raises(ValidationError, match=match):
+        flow_params.CircuitParameters(**circuit)
+
+
+def _form_order(schema, model):
+    properties = schema["definitions"][model]["properties"]
+    return sorted(properties, key=lambda name: properties[name]["position"])
+
+
+def test_run_form_follows_the_qiskit_patterns_order():
+    """Every field has a position; the Prefect form would otherwise sort alphabetically."""
+    from prefect.utilities.callables import parameter_schema
+    from sqd_common.main import sqd
+
+    schema = parameter_schema(sqd).model_dump_for_openapi()
+    for model in (
+        "FlowParameters",
+        "MoleculeGeometry",
+        "FCIDumpFile",
+        "CircuitParameters",
+        "TranspilerParameters",
+        "SamplingParameters",
+        "SQDParameters",
+    ):
+        properties = schema["definitions"][model]["properties"]
+        positions = [field["position"] for field in properties.values()]
+        assert sorted(positions) == list(range(len(positions))), model
+    assert _form_order(schema, "FlowParameters") == [
+        "molecule",
+        "circuit",
+        "sampling",
+        "sqd",
+        "solver_block_ref",
+    ]
+    assert _form_order(schema, "CircuitParameters")[-2:] == ["configure_transpiler", "transpiler"]
+    assert _form_order(schema, "SamplingParameters")[:2] == ["quantum_source", "shots"]
+    sqd_schema = schema["definitions"]["SQDParameters"]
+    # Defaulted, but marked required so the form highlights them.
+    assert {"subspace_dim", "num_batches", "max_iterations"} <= set(sqd_schema["required"])
+    assert sqd_schema["properties"]["subspace_dim"]["default"] == 90_000
+
+
 # ---------------------------------------------------------------- Optimize
 
 
-def test_interaction_pairs_heavy_hex_and_truncation():
+def test_interaction_pairs_heavy_hex():
     aa, ab = lucj.interaction_pairs(10)
     assert aa == [(p, p + 1) for p in range(9)]
     assert ab == [(0, 0), (4, 4), (8, 8)]
-    assert lucj.interaction_pairs(10, max_ab_pairs=2)[1] == [(0, 0), (4, 4)]
+    # At most five alpha-beta pairs, from orbital 0.
+    assert lucj.interaction_pairs(40)[1] == [(p, p) for p in range(0, 20, 4)]
 
 
 def test_get_lucj_params_matches_ffsim(lih):
@@ -135,15 +211,6 @@ def test_get_lucj_params_matches_ffsim(lih):
     np.testing.assert_allclose(params.diag_coulomb_mats, ref.diag_coulomb_mats)
     np.testing.assert_allclose(params.orbital_rotations, ref.orbital_rotations)
     assert params.diag_coulomb_mats.shape == (2, 2, lih.num_orbitals, lih.num_orbitals)
-
-
-def test_get_lucj_params_max_ab_pairs_zeroes_dropped_pairs(lih):
-    full = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih)
-    capped = lucj.get_lucj_params.fn(flow_params.CircuitParameters(max_ab_pairs=1), lih)
-    # LiH/STO-3G has 6 orbitals: alpha-beta pairs (0,0) and (4,4); the cap keeps (0,0).
-    assert full.diag_coulomb_mats[0, 1, 4, 4] != 0
-    assert capped.diag_coulomb_mats[0, 1, 4, 4] == 0
-    assert capped.diag_coulomb_mats[0, 1, 0, 0] == full.diag_coulomb_mats[0, 1, 0, 0]
 
 
 def test_get_lucj_params_compression_logs_iterations(lih, caplog):
@@ -273,7 +340,10 @@ def test_sampling_uses_the_qrmi_block_with_the_sqd_hooks(monkeypatch, lih, offli
     monkeypatch.setattr(sampling, "_load_qrmi_runtime", load)
     monkeypatch.setattr(qrmi.dataclasses, "replace", lambda obj, **changes: obj.replace(**changes))
     monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
-    circuit_params = flow_params.CircuitParameters(sabre_layout_trials=7)
+    circuit_params = flow_params.CircuitParameters(
+        configure_transpiler=True,
+        transpiler=flow_params.TranspilerParameters(sabre_layout_trials=7),
+    )
     params = lucj.get_lucj_params.fn(circuit_params, lih)
     sampling_params = flow_params.SamplingParameters(shots=4, runtime_block_name="my-qrmi")
     bool_array = asyncio.run(sampling.quantum_sampling.fn(params, circuit_params, sampling_params))

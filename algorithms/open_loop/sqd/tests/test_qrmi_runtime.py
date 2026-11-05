@@ -36,6 +36,7 @@ from sqd_common.flow_params import (  # noqa: E402
     CircuitParameters,
     FlowParameters,
     SamplingParameters,
+    TranspilerParameters,
 )
 from sqd_common.main import ARTIFACT_KEY, sqd  # noqa: E402
 from sqd_common.qrmi import TRANSPILER, make_qrmi_runtime, prepare_sampler_circuit  # noqa: E402
@@ -65,9 +66,10 @@ def h2():
 def circuit_parameters(reset=False):
     return CircuitParameters(
         use_reset_mitigation=reset,
-        sabre_layout_trials=4,
-        sabre_swap_trials=2,
-        sabre_max_iterations=2,
+        configure_transpiler=True,
+        transpiler=TranspilerParameters(
+            sabre_layout_trials=4, sabre_swap_trials=2, sabre_max_iterations=2
+        ),
     )
 
 
