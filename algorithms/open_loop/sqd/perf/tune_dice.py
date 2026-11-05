@@ -1,0 +1,184 @@
+"""Automation script for DICE solver MPI performance tuning."""
+
+import inspect
+import json
+import os
+import subprocess
+import uuid
+
+from prefect import flow, get_client, get_run_logger
+from prefect.artifacts import ArtifactFilter, create_table_artifact
+from pydantic import BaseModel, Field
+from qcsc_prefect_blocks.common.blocks import ExecutionProfileBlock
+from qcsc_prefect_dice import DiceSHCISolverJob
+from qcsc_workflow_utility import DICE_SLUG
+from sqd_common.flow_params import FlowParameters
+from sqd_common.main import sqd
+from sqd_common.solvers import solver_slug
+
+
+async def _maybe_await(value):
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+class DICESetup(BaseModel):
+    """Control parameters in a single experiment attempt."""
+
+    mpiprocs: int = Field(
+        description="Number of MPI process per node to request.",
+        gt=0,
+        title="Num MPI Processes",
+    )
+
+    num_nodes: int = Field(
+        description=(
+            "Number of compute node to request. "
+            "Maximum number of available node per job depends on the queue name."
+        ),
+        gt=0,
+        title="Num Nodes",
+    )
+
+    subspace_dim: int = Field(
+        description="SQD: Dimension d of subsampled bitstrings for diagonalization.",
+        title="Subspace Dimension",
+        ge=1,
+    )
+
+
+@flow(
+    name="dice_perf_tuning",
+)
+async def main(
+    base_parameters: FlowParameters,
+    experiments: list[DICESetup],
+) -> int:
+    """MPI parameter tuning of DICE solver.
+
+    .. note::
+        SQD setup max_iterations and num_batches are fixed to 1.
+        Only one HPC job is scheduled per sub-experiment.
+
+        Each sub-experiment is a separate SQD flow run. To sample only once,
+        set ``base_parameters.sampling.qiskit_runtime_job_id`` (or
+        ``qrmi_result_dir``) to an earlier sampling job, or use
+        ``quantum_source="random"``.
+
+    Args:
+        base_parameters: Base parameter of the SQD experiment. Its
+            ``solver_block_ref`` (``dice_shci_solver_job/<name>``) is the
+            DiceSHCISolverJob block to tune.
+        experiments: Parameters to overwrite.
+    """
+    logger = get_run_logger()
+    slug, base_solver_name = solver_slug(base_parameters.solver_block_ref)
+    if slug != DICE_SLUG:
+        raise ValueError(
+            f"base_parameters.solver_block_ref must be '{DICE_SLUG}/<name>'; "
+            f"got {base_parameters.solver_block_ref!r}."
+        )
+
+    records = []
+    for experiment in experiments:
+        logger.info(f"Running a sub experiment with {experiment}")
+
+        tmp_name = f"tmp-solver-{uuid.uuid4().hex}"
+        tmp_exec_name = f"tmp-exec-{uuid.uuid4().hex}"
+
+        # Create temporary solver configuration
+        current_solver = await _maybe_await(DiceSHCISolverJob.load(base_solver_name))
+        current_exec = await _maybe_await(
+            ExecutionProfileBlock.load(current_solver.execution_profile_block_name)
+        )
+        current_exec.num_nodes = experiment.num_nodes
+        current_exec.mpiprocs = experiment.mpiprocs
+        await _maybe_await(current_exec.save(tmp_exec_name, overwrite=True))
+        current_solver.execution_profile_block_name = tmp_exec_name
+        await _maybe_await(current_solver.save(tmp_name, overwrite=True))
+        logger.debug(
+            f"Created temporary solver/execution-profile blocks {tmp_name}, {tmp_exec_name}"
+        )
+
+        # Update parameters
+        current_params = base_parameters.model_copy(deep=True)
+        current_params.solver_block_ref = f"{DICE_SLUG}/{tmp_name}"
+        current_params.sqd.subspace_dim = experiment.subspace_dim
+        current_params.sqd.max_iterations = 1
+        current_params.sqd.num_batches = 1
+
+        try:
+            state = await sqd(
+                parameters=current_params,
+                return_state=True,
+            )
+            # Check result
+            record = {
+                "d": experiment.subspace_dim,
+                "mpiprocs": experiment.mpiprocs,
+                "nodes": experiment.num_nodes,
+                "energy": None,
+                "token": None,
+                "cpupercent": None,
+                "cput": None,
+                "walltime": None,
+                "mem": None,
+                "avg_node_mem": None,
+            }
+            if state.is_completed():
+                logger.info(
+                    f"Sub experiment {str(state.state_details.flow_run_id)} completed successfully."
+                )
+                record["energy"] = await state.result()
+            # Read job report artifact
+            async with get_client() as client:
+                read_job_reports = ArtifactFilter(
+                    flow_run_id={"any_": [state.state_details.flow_run_id]},
+                    key={"any_": [current_solver.metrics_artifact_key]},
+                )
+                reports = await client.read_artifacts(
+                    artifact_filter=read_job_reports,
+                )
+            if len(reports) != 0:
+                logger.info(
+                    f"Found {len(reports)} '{current_solver.metrics_artifact_key}' artifacts."
+                )
+                report_data = json.loads(reports[0].data)
+                report_data = dict(zip(*report_data))
+                record["token"] = report_data["token"]
+                record["cpupercent"] = report_data.get("cpupercent", None)
+                record["cput"] = report_data.get("cput", None)
+                record["walltime"] = report_data.get("walltime", None)
+                record["mem"] = report_data.get("mem", None)
+                node_mems = []
+                for key, val in report_data.items():
+                    if key.startswith("mem_per_nodes"):
+                        val_num = float(val[:-2])
+                        node_mems.append(val_num)
+                if len(node_mems) > 0:
+                    record["avg_node_mem"] = f"{sum(node_mems) / len(node_mems):.5f}gb"
+            records.append(record)
+        finally:
+            await _maybe_await(DiceSHCISolverJob.delete(tmp_name))
+            await _maybe_await(ExecutionProfileBlock.delete(tmp_exec_name))
+
+    await create_table_artifact(
+        table=records,
+        key="dice-performance",
+    )
+
+    return 0
+
+
+@main.on_completion
+def terminate_if_job(flow, flow_run, state):
+    if job_id := os.getenv("PBS_JOBID"):
+        subprocess.run(["qdel", job_id])
+
+
+if __name__ == "__main__":
+    main.serve(
+        name="dice_perf_tuning",
+        description="MPI parameter tuning of DICE solver for SQD application.",
+    )

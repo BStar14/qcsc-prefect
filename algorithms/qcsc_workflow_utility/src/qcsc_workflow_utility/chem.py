@@ -38,13 +38,13 @@ class ElectronicProperties(BaseModel):
     num_orbitals: int
     num_electrons: tuple[int, int]
     open_shell: bool
-    spin_sq: float
+    spin_sq: float | None
 
 
 def _build_property(
     mf: scf.RHF,
     norb: int,
-    spin_sq: float,
+    spin_sq: float | None,
     buf: io.StringIO,
     ccsd_maxiter: int = 1,
 ) -> ElectronicProperties:
@@ -53,7 +53,7 @@ def _build_property(
     Args:
         mf: PySCF RHF object after calculation
         norb: Number of orbitals
-        spin_sq: Target value for the total spin squared
+        spin_sq: Target value for the total spin squared, or None for no target
         buf: StringIO buffer containing PySCF logs
         ccsd_maxiter: Number of CCSD kernel runs. Each run after the first restarts
             from the previous amplitudes, which clears the DIIS history.
@@ -112,7 +112,7 @@ def compute_molecular_integrals_from_geometry(
     atom: str,
     basis: str = "6-31g",
     symmetry: str | bool = False,
-    spin_sq: float = 0.0,
+    spin_sq: float | None = 0.0,
     ccsd_maxiter: int = 1,
 ) -> ElectronicProperties:
     """Precompute molecular orbital property from geometry with classical methods.
@@ -121,7 +121,8 @@ def compute_molecular_integrals_from_geometry(
         atom: Definition for molecule structure.
         basis: Name of basis set.
         symmetry: Whether to use symmetry, otherwise string of point group name.
-        spin_sq: Target value for the total spin squared for the ground state.
+        spin_sq: Target value for the total spin squared for the ground state, or
+            None for no target (required by the SBD solver).
         ccsd_maxiter: Number of CCSD kernel runs; see ``_build_property``.
 
     Returns:
@@ -154,14 +155,15 @@ def compute_molecular_integrals_from_geometry(
 )
 def compute_molecular_integrals_from_fcidump(
     fcidump_file: str,
-    spin_sq: float = 0.0,
+    spin_sq: float | None = 0.0,
     ccsd_maxiter: int = 1,
 ) -> ElectronicProperties:
     """Precompute molecular orbital property from FCIDump file with classical methods.
 
     Args:
         fcidump_file: Location of FCIDump file storing 1-electron and 2-electron integrals.
-        spin_sq: Target value for the total spin squared for the ground state.
+        spin_sq: Target value for the total spin squared for the ground state, or
+            None for no target (required by the SBD solver).
         ccsd_maxiter: Number of CCSD kernel runs; see ``_build_property``.
 
     Returns:

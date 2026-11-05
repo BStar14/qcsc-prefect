@@ -39,6 +39,7 @@ members = [
     "packages/qcsc-prefect-executor",
     "packages/qcsc-prefect-dice",
     "packages/qcsc-prefect-qiskit",
+    "packages/qcsc-prefect-sbd",
 ]
 
 
@@ -50,6 +51,7 @@ qcsc-prefect-blocks   = { workspace = true }
 qcsc-prefect-executor = { workspace = true }
 qcsc-prefect-dice     = { workspace = true }
 qcsc-prefect-qiskit   = { workspace = true }
+qcsc-prefect-sbd      = { workspace = true }
 # Not a workspace member: uv would resolve its [solver] extra (fulqrum>=0.5,
 # not on PyPI) for `uv sync --all-packages`. packages/conftest.py puts its
 # src/ on sys.path for the tests.
@@ -75,6 +77,7 @@ members = [
     "packages/qcsc-prefect-executor",
     "packages/qcsc-prefect-dice",
     "packages/qcsc-prefect-qiskit",
+    "packages/qcsc-prefect-sbd",
 ]
 
 # --- Hatch ---
@@ -87,6 +90,7 @@ members = [
     "packages/qcsc-prefect-executor",
     "packages/qcsc-prefect-dice",
     "packages/qcsc-prefect-qiskit",
+    "packages/qcsc-prefect-sbd",
 ]
 
 # -----------------------------

@@ -1,0 +1,48 @@
+# SQD workflow with the DICE solver on Miyabi. Copy this file and run:
+#   sqd-create-blocks --solver dice --config <copy> --hpc-target miyabi
+# Select the solver in each run with solver_block_ref = "dice_shci_solver_job/<solver_block_name>".
+
+hpc_target = "miyabi"
+group = "your-group"
+queue = "your-queue"
+work_dir = "/work/your-group/your-user/sqd-work"
+dice_executable = "/work/your-group/your-user/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice"
+
+launcher = "mpiexec.hydra"
+walltime = "01:00:00"
+num_nodes = 1
+mpiprocs = 4
+ompthreads = 1
+modules = []
+mpi_options = ["-np", "4"]
+pre_commands = []
+
+command_block_name = "cmd-sqd-dice-solver"
+execution_profile_block_name = "exec-sqd-dice-mpi"
+hpc_profile_block_name = "hpc-miyabi-sqd-dice"
+solver_block_name = "sqd-solver"
+script_filename = "dice_solver.pbs"
+metrics_artifact_key = "miyabi-sqd-dice-metrics"
+
+select_cutoff = 5e-4
+davidson_tol = 1e-5
+energy_tol = 1e-10
+max_iter = 10
+return_sci_state = false
+
+# QrmiRuntimeBlock used for quantum_source = "real-device" (sampling.runtime_block_name of
+# each run). For random mode only, delete [runtime] and [runtime.qrmi]; an existing block is
+# then kept. The flow sets the SQD transpiler and its configuration itself.
+runtime_block_name = "qrmi-runtime"
+
+[runtime]
+# "iqp": submit from the workflow process. "slurm": use root_dir and three block names.
+scheduler = "iqp"
+resource = "ibm_kingston"
+
+# QRMI settings without the "<resource>_" prefix. Set QRMI_IBM_QCS_IAM_APIKEY in the
+# environment; it must not be written in this file.
+[runtime.qrmi]
+QRMI_IBM_QCS_ENDPOINT = "https://quantum.cloud.ibm.com/api/v1"
+QRMI_IBM_QCS_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
+QRMI_IBM_QCS_SERVICE_CRN = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"

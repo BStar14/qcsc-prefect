@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
 import socket
@@ -11,16 +10,23 @@ import subprocess
 import sys
 from pathlib import Path
 
-from qiskit import qasm3, qpy
-from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+from qiskit import qpy
 
+# Re-exported: the default transpiler path and existing hooks import these names here.
+from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager  # noqa: F401
+
+from .compile import (  # noqa: F401
+    compile_pubs,
+    generic_transpile,
+    make_sampler_parameters,
+    validate_isa,
+)
 from .contract import (
     SCHEMA_VERSION,
     circuit_registers,
     decode_result,
     positive_shots,
 )
-from .transpilation import preset_pass_manager_options
 
 
 def require_batch_environment(resource: str) -> None:
@@ -34,47 +40,19 @@ def require_batch_environment(resource: str) -> None:
         raise RuntimeError(f"Missing SPANK acquisition token; submit with --qpu={resource}")
 
 
-def generic_transpile(circuit, target, config):
-    """Configure a preset pass manager using JSON options and the actual Target."""
-    options = preset_pass_manager_options(config, num_qubits=circuit.num_qubits)
-    return generate_preset_pass_manager(target=target, **options).run(circuit)
+def make_sampler_payload(isa_circuits, shots: int) -> dict:
+    return {"program_id": "sampler", "parameters": make_sampler_parameters(isa_circuits, shots)}
 
 
-def validate_isa(circuit, target) -> None:
-    for instruction in circuit.data:
-        if instruction.operation.name == "barrier":
-            continue
-        qargs = tuple(circuit.find_bit(bit).index for bit in instruction.qubits)
-        if not target.instruction_supported(
-            operation_name=instruction.operation.name,
-            qargs=qargs,
-            parameters=instruction.operation.params,
-        ):
-            raise RuntimeError(f"Unsupported ISA instruction: {instruction.operation.name} {qargs}")
-
-
-def make_sampler_payload(isa_circuit, shots: int) -> dict:
-    return {
-        "program_id": "sampler",
-        "parameters": {
-            "pubs": [
-                [qasm3.dumps(isa_circuit, disable_constants=True, allow_aliasing=True), None, shots]
-            ],
-            "version": 2,
-            "support_qiskit": True,
-            "shots": shots,
-            "options": {},
-        },
-    }
-
-
-def execute_task_runner(isa_circuit, shots: int, executable: Path, resource: str) -> None:
+def execute_task_runner(isa_circuits, shots: int, executable: Path, resource: str) -> None:
     Path("sampler_input.json").write_text(
-        json.dumps(make_sampler_payload(isa_circuit, shots), indent=2), encoding="utf-8"
+        json.dumps(make_sampler_payload(isa_circuits, shots), indent=2), encoding="utf-8"
     )
     # No retries: a zero CLI exit code alone does not prove quantum success.
     subprocess.run([str(executable), resource, "sampler_input.json", "result.json"], check=True)
-    decode_result(Path("result.json").resolve(), shots, circuit_registers(isa_circuit))
+    decode_result(
+        Path("result.json").resolve(), shots, [circuit_registers(isa) for isa in isa_circuits]
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -99,34 +77,35 @@ def main(argv: list[str] | None = None) -> None:
     if resource is None:
         raise RuntimeError(f"{resource_id} is not present in this Slurm allocation")
     with Path("circuit.qpy").open("rb") as stream:
-        (circuit,) = qpy.load(stream)
-    if circuit_registers(circuit) != request["registers"]:
+        circuits = qpy.load(stream)
+    registers = request["registers"]
+    configs = json.loads(Path("transpile_config.json").read_text(encoding="utf-8"))
+    if not isinstance(configs, list) or not isinstance(registers, list):
+        raise ValueError("registers and transpile_config must have one entry per PUB")
+    if not circuits or not len(circuits) == len(registers) == len(configs):
+        raise ValueError(
+            f"QPY has {len(circuits)} circuits, request has {len(registers)} registers "
+            f"and {len(configs)} transpile configs; expected one of each per PUB"
+        )
+    if [circuit_registers(circuit) for circuit in circuits] != registers:
         raise ValueError("QPY registers do not match sampler request")
-    config = json.loads(Path("transpile_config.json").read_text(encoding="utf-8"))
-    module_name, function_name = request["transpiler"].split(":")
-    transpile = getattr(importlib.import_module(module_name), function_name)
     target = get_target(resource)
-    isa = transpile(circuit, target, config)
-    if circuit_registers(isa) != request["registers"]:
-        raise ValueError("transpiler must preserve classical register names and widths")
-    validate_isa(isa, target)
+    isa_circuits, pub_reports = compile_pubs(
+        circuits, configs, registers, target, request["transpiler"]
+    )
     report = {
-        **config,
         "transpiler": request["transpiler"],
-        "input_ops": dict(circuit.count_ops()),
-        "isa_ops": dict(isa.count_ops()),
         "target_num_qubits": target.num_qubits,
-        "isa_num_qubits": isa.num_qubits,
-        "registers": request["registers"],
         "host": socket.gethostname(),
         "resource": resource_id,
         "mode": "batch",
+        "pubs": pub_reports,
     }
     Path("transpile_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     with Path("isa.qpy").open("wb") as stream:
-        qpy.dump(isa, stream)
+        qpy.dump(isa_circuits, stream)
     print(f">>> Host: {socket.gethostname()}, resource: {resource_id}, mode: batch", flush=True)
-    execute_task_runner(isa, shots, args.task_runner, resource_id)
+    execute_task_runner(isa_circuits, shots, args.task_runner, resource_id)
 
 
 if __name__ == "__main__":
