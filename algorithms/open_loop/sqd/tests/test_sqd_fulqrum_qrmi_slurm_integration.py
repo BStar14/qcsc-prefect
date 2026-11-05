@@ -1,7 +1,7 @@
 """SQD QRMI sampling through a real Slurm job, with QRMI itself replaced by fakes.
 
 The workflow's ``quantum_sampling`` task body submits the upstream QRMI worker
-through the blocks built by ``sqd-fulqrum-create-blocks``. The job compiles the
+through the blocks built by ``sqd-create-blocks``. The job compiles the
 LUCJ circuit on the compute node with ``sqd_common.transpile`` and decodes the
 result on the host. Only the QPU side is faked, so no QPU or QRMI endpoint is
 contacted:
@@ -76,7 +76,7 @@ HEAVY = ("ffsim", "prefect_qiskit", "qcsc_prefect_fulqrum", "qcsc_workflow_utili
 LOGGER = logging.getLogger("sqd_common.qrmi_slurm_test")
 
 FAKE_QRMI = """\
-import json, sys
+import atexit, json, sys
 from pathlib import Path
 from qiskit.providers.fake_provider import GenericBackendV2
 from qiskit.transpiler import CouplingMap
@@ -92,10 +92,14 @@ class QRMIService:
         return [_Resource()]
 
 
-def get_target(resource):
-    # The worker imports the compilation hook before it asks for the Target.
+def _record_modules():
     loaded = sorted({name.split(".")[0] for name in sys.modules})
     Path("node_modules.json").write_text(json.dumps(loaded))
+
+
+def get_target(resource):
+    # Record the worker's modules at exit, after it has imported the compilation hook.
+    atexit.register(_record_modules)
     return GenericBackendV2(
         num_qubits=8,
         basis_gates=["rz", "sx", "x", "cz"],
@@ -146,7 +150,7 @@ def _write_fakes(root: Path) -> tuple[Path, Path]:
 
 
 @pytest.fixture
-def qrmi_config(monkeypatch):
+def qrmi_runtime(monkeypatch):
     blocks: dict[str, Any] = {}
 
     def fake_save(self, name, overwrite=False):
@@ -215,10 +219,18 @@ def qrmi_config(monkeypatch):
     assert blocks[qrmi["hpc_profile_block_name"]].slurm_qpu == RESOURCE
     blocks[qrmi["hpc_profile_block_name"]].slurm_qpu = None
     blocks[qrmi["command_block_name"]].default_args += ["--task-runner", str(runner)]
-    return create_blocks.qrmi_runtime_config(qrmi)
+    # The QrmiRuntimeBlock that create_blocks saves for [qrmi], loaded as the flow does.
+    block_runtime = runtime_mod.QrmiRuntime(**create_blocks.qrmi_runtime_settings(qrmi))
+
+    async def load(name):
+        assert name == "qrmi-runtime"
+        return block_runtime
+
+    monkeypatch.setattr(sampling, "_load_qrmi_runtime", load)
+    return block_runtime
 
 
-def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_config, caplog):
+def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_runtime, caplog):
     elec_props = chem.compute_molecular_integrals_from_geometry.fn(
         atom="H 0 0 0; H 0 0 0.74", basis="sto-3g"
     )
@@ -228,7 +240,7 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_config, caplog):
             sampling.quantum_sampling.fn(
                 lucj_params=lucj.get_lucj_params.fn(params, elec_props),
                 circuit_params=params,
-                sampling_params=SamplingParameters(shots=SHOTS, qrmi_runtime_config=qrmi_config),
+                sampling_params=SamplingParameters(shots=SHOTS),
             )
         )
     bit_array = BitArray.from_bool_array(bool_array)
@@ -248,8 +260,9 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_config, caplog):
     report = json.loads((job_dir / "transpile_report.json").read_text())
     assert report["transpiler"] == TRANSPILER
     assert report["target_num_qubits"] == 8
+    (pub,) = report["pubs"]
     assert (
-        report["seed_transpiler"]
+        pub["seed_transpiler"]
         == lucj.circuit_transpile_options(params, np.random.default_rng(24))["seed_transpiler"]
     )
     assert "#SBATCH --qpu" not in (job_dir / "sampler.slurm").read_text()

@@ -32,10 +32,14 @@ from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
 from qiskit.quantum_info import Statevector  # noqa: E402
 from qiskit_ibm_runtime import RuntimeEncoder  # noqa: E402
 from sqd_common import flow, lucj, postprocess, sampling  # noqa: E402
-from sqd_common.flow_params import CircuitParameters, SamplingParameters  # noqa: E402
+from sqd_common.flow_params import (  # noqa: E402
+    CircuitParameters,
+    FlowParameters,
+    SamplingParameters,
+)
+from sqd_common.main import ARTIFACT_KEY, sqd  # noqa: E402
 from sqd_common.qrmi import TRANSPILER, make_qrmi_runtime, prepare_sampler_circuit  # noqa: E402
 from sqd_common.transpile import transpile_for_target  # noqa: E402
-from sqd_fulqrum import main as workflow  # noqa: E402
 
 LOGGER = logging.getLogger(__name__)
 
@@ -151,7 +155,7 @@ def test_node_hook_imports_neither_ffsim_nor_prefect():
 @pytest.mark.parametrize("reset", [False, True])
 @pytest.mark.parametrize("with_rzz", [False, True])
 def test_node_hook_matches_host_transpile(h2, reset, with_rzz):
-    """QRMI compiles on the node exactly as the IBM Runtime path does on the host."""
+    """The QRMI hook compiles exactly as the in-process ``transpile_lucj_circuit`` does."""
     params = circuit_parameters(reset)
     original = make_circuit(params, h2)
     actual_target = target(with_rzz)
@@ -179,34 +183,27 @@ def test_node_hook_rejects_unexpected_config():
         transpile_for_target(None, target(), {"circuit_parameters": {}})
 
 
-@pytest.mark.parametrize("key", ["prepare", "transpiler", "transpile_config"])
-def test_runtime_config_cannot_override_hooks(tmp_path, key):
-    config = {
-        "root_dir": tmp_path,
-        "command_block_name": "c",
-        "execution_profile_block_name": "e",
-        "hpc_profile_block_name": "h",
-        "resource": "test_heron",
-        key: None,
-    }
-    with pytest.raises(ValueError, match="must not set"):
-        make_qrmi_runtime(config, transpile_config={})
-
-
-def test_runtime_uses_sqd_hooks(tmp_path):
-    runtime = make_qrmi_runtime(
-        {
-            "root_dir": tmp_path,
-            "command_block_name": "c",
-            "execution_profile_block_name": "e",
-            "hpc_profile_block_name": "h",
-            "resource": "test_heron",
-        },
-        transpile_config={"seed_transpiler": 1},
+def slurm_runtime(tmp_path, **changes):
+    """The QrmiRuntime a ``scheduler="slurm"`` QrmiRuntimeBlock builds."""
+    settings = dict(
+        root_dir=tmp_path / "quantum",
+        command_block_name="qrmi-command",
+        execution_profile_block_name="qrmi-execution",
+        hpc_profile_block_name="qrmi-hpc",
+        resource="test_heron",
+        transpile_config={"optimization_level": 1},
     )
+    return runtime_mod.QrmiRuntime(**{**settings, **changes})
+
+
+def test_runtime_uses_sqd_hooks_and_keeps_the_block_settings(tmp_path):
+    block_runtime = slurm_runtime(tmp_path, watch_poll_interval=7.0)
+    runtime = make_qrmi_runtime(block_runtime, transpile_config={"seed_transpiler": 1})
     assert runtime.transpiler == TRANSPILER
     assert runtime.transpile_config == {}
     assert runtime.prepare.keywords == {"transpile_config": {"seed_transpiler": 1}}
+    assert (runtime.resource, runtime.watch_poll_interval) == ("test_heron", 7.0)
+    assert block_runtime.transpile_config == {"optimization_level": 1}  # not modified
 
 
 def sample_result(reset):
@@ -219,13 +216,6 @@ def sample_result(reset):
 @pytest.mark.parametrize("reset", [False, True])
 def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch, caplog, h2, reset):
     params = circuit_parameters(reset)
-    config = {
-        "root_dir": str(tmp_path / "quantum"),
-        "command_block_name": "qrmi-command",
-        "execution_profile_block_name": "qrmi-execution",
-        "hpc_profile_block_name": "qrmi-hpc",
-        "resource": "test_heron",
-    }
     calls = []
     compiled = []
 
@@ -236,7 +226,7 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
         assert request["transpiler"] == "sqd_common.transpile:transpile_for_target"
         assert request["resource"] == "test_heron"
         assert request["shots"] == 4
-        hook_config = json.loads((work_dir / "transpile_config.json").read_text())
+        (hook_config,) = json.loads((work_dir / "transpile_config.json").read_text())
         assert hook_config == lucj.circuit_transpile_options(params, np.random.default_rng(24))
         with (work_dir / "circuit.qpy").open("rb") as stream:
             (circuit,) = qpy.load(stream)
@@ -252,6 +242,10 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     async def reject_ibm(*args, **kwargs):
         pytest.fail("QRMI sampling must not load an IBM Runtime block")
 
+    async def load_block(name):
+        assert name == "qrmi-runtime"
+        return slurm_runtime(tmp_path)
+
     artifacts = []
 
     async def artifact(**kwargs):
@@ -260,13 +254,15 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     monkeypatch.setattr(runtime_mod, "_sample_on_slurm", runtime_mod._sample_on_slurm.fn)
     monkeypatch.setattr(runtime_mod, "get_run_logger", lambda: LOGGER)
     monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
-    for module in (lucj, sampling, postprocess, flow, workflow):
+    for module in (lucj, sampling, postprocess, flow):
         monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
     monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
     monkeypatch.setattr(sampling, "create_table_artifact", artifact)
     monkeypatch.setattr(postprocess, "create_table_artifact", artifact)
     monkeypatch.setattr(sampling.QuantumRuntime, "load", reject_ibm)
-    sampling_params = SamplingParameters(shots=4, qrmi_runtime_config=config)
+    monkeypatch.setattr(sampling, "_load_qrmi_runtime", load_block)
+    monkeypatch.setattr(postprocess.flow_run, "get_id", lambda: "run")
+    sampling_params = SamplingParameters(shots=4)
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
         result = asyncio.run(
             sampling.quantum_sampling.fn(lucj_parameters(params, h2), params, sampling_params)
@@ -276,13 +272,12 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     )
     assert len(calls) == 1
     assert calls[0]["command_block_name"] == "qrmi-command"
-    assert "prepare" not in config and "transpiler" not in config
     assert f"Instruction counts = {dict(compiled[0].count_ops())}" in caplog.text
     assert "Compiled on the compute node:" in caplog.text
     ((source),) = artifacts
     assert source["key"] == sampling.SAMPLING_ARTIFACT_KEY
     row = source["table"][0]
-    assert row["source"] == "qrmi" and row["resource"] == "test_heron"
+    assert row["source"] == "qrmi-slurm" and row["resource"] == "test_heron"
     assert row["qrmi_result_dir"] == str(calls[0]["work_dir"]) and row["slurm_job_id"] == "73"
     assert (row["shots"], row["shots_kept"]) == (4, len(result))
 
@@ -304,7 +299,7 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
 
     async def load_solver(name):
         assert name == "sqd-fulqrum-solver"
-        return SimpleNamespace(run=solve)
+        return SimpleNamespace(run=solve, root_dir=str(tmp_path))
 
     class DirectTask:
         def __init__(self, fn):
@@ -321,60 +316,44 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     )
     for name in ("get_lucj_params", "quantum_sampling", "sqd_loop"):
         monkeypatch.setattr(flow, name, DirectTask(getattr(flow, name).fn))
-    monkeypatch.setattr(workflow.FulqrumSolverJob, "load", load_solver)
+    monkeypatch.setattr(
+        flow, "solver_class", lambda slug: SimpleNamespace(load=load_solver, __name__=slug)
+    )
     artifacts.clear()
-    parameters = workflow.FlowParameters(
+    parameters = FlowParameters(
         molecule={"atom": "H 0 0 0; H 0 0 0.74", "basis": "sto-3g"},
         circuit=params,
         sampling=sampling_params,
         sqd={"subspace_dim": 1, "num_batches": 1, "max_iterations": 1},
     )
-    energy = asyncio.run(workflow.sqd_2405_05068_fulqrum.fn(parameters))
+    energy = asyncio.run(sqd.fn(parameters))
     assert energy == pytest.approx(-1.5 + h2.nuclear_repulsion_energy)
     assert len(calls) == 2
     assert len(solver_calls) == 1
-    assert [a["key"] for a in artifacts] == [sampling.SAMPLING_ARTIFACT_KEY, workflow.ARTIFACT_KEY]
+    keys = [a["key"] for a in artifacts]
+    assert keys == [
+        sampling.SAMPLING_ARTIFACT_KEY,
+        ARTIFACT_KEY,
+        postprocess.CHECKPOINT_ARTIFACT_KEY,
+    ]
     assert artifacts[1]["table"][0]["dimension"] == 1
 
 
-def test_ibm_runtime_path_is_preserved(monkeypatch, h2):
-    params = circuit_parameters()
+def test_pre_init_cannot_run_after_qpy_so_prepare_runs_it_first(h2):
+    # QPY turns the ffsim gates into plain gates, which the ffsim pre-init stage rejects.
+    from ffsim.qiskit import PRE_INIT
+
+    params = circuit_parameters(reset=True)
     circuit = make_circuit(params, h2)
-    isa = circuit.copy()
-    calls = []
-
-    async def load(name):
-        calls.append(name)
-        return SimpleNamespace(resource_name="ibm_test", get_target=get_target, sampler=sample)
-
-    async def get_target():
-        return "ibm-target"
-
-    def transpile(**kwargs):
-        assert kwargs["target"] == "ibm-target"
-        assert kwargs["circuit"] is circuit
-        return isa
-
-    async def sample(*, sampler_pubs, options):
-        assert sampler_pubs == [(isa,)]
-        assert options == {"params": {"shots": 4}}
-        return sample_result(False)
-
-    async def artifact(**kwargs):
-        pass
-
-    monkeypatch.setattr(sampling, "get_run_logger", lambda: LOGGER)
-    monkeypatch.setattr(sampling, "create_table_artifact", artifact)
-    monkeypatch.setattr(sampling, "build_lucj_circuit", lambda **kwargs: circuit)
-    monkeypatch.setattr(sampling, "transpile_lucj_circuit", transpile)
-    monkeypatch.setattr(sampling.QuantumRuntime, "load", load)
-    result = asyncio.run(
-        sampling.quantum_sampling.fn(
-            lucj_parameters(params, h2), params, SamplingParameters(shots=4, runner_name="ibm")
-        )
-    )
-    assert calls == ["ibm"]
-    assert (
-        BitArray.from_bool_array(result).get_bitstrings()
-        == sample_result(False)[0].data.meas.get_bitstrings()
-    )
+    stream = io.BytesIO()
+    qpy.dump(circuit, stream)
+    stream.seek(0)
+    (restored,) = qpy.load(stream)
+    with pytest.raises(AttributeError):
+        PRE_INIT.run(restored)
+    prepared = prepare_sampler_circuit(circuit, transpile_config={}).circuit
+    assert "ucj_balanced_jw" in circuit.count_ops()
+    assert not any(name.startswith("ucj") for name in prepared.count_ops())
+    assert [(reg.name, len(reg)) for reg in prepared.cregs] == [
+        (reg.name, len(reg)) for reg in circuit.cregs
+    ]

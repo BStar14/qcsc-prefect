@@ -61,28 +61,42 @@ def _flow_parameters(**sampling_kwargs):
         molecule={"atom": LIH, "basis": "sto-3g"},
         sampling=sampling_kwargs,
         sqd={"subspace_dim": 64, "num_batches": 2, "max_iterations": 2},
-        solver_block_name="solver",
     )
 
 
 def test_flow_parameters_defaults():
     params = _flow_parameters()
     assert params.molecule.ccsd_maxiter == 4
+    assert params.molecule.spin_sq == 0.0
     assert params.circuit.compress is False and params.circuit.max_ab_pairs is None
     assert params.sampling.quantum_source == "real-device"
     assert params.sampling.shots == 100_000
+    assert params.sampling.runtime_block_name == "qrmi-runtime"
     assert params.sampling.runner_name == "ibm-runner"
+    assert params.solver_block_ref == "fulqrum_solver_job/sqd-fulqrum-solver"
 
 
 def test_flow_parameters_parse_fcidump_molecule():
     params = flow_params.FlowParameters.model_validate(
         {
-            "molecule": {"fcidump_file": "/data/n2.fcidump"},
+            "molecule": {"fcidump_file": "/data/n2.fcidump", "spin_sq": None},
             "sqd": {"subspace_dim": 100, "num_batches": 1, "max_iterations": 1},
-            "solver_block_name": "solver",
+            "solver_block_ref": "sbd_solver_job/s",
         }
     )
     assert isinstance(params.molecule, flow_params.FCIDumpFile)
+    assert params.molecule.spin_sq is None
+
+
+def test_removed_solver_block_name_points_to_solver_block_ref():
+    with pytest.raises(ValidationError, match="fulqrum_solver_job/my-solver"):
+        flow_params.FlowParameters.model_validate(
+            {
+                "molecule": {"fcidump_file": "/data/n2.fcidump"},
+                "sqd": {"subspace_dim": 1, "num_batches": 1, "max_iterations": 1},
+                "solver_block_name": "my-solver",
+            }
+        )
 
 
 @pytest.mark.parametrize(
@@ -90,20 +104,14 @@ def test_flow_parameters_parse_fcidump_molecule():
     [
         ({"qiskit_runtime_job_id": "j", "qrmi_result_dir": "/d"}, "at most one"),
         ({"quantum_source": "random", "qiskit_runtime_job_id": "j"}, "random"),
-        ({"quantum_source": "random", "qrmi_runtime_config": {}}, "random"),
-        ({"qrmi_runtime_config": {}, "qiskit_runtime_job_id": "j"}, "qrmi_result_dir"),
-        ({"qrmi_runtime_config": {}, "sampler_options": {"options": {}}}, "not supported"),
-        ({"sampler_options": {"params": {"shots": 5}}}, "Shots parameter"),
+        ({"quantum_source": "random", "qrmi_result_dir": "/d"}, "random"),
+        ({"qrmi_runtime_config": {}}, "runtime_block_name"),
+        ({"sampler_options": {"params": {"shots": 5}}}, "only the Shots parameter"),
     ],
 )
 def test_sampling_parameters_reject_conflicts(kwargs, match):
     with pytest.raises(ValidationError, match=match):
         flow_params.SamplingParameters(**kwargs)
-
-
-def test_qrmi_reload_with_qrmi_config_is_allowed():
-    params = flow_params.SamplingParameters(qrmi_runtime_config={}, qrmi_result_dir="/d")
-    assert params.qrmi_result_dir == "/d"
 
 
 # ---------------------------------------------------------------- Optimize
@@ -231,54 +239,67 @@ def test_random_bool_array_is_deterministic():
     np.testing.assert_array_equal(a, b)
 
 
-def test_ibm_runtime_sampling_merges_shots_into_options(monkeypatch, lih, offline):
+class _FakeQrmiRuntime:
+    """Records the hooks the flow sets and returns a result with scheduler metadata."""
+
+    def __init__(self, scheduler, calls):
+        self.scheduler, self.resource, self.calls = scheduler, "test_heron", calls
+
+    def replace(self, **changes):
+        self.calls["hooks"] = changes
+        return self
+
+    async def sampler(self, *, sampler_pubs, shots):
+        self.calls["pubs"], self.calls["shots"] = sampler_pubs, shots
+        result = sample_result(False)
+        if self.scheduler == "iqp":
+            result.metadata["qcsc_qrmi"] = {"job_id": "d7", "pubs": [{"isa_ops": {"cz": 3}}]}
+        else:
+            result.metadata["qcsc_slurm"] = {"job_id": "41", "work_dir": "/jobs/abc"}
+        return result
+
+
+@pytest.mark.parametrize("scheduler", ["iqp", "slurm"])
+def test_sampling_uses_the_qrmi_block_with_the_sqd_hooks(monkeypatch, lih, offline, scheduler):
+    from sqd_common import qrmi
+
     calls = {}
-    target = object()
-
-    class Runtime:
-        resource_name = "ibm_test"
-
-        async def get_target(self):
-            return target
-
-        async def sampler(self, *, sampler_pubs, options):
-            calls["pubs"], calls["options"] = sampler_pubs, options
-            return sample_result(False)
+    runtime = _FakeQrmiRuntime(scheduler, calls)
 
     async def load(name):
-        calls["runner"] = name
-        return Runtime()
+        calls["block"] = name
+        return runtime
 
-    def transpile(**kwargs):
-        assert kwargs["target"] is target
-        calls["transpiled"] = kwargs["circuit"]
-        return "isa"
-
-    monkeypatch.setattr(sampling.QuantumRuntime, "load", staticmethod(load))
+    monkeypatch.setattr(sampling, "_load_qrmi_runtime", load)
+    monkeypatch.setattr(qrmi.dataclasses, "replace", lambda obj, **changes: obj.replace(**changes))
     monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
-    monkeypatch.setattr(sampling, "transpile_lucj_circuit", transpile)
-    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih)
-    sampling_params = flow_params.SamplingParameters(
-        shots=4, runner_name="my-runner", sampler_options={"options": {"twirling": {}}}
-    )
-    bool_array = asyncio.run(
-        sampling.quantum_sampling.fn(params, flow_params.CircuitParameters(), sampling_params)
-    )
-    assert calls["runner"] == "my-runner"
-    assert calls["pubs"] == [("isa",)]
-    assert calls["options"] == {"options": {"twirling": {}}, "params": {"shots": 4}}
+    circuit_params = flow_params.CircuitParameters(sabre_layout_trials=7)
+    params = lucj.get_lucj_params.fn(circuit_params, lih)
+    sampling_params = flow_params.SamplingParameters(shots=4, runtime_block_name="my-qrmi")
+    bool_array = asyncio.run(sampling.quantum_sampling.fn(params, circuit_params, sampling_params))
+
+    assert calls["block"] == "my-qrmi" and calls["shots"] == 4
+    hooks = calls["hooks"]
+    assert hooks["transpiler"] == qrmi.TRANSPILER and hooks["transpile_config"] == {}
+    expected = lucj.circuit_transpile_options(circuit_params, np.random.default_rng(24))
+    assert hooks["prepare"].keywords == {"transpile_config": expected}
+    assert expected["sabre_layout_trials"] == 7
     assert bool_array.shape == (4, 4)
-    ((artifact),) = offline
-    assert artifact["key"] == sampling.SAMPLING_ARTIFACT_KEY
-    assert artifact["table"][0]["source"] == "ibm-runtime"
-    assert artifact["table"][0]["resource"] == "ibm_test"
+    row = offline[0]["table"][0]
+    assert row["source"] == f"qrmi-{scheduler}" and row["resource"] == "test_heron"
+    if scheduler == "iqp":
+        assert row["qiskit_runtime_job_id"] == "d7" and row["qrmi_result_dir"] is None
+    else:
+        assert row["qrmi_result_dir"] == "/jobs/abc" and row["slurm_job_id"] == "41"
 
 
 def test_missing_runtime_block_explains_random_fallback(monkeypatch, lih):
-    async def missing(name):
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    async def missing(name, prepare=None):
         raise ValueError(f"Unable to find block document named {name}")
 
-    monkeypatch.setattr(sampling.QuantumRuntime, "load", staticmethod(missing))
+    monkeypatch.setattr(QrmiRuntimeBlock, "aload_runtime", staticmethod(missing))
     params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih)
     with pytest.raises(RuntimeError, match="quantum_source='random'"):
         asyncio.run(
@@ -318,17 +339,25 @@ def test_load_runtime_job_reads_the_job_result(monkeypatch, offline, reset):
     assert row["shots_kept"] == len(bool_array)
 
 
-def _qrmi_job_dir(tmp_path, reset):
+def _qrmi_job_dir(tmp_path, reset, schema=2):
     registers = {"meas": 4, **({"test": 4} if reset else {})}
-    request = {"schema_version": 1, "resource": "test_heron", "shots": 4, "registers": registers}
+    if schema == 2:
+        registers = [registers]
+    request = {
+        "schema_version": schema,
+        "resource": "test_heron",
+        "shots": 4,
+        "registers": registers,
+    }
     (tmp_path / "sampler_request.json").write_text(json.dumps(request))
     (tmp_path / "result.json").write_text(json.dumps(sample_result(reset), cls=RuntimeEncoder))
     return tmp_path
 
 
+@pytest.mark.parametrize("schema", [1, 2])
 @pytest.mark.parametrize("reset", [False, True])
-def test_load_qrmi_result_decodes_the_job_directory(tmp_path, offline, reset):
-    job_dir = _qrmi_job_dir(tmp_path, reset)
+def test_load_qrmi_result_decodes_the_job_directory(tmp_path, offline, reset, schema):
+    job_dir = _qrmi_job_dir(tmp_path, reset, schema)
     bool_array = asyncio.run(
         sampling.load_qrmi_result.fn(
             str(job_dir), flow_params.CircuitParameters(use_reset_mitigation=reset)
