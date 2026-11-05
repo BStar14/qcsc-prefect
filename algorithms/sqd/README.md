@@ -43,7 +43,8 @@ sqd_loop [post-process] ◄─────────────────�
   manager and seed. `load_qrmi_result` and `load_runtime_job` take this place when a
   run reuses the samples of an earlier job.
 - **Post-process** (`sqd_loop`): self-consistent configuration recovery. Every round
-  diagonalizes `num_batches` subspaces concurrently, one solver job each.
+  diagonalizes `num_batches` subspaces concurrently, one solver job each, and then
+  saves a checkpoint, so the recovery can continue after the last completed round.
 
 Prefect draws an arrow between two tasks when one task's result is passed unchanged
 into the other. The run graph therefore shows Map → Optimize → Execute →
@@ -61,7 +62,7 @@ Each flow takes one argument, `parameters`, grouped by stage:
 | `molecule` | `{atom, basis, symmetry}` or `{fcidump_file}`, plus `spin_sq` and `ccsd_maxiter` (default 4) |
 | `circuit` | `n_lucj_layers`, `compress`, `compress_maxiter`, `max_ab_pairs`, `use_reset_mitigation`, transpiler settings |
 | `sampling` | `quantum_source`, `shots`, `random_seed`, `runner_name`, `sampler_options`, `qrmi_runtime_config`, `qiskit_runtime_job_id`, `qrmi_result_dir` |
-| `sqd` | `subspace_dim`, `num_batches`, `max_iterations` |
+| `sqd` | `subspace_dim`, `num_batches`, `max_iterations`, `checkpoint` (default on), `resume_checkpoint` |
 | `solver_block_name` | Solver block to load |
 
 `default_params/` holds complete examples for N2 (6-31G, 1s cores frozen, 16 orbitals,
@@ -85,9 +86,32 @@ in seconds.
 - **Retry a failed run.** The Map, Optimize and Execute results are persisted, and
   `sqd_loop` is never cached. When a run fails in Post-process (for example on a
   walltime limit), *Retry* it from the Prefect UI. The retry reuses the integrals,
-  the LUCJ parameters and the samples, and repeats only `sqd_loop`. No new QPU job
+  the LUCJ parameters and the samples, and runs only `sqd_loop` again. No new QPU job
   is submitted. The results live in the Prefect result storage of the host that
   serves the deployment.
+
+  With `sqd.checkpoint` on (the default), `sqd_loop` continues from the last
+  completed recovery round instead of round 1. The log shows
+  `[ckpt] RESUME from …: completed 3 step(s)`, then `SQD iteration 4/5`.
+- **Continue a recovery with more rounds.** After every round `sqd_loop` writes
+  `ckpt_t00_w0.npz` and `source.json` to
+  `<solver block root_dir>/sqd_checkpoints/<flow run id>/`. The `sqd-checkpoint`
+  artifact gives the path. To continue that recovery in a new run, copy the path
+  into `sqd.resume_checkpoint` and raise `sqd.max_iterations`. A checkpoint with
+  32 of 100 rounds done, resumed with `max_iterations = 200`, continues at round
+  33/200 from the stored occupancies and best energy.
+
+  `source.json` holds the resume key. The new run must use the same samples (the
+  same `qrmi_result_dir`, `qiskit_runtime_job_id` or random seed and shots), the
+  same Hamiltonian, `subspace_dim` and `num_batches`. Otherwise it fails before
+  any solver job and names what differs. The given checkpoint is only read; the
+  new run writes its own. If a run's own checkpoint no longer matches, it is moved
+  to `<flow run id>.prev-<time>/` and the recovery starts at round 1.
+
+  Disk use is small: about 16 bytes per orbital plus a few kB per run, rewritten in
+  place, under 1 MB even for 1000 orbitals. Nothing removes old run folders, and
+  the solver job directories under the same `root_dir` take far more space. Set
+  `sqd.checkpoint` to `false` to write nothing.
 - **Reuse the samples in a new run.** Every Execute task writes an
   `sqd-sampling-source` artifact that records where the samples came from.
   - For QRMI, copy its `qrmi_result_dir` into `sampling.qrmi_result_dir` of a new run.
