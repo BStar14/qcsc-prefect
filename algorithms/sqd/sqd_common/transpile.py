@@ -115,13 +115,12 @@ def transpile_for_target(
     """QRMI compute-node hook: compile the prepared LUCJ circuit for ``target``.
 
     ``config`` holds exactly the ``TRANSPILE_OPTIONS`` keys. The circuit must
-    already be free of ffsim gates (see ``sqd_fulqrum.qrmi.prepare_sampler_circuit``).
+    already be free of ffsim gates (see ``sqd_common.qrmi.prepare_sampler_circuit``).
     """
     unknown = set(config) - TRANSPILE_OPTIONS
     missing = TRANSPILE_OPTIONS - set(config)
     if unknown or missing:
         raise ValueError(
-            f"Unexpected sqd_fulqrum transpile config: unknown={sorted(unknown)}, "
-            f"missing={sorted(missing)}"
+            f"Unexpected SQD transpile config: unknown={sorted(unknown)}, missing={sorted(missing)}"
         )
     return build_pass_manager(target, **config).run(circuit)

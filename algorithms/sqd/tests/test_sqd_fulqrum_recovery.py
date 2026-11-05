@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -13,10 +11,24 @@ pytest.importorskip("qiskit_addon_sqd")
 
 from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform  # noqa: E402
 from qiskit_addon_sqd.fermion import SCIResult, solve_fermion  # noqa: E402
-from sqd_fulqrum import recovery  # noqa: E402
-from sqd_fulqrum import subsample as fulqrum_subsample  # noqa: E402
+from sqd_common import recovery  # noqa: E402
+from sqd_common import subsample as shared_subsample  # noqa: E402
 
-SQD_DICE_SUBSAMPLE = Path(__file__).resolve().parents[1] / "sqd_dice" / "subsample.py"
+# Batches that the DICE workflow's original subsample() drew for the inputs of
+# test_subsample_matches_sqd_dice_reference. Both workflows now share
+# sqd_common.subsample, which must keep drawing the same subspaces.
+SQD_DICE_REFERENCE_BATCHES = {
+    False: [
+        ([3, 9, 34, 20, 5, 17, 33, 10], [3, 9, 34, 20, 5, 17, 33, 10]),
+        ([12, 18, 17, 20, 33, 48, 10, 24], [12, 18, 17, 20, 33, 48, 10, 24]),
+        ([24, 10, 3, 48, 36, 20, 17, 33], [24, 10, 3, 48, 36, 20, 17, 33]),
+    ],
+    True: [
+        ([13, 21, 44, 37, 26, 28, 14, 42, 11], [12, 18, 17, 20, 34, 48]),
+        ([22, 38, 41, 7, 56, 50, 35, 26, 44], [3, 33, 12, 5, 24, 40]),
+        ([19, 38, 22, 42, 49, 41, 44, 26, 52], [5, 36, 12, 18, 6, 33]),
+    ],
+}
 
 
 def _lih():
@@ -126,6 +138,72 @@ def test_best_occupancies_seed_the_next_round(monkeypatch):
     np.testing.assert_allclose(outcome.best_result.orbital_occupancies[0], np.full(norb, 0.2))
 
 
+def _counting_solve(norb, energies):
+    calls = []
+
+    async def solve(ci_strings):
+        calls.append(ci_strings)
+        occ = np.full(norb, 0.1 * len(calls))
+        return SCIResult(
+            energy=energies[len(calls) - 1], sci_state=None, orbital_occupancies=(occ, occ)
+        )
+
+    return solve, calls
+
+
+def test_resume_runs_only_the_remaining_rounds_and_reports_them():
+    norb = 5
+    mol = dict(norb=norb, nelec=(2, 2), e_nuc=1.0)
+    solve, calls = _counting_solve(norb, [-2.0, -3.0, -1.0, -1.5])
+    ends = []
+    outcome = _run(
+        _raw_samples(norb, shots=500),
+        mol,
+        solve,
+        subspace_dim=9,
+        num_batches=2,
+        max_iterations=4,
+        start_round=2,
+        best_energy=-10.0,
+        on_round_end=lambda *args: ends.append(args),
+    )
+    assert len(calls) == 4
+    assert [r["round"] for r in outcome.records] == [2, 2, 3, 3]
+    assert outcome.round_energies == [-2.0, -0.5]
+    # The stored best is a floor; no round of this call beats it.
+    assert outcome.best_energy == -10.0 and outcome.best_result is None
+    assert [(n, best) for n, _, best in ends] == [(3, -10.0), (4, -10.0)]
+    # Call 2 (E=-3) is the best of round 2, so its occupancies seed round 3.
+    np.testing.assert_allclose(ends[0][1][0], np.full(norb, 0.2))
+
+
+def test_resume_reports_a_better_round_than_the_stored_best():
+    norb = 5
+    mol = dict(norb=norb, nelec=(2, 2), e_nuc=0.0)
+    solve, _ = _counting_solve(norb, [-4.0, -1.0])
+    outcome = _run(
+        _raw_samples(norb, shots=500),
+        mol,
+        solve,
+        subspace_dim=9,
+        max_iterations=3,
+        start_round=2,
+        best_energy=-3.0,
+    )
+    assert outcome.best_energy == -4.0 and outcome.best_result.energy == -4.0
+
+
+def test_resume_of_a_finished_run_returns_the_stored_best():
+    async def never(_):
+        raise AssertionError("solver must not be called")
+
+    mol = dict(norb=4, nelec=(1, 1), e_nuc=0.0)
+    outcome = _run(
+        _raw_samples(4, shots=50), mol, never, max_iterations=3, start_round=3, best_energy=-7.0
+    )
+    assert outcome.best_energy == -7.0 and outcome.records == []
+
+
 def test_no_valid_bitstrings_raises(monkeypatch):
     monkeypatch.setattr(
         recovery,
@@ -141,26 +219,20 @@ def test_no_valid_bitstrings_raises(monkeypatch):
         _run(_raw_samples(4, shots=50), mol, never)
 
 
-@pytest.mark.skipif(not SQD_DICE_SUBSAMPLE.exists(), reason="sqd_dice/subsample.py not found")
 @pytest.mark.parametrize("open_shell", [False, True])
 def test_subsample_matches_sqd_dice_reference(open_shell):
-    """The port draws the same subspaces as sqd_dice for the same RNG state."""
-
-    spec = importlib.util.spec_from_file_location("_sqd_dice_subsample_ref", SQD_DICE_SUBSAMPLE)
-    reference = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(reference)
+    """The shared subsample draws the subspaces of the original DICE workflow."""
 
     raw_bs, raw_probs = _raw_samples(6, shots=3000, seed=5)
     nelec = (3, 2) if open_shell else (2, 2)
-    bs, probs = fulqrum_subsample.postselect(
+    bs, probs = shared_subsample.postselect(
         raw_bs, raw_probs, hamming_right=nelec[0], hamming_left=nelec[1]
     )
-    ours = list(fulqrum_subsample.subsample(bs, probs, 64, 3, np.random.default_rng(3), open_shell))
-    ref = list(reference.subsample(bs, probs, 64, 3, np.random.default_rng(3), open_shell))
-    assert len(ours) == len(ref) == 3
-    for (a, b), (ra, rb) in zip(ours, ref, strict=True):
-        np.testing.assert_array_equal(a, ra)
-        np.testing.assert_array_equal(b, rb)
+    ours = list(shared_subsample.subsample(bs, probs, 64, 3, np.random.default_rng(3), open_shell))
+    assert [([int(x) for x in a], [int(x) for x in b]) for a, b in ours] == (
+        SQD_DICE_REFERENCE_BATCHES[open_shell]
+    )
+    assert all(a.dtype == np.int64 and b.dtype == np.int64 for a, b in ours)
 
 
 def test_fulqrum_loop_matches_solve_fermion_loop():

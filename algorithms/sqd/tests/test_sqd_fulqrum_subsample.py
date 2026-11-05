@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("qiskit_addon_sqd")
 
 from qiskit_addon_sqd.fermion import bitstring_matrix_to_ci_strs  # noqa: E402
-from sqd_fulqrum.subsample import (  # noqa: E402
+from sqd_common.subsample import (  # noqa: E402
     bitstrings_to_ci_strs,
     postselect,
     subsample,

@@ -41,7 +41,8 @@ from qcsc_prefect_executor.slurm import run as slurm_run  # noqa: E402
 from qcsc_prefect_fulqrum import block_utils, solver_job  # noqa: E402
 from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform  # noqa: E402
 from qiskit_addon_sqd.fermion import SCIResult, solve_fermion  # noqa: E402
-from sqd_fulqrum import create_blocks, recovery  # noqa: E402
+from sqd_common import recovery  # noqa: E402
+from sqd_fulqrum import create_blocks  # noqa: E402
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_fulqrum_blocks.slurm.example.toml"
 ROOT = Path(os.getenv("SQD_FULQRUM_SLURM_ROOT", "/data/sqd-fulqrum-integration"))
@@ -99,7 +100,7 @@ def store(monkeypatch):
         config["fulqrum_executable"] = os.environ["FULQRUM_SLURM_EXECUTABLE"]
     if os.getenv("FULQRUM_SLURM_PARTITION"):
         config["queue"] = os.environ["FULQRUM_SLURM_PARTITION"]
-    kwargs, _, _ = create_blocks.resolve_settings(create_blocks._parse_args([]), config)
+    kwargs = create_blocks.resolve_settings(create_blocks._parse_args([]), config)
 
     shutil.rmtree(ROOT, ignore_errors=True)
     names = block_utils.create_fulqrum_blocks(**kwargs)
