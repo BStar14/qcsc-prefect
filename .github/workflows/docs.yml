@@ -32,7 +32,7 @@ jobs:
 
       - name: Install documentation dependencies
         run: |
-          pip install mkdocs-material "mkdocstrings[python]" ruff
+          pip install mkdocs-material "mkdocstrings[python]" mkdocs-jupyter ruff
           pip install -e packages/qcsc-prefect-qiskit
 
       - name: Build site
