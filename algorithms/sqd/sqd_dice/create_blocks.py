@@ -1,4 +1,7 @@
-"""Create Prefect blocks and variables required for the SQD workflow."""
+"""Create the Prefect blocks required for the SQD workflow.
+
+Shots and sampler options are flow parameters, not block settings.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +11,6 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from prefect.variables import Variable
 from qcsc_prefect_dice import create_dice_blocks
 
 
@@ -46,7 +48,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--execution-profile-block-name")
     parser.add_argument("--hpc-profile-block-name")
     parser.add_argument("--solver-block-name")
-    parser.add_argument("--options-variable-name")
 
     parser.add_argument("--select-cutoff", type=float)
     parser.add_argument("--davidson-tol", type=float)
@@ -57,11 +58,6 @@ def _parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Whether to reconstruct the SCIState from dets.bin.",
-    )
-    parser.add_argument("--shots", type=int)
-    parser.add_argument(
-        "--sampler-options-json",
-        help='Raw JSON for Prefect variable value (e.g. \'{"params": {"shots": 50000}}\').',
     )
     return parser.parse_args()
 
@@ -137,13 +133,23 @@ def _default_mpi_options(*, hpc_target: str, mpiprocs: int) -> list[str]:
     return ["-n", str(mpiprocs)]
 
 
-def _set_variable(variable_name: str, value: Any) -> None:
-    Variable.set(variable_name, value, overwrite=True)
+# Run settings that belong to the flow parameters, not to the blocks.
+FLOW_PARAMETER_KEYS = {
+    "shots": "sampling.shots",
+    "sampler_options_json": "sampling.sampler_options",
+    "options_variable_name": "sampling.shots and sampling.sampler_options",
+}
 
 
 def main() -> None:
     args = _parse_args()
     config = _load_config_file(args.config)
+    for key, parameter in FLOW_PARAMETER_KEYS.items():
+        if key in config:
+            raise RuntimeError(
+                f"'{key}' is not a block setting. Set {parameter} in the flow "
+                "parameters of each run instead."
+            )
 
     hpc_target = (
         str(_pick_value(args.hpc_target, config.get("hpc_target"), "miyabi")).strip().lower()
@@ -166,11 +172,6 @@ def main() -> None:
     mpiprocs = int(
         _pick_value(args.mpiprocs, config.get("mpiprocs"), 4 if hpc_target == "miyabi" else 2)
     )
-    options_variable_name = str(
-        _pick_value(
-            args.options_variable_name, config.get("options_variable_name"), "sampler_options"
-        )
-    ).strip()
 
     block_names = create_dice_blocks(
         hpc_target=hpc_target,
@@ -257,22 +258,11 @@ def main() -> None:
         ),
     )
 
-    sampler_options_json = _pick_value(
-        args.sampler_options_json, config.get("sampler_options_json")
-    )
-    if sampler_options_json:
-        sampler_options = json.loads(str(sampler_options_json))
-    else:
-        shots = int(_pick_value(args.shots, config.get("shots"), 100000))
-        sampler_options = {"params": {"shots": shots}}
-    _set_variable(options_variable_name, sampler_options)
-
-    print(f"Saved blocks and variable for SQD workflow (target={hpc_target})")
+    print(f"Saved blocks for SQD workflow (target={hpc_target})")
     print(f"  SQD solver block: {block_names['solver_block_name']}")
     print(f"  Command block: {block_names['command_block_name']}")
     print(f"  Execution profile block: {block_names['execution_profile_block_name']}")
     print(f"  HPC profile block: {block_names['hpc_profile_block_name']}")
-    print(f"  Options variable: {options_variable_name}")
     print(f"  Work directory: {Path(str(work_dir)).expanduser().resolve()}")
     print(f"  DICE executable: {Path(str(dice_executable)).expanduser().resolve()}")
 

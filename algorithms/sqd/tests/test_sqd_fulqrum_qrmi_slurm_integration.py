@@ -1,8 +1,8 @@
 """SQD QRMI sampling through a real Slurm job, with QRMI itself replaced by fakes.
 
-The workflow's ``sample_bitstrings`` task body submits the upstream QRMI worker
+The workflow's ``quantum_sampling`` task body submits the upstream QRMI worker
 through the blocks built by ``sqd-fulqrum-create-blocks``. The job compiles the
-LUCJ circuit on the compute node with ``sqd_fulqrum.transpile`` and decodes the
+LUCJ circuit on the compute node with ``sqd_common.transpile`` and decodes the
 result on the host. Only the QPU side is faked, so no QPU or QRMI endpoint is
 contacted:
 
@@ -58,9 +58,11 @@ from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod  # noqa
 from qcsc_prefect_executor import from_blocks  # noqa: E402
 from qcsc_prefect_executor.slurm import run as slurm_run  # noqa: E402
 from qcsc_prefect_fulqrum import block_utils  # noqa: E402
+from qiskit.primitives.containers import BitArray  # noqa: E402
+from sqd_common import lucj, sampling  # noqa: E402
+from sqd_common.flow_params import CircuitParameters, SamplingParameters  # noqa: E402
+from sqd_common.qrmi import TRANSPILER  # noqa: E402
 from sqd_fulqrum import create_blocks  # noqa: E402
-from sqd_fulqrum import main as workflow  # noqa: E402
-from sqd_fulqrum.qrmi import TRANSPILER  # noqa: E402
 
 SQD = Path(__file__).resolve().parents[1]
 REPO = SQD.parents[1]
@@ -71,7 +73,7 @@ TIMEOUT = float(os.getenv("FULQRUM_SLURM_TIMEOUT", "600"))
 RESOURCE = "fake_qpu"
 SHOTS = 200
 HEAVY = ("ffsim", "prefect_qiskit", "qcsc_prefect_fulqrum", "qcsc_workflow_utility", "pyscf")
-LOGGER = logging.getLogger("sqd_fulqrum.qrmi_slurm_test")
+LOGGER = logging.getLogger("sqd_common.qrmi_slurm_test")
 
 FAKE_QRMI = """\
 import json, sys
@@ -151,7 +153,7 @@ def qrmi_config(monkeypatch):
         blocks[name] = self
         return self
 
-    async def fake_artifact(*, table, key):
+    async def fake_artifact(*, table, key, **kwargs):
         blocks.setdefault("_artifacts", []).append((key, table))
 
     def loader(name):
@@ -159,9 +161,6 @@ def qrmi_config(monkeypatch):
             return blocks[block_name]
 
         return type(name, (), {"load": staticmethod(_load)})
-
-    async def sampler_options(name, default=None):
-        return {"params": {"shots": SHOTS}}
 
     for cls in (
         block_utils.CommandBlock,
@@ -175,10 +174,10 @@ def qrmi_config(monkeypatch):
     monkeypatch.setattr(slurm_run, "create_table_artifact", fake_artifact)
     monkeypatch.setattr(runtime_mod, "get_run_logger", lambda: _LoggerStub())
     monkeypatch.setattr(runtime_mod, "_sample_on_slurm", runtime_mod._sample_on_slurm.fn)
-    monkeypatch.setattr(workflow, "get_run_logger", lambda: LOGGER)
-    monkeypatch.setattr(chem, "get_run_logger", lambda: LOGGER)
-    monkeypatch.setattr(workflow, "create_ansatz_circuits", workflow.create_ansatz_circuits.fn)
-    monkeypatch.setattr(workflow.Variable, "get", sampler_options)
+    for module in (chem, lucj, sampling):
+        monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
+    monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
+    monkeypatch.setattr(sampling, "create_table_artifact", fake_artifact)
 
     shutil.rmtree(ROOT, ignore_errors=True)
     ROOT.mkdir(parents=True)
@@ -208,7 +207,7 @@ def qrmi_config(monkeypatch):
         },
     }
     args = create_blocks._parse_args([])
-    block_kwargs, _, _ = create_blocks.resolve_settings(args, config)
+    block_kwargs = create_blocks.resolve_settings(args, config)
     qrmi = create_blocks.resolve_qrmi_settings(args, config, block_kwargs)
     create_blocks.create_qrmi_blocks(qrmi)
 
@@ -223,21 +222,16 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_config, caplog):
     elec_props = chem.compute_molecular_integrals_from_geometry.fn(
         atom="H 0 0 0; H 0 0 0.74", basis="sto-3g"
     )
-    params = workflow.CircuitParameters(
-        sabre_layout_trials=20, sabre_swap_trials=4, sabre_max_iterations=2
-    )
+    params = CircuitParameters(sabre_layout_trials=20, sabre_swap_trials=4, sabre_max_iterations=2)
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
-        bit_array = asyncio.run(
-            workflow.sample_bitstrings.fn(
+        bool_array = asyncio.run(
+            sampling.quantum_sampling.fn(
+                lucj_params=lucj.get_lucj_params.fn(params, elec_props),
                 circuit_params=params,
-                elec_props=elec_props,
-                runner_name="unused",
-                option_name="sampler_options",
-                quantum_source="real-device",
-                random_seed=24,
-                qrmi_runtime_config=qrmi_config,
+                sampling_params=SamplingParameters(shots=SHOTS, qrmi_runtime_config=qrmi_config),
             )
         )
+    bit_array = BitArray.from_bool_array(bool_array)
 
     norb = elec_props.num_orbitals
     nalpha, nbeta = elec_props.num_electrons
@@ -256,10 +250,10 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_config, caplog):
     assert report["target_num_qubits"] == 8
     assert (
         report["seed_transpiler"]
-        == workflow.circuit_transpile_options(params, np.random.default_rng(24))["seed_transpiler"]
+        == lucj.circuit_transpile_options(params, np.random.default_rng(24))["seed_transpiler"]
     )
     assert "#SBATCH --qpu" not in (job_dir / "sampler.slurm").read_text()
     loaded = set(json.loads((job_dir / "node_modules.json").read_text()))
-    assert "sqd_fulqrum" in loaded
+    assert "sqd_common" in loaded
     assert loaded.isdisjoint(HEAVY), sorted(loaded & set(HEAVY))
     assert "Compiled on the compute node:" in caplog.text

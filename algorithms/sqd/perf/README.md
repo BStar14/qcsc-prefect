@@ -30,3 +30,9 @@ You can then specify the main flow parameters, along with a list of sub-paramete
 ```text
 (mpiprocs, num_nodes, subspace_dim)
 ```
+
+`base_parameters` are the flow parameters of the SQD workflow, and
+`base_parameters.solver_block_name` is the DICE solver block to tune. Each
+sub-experiment is a separate SQD run, so set `sampling.qiskit_runtime_job_id` (or
+`sampling.qrmi_result_dir`) to an earlier sampling job to sample only once, or use
+`sampling.quantum_source = "random"`.

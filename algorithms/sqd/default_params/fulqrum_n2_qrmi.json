@@ -1,0 +1,36 @@
+{
+  "molecule": {
+    "fcidump_file": "algorithms/sqd/data/n2_631g_fc.fcidump",
+    "spin_sq": 0.0,
+    "ccsd_maxiter": 4
+  },
+  "circuit": {
+    "n_lucj_layers": 1,
+    "compress": false,
+    "compress_maxiter": 100,
+    "max_ab_pairs": null,
+    "use_reset_mitigation": false,
+    "optimization_level": 3,
+    "sabre_max_iterations": 8,
+    "sabre_swap_trials": 10,
+    "sabre_layout_trials": 10000
+  },
+  "sampling": {
+    "quantum_source": "real-device",
+    "shots": 100000,
+    "qrmi_runtime_config": {
+      "root_dir": "/data/sqd-fulqrum/qrmi",
+      "scheduler": "slurm",
+      "command_block_name": "cmd-sqd-fulqrum-qrmi",
+      "execution_profile_block_name": "exec-sqd-fulqrum-qrmi",
+      "hpc_profile_block_name": "hpc-slurm-sqd-fulqrum-qrmi",
+      "resource": "YOUR_QRMI_RESOURCE"
+    }
+  },
+  "sqd": {
+    "subspace_dim": 400000,
+    "num_batches": 4,
+    "max_iterations": 5
+  },
+  "solver_block_name": "sqd-fulqrum-solver"
+}

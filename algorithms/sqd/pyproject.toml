@@ -41,7 +41,7 @@ qcsc-prefect-qiskit = { path = "../../packages/qcsc-prefect-qiskit", editable = 
 qcsc_workflow_utility = { path = "../qcsc_workflow_utility", editable = true }
 
 [tool.setuptools]
-packages = ["sqd_dice", "sqd_fulqrum"]
+packages = ["sqd_common", "sqd_dice", "sqd_fulqrum"]
 include-package-data = true
 zip-safe = false
 

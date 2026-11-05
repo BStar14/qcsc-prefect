@@ -23,12 +23,11 @@ pre_commands = []
 # [environments]
 # OPENBLAS_NUM_THREADS = "1"
 
-# Block and variable names (these are the defaults)
+# Block names (these are the defaults)
 command_block_name = "cmd-sqd-fulqrum-solver"
 execution_profile_block_name = "exec-sqd-fulqrum-slurm"
 hpc_profile_block_name = "hpc-slurm-sqd-fulqrum"
 solver_block_name = "sqd-fulqrum-solver"
-options_variable_name = "sampler_options"
 script_filename = "fulqrum_solver.slurm"
 metrics_artifact_key = "slurm-sqd-fulqrum-metrics"
 timeout_seconds = 7200
@@ -41,17 +40,13 @@ tol = 1e-8
 dense_max_dim = 64
 return_sci_state = false            # The workflow only needs energies and occupancies
 
-# Sampler options variable. Default: {"params": {"shots": 100000}}
-shots = 100000
-# sampler_options_json = '{"params": {"shots": 50000}}'
-
 # Optional QRMI sampling (Slurm only). Uncomment to also create the three blocks
-# of the QRMI sampler job; the command prints the qrmi_runtime_config to pass as a
-# flow argument on each run. Unset queue, project, work_dir (default: work_dir/qrmi),
+# of the QRMI sampler job; the command prints the qrmi_runtime_config to paste
+# into the Sampling parameters of each run. Unset queue, project, work_dir (default: work_dir/qrmi),
 # modules, pre_commands, environments and ompthreads follow the solver settings.
 # [qrmi]
 # resource = "YOUR_QRMI_RESOURCE"   # Slurm --qpu; must match the QRMI configuration
-# python_executable = "/opt/venvs/qrmi/bin/python"  # Imports qrmi, the worker and sqd_fulqrum
+# python_executable = "/opt/venvs/qrmi/bin/python"  # Imports qrmi, the worker and sqd_common
 # walltime = "00:30:00"
 # ompthreads = 4                    # The QPU is held while the node compiles
 # timeout_seconds = 3600            # Monitoring only; does not cancel the job

@@ -22,7 +22,7 @@ def _example_config():
 
 
 def test_example_toml_resolves_to_expected_settings():
-    kwargs, var_name, sampler = _resolve(config=_example_config())
+    kwargs = _resolve(config=_example_config())
     assert kwargs["hpc_target"] == "slurm"
     assert kwargs["queue"] == "normal"
     assert kwargs["project"] == ""
@@ -38,8 +38,6 @@ def test_example_toml_resolves_to_expected_settings():
     assert kwargs["eigensolver"] == "scipy" and kwargs["tol"] == 1e-8
     assert kwargs["max_iter"] is None and kwargs["return_sci_state"] is False
     assert kwargs["modules"] == [] and kwargs["environments"] is None
-    assert var_name == "sampler_options"
-    assert sampler == {"params": {"shots": 100000}}
 
 
 def test_defaults_match_explicit_example_names():
@@ -47,8 +45,8 @@ def test_defaults_match_explicit_example_names():
 
     config = _example_config()
     minimal = {k: config[k] for k in ("hpc_target", "queue", "work_dir", "fulqrum_executable")}
-    full, _, _ = _resolve(config=config)
-    reduced, _, _ = _resolve(config=minimal)
+    full = _resolve(config=config)
+    reduced = _resolve(config=minimal)
     for key in (
         "command_block_name",
         "execution_profile_block_name",
@@ -77,15 +75,13 @@ def test_cli_overrides_config():
         "--max-iter",
         "500",
         "--return-sci-state",
-        "--sampler-options-json",
-        '{"params": {"shots": 2000}}',
         "--modules",
         "gcc",
         "openblas",
         "--slurm-memory",
         "16G",
     ]
-    kwargs, _, sampler = _resolve(argv, _example_config())
+    kwargs = _resolve(argv, _example_config())
     assert kwargs["queue"] == "debug"
     assert kwargs["ompthreads"] == 8
     assert kwargs["eigensolver"] == "primme"
@@ -93,7 +89,6 @@ def test_cli_overrides_config():
     assert kwargs["return_sci_state"] is True
     assert kwargs["modules"] == ["gcc", "openblas"]
     assert kwargs["slurm_memory"] == "16G"
-    assert sampler == {"params": {"shots": 2000}}
 
 
 def test_environments_and_csv_lists():
@@ -104,14 +99,25 @@ def test_environments_and_csv_lists():
         "fulqrum_executable": "qcsc-fulqrum-solve",
         "modules": "gcc, openblas",
         "environments": {"OMP_NUM_THREADS": 2, "OPENBLAS_NUM_THREADS": "1"},
-        "shots": 500,
     }
-    kwargs, _, sampler = _resolve(config=config)
+    kwargs = _resolve(config=config)
     assert kwargs["modules"] == ["gcc", "openblas"]
     assert kwargs["environments"] == {"OMP_NUM_THREADS": "2", "OPENBLAS_NUM_THREADS": "1"}
     # A bare command name stays a bare name, looked up on the compute node's PATH.
     assert kwargs["fulqrum_executable"] == "qcsc-fulqrum-solve"
-    assert sampler == {"params": {"shots": 500}}
+
+
+@pytest.mark.parametrize("key", ["shots", "sampler_options_json", "options_variable_name"])
+def test_run_settings_are_rejected_as_block_settings(key):
+    config = {**_example_config(), key: 100}
+    with pytest.raises(RuntimeError, match=f"'{key}' is not a block setting.*flow parameters"):
+        _resolve(config=config)
+
+
+@pytest.mark.parametrize("flag", ["--shots", "--sampler-options-json", "--options-variable-name"])
+def test_run_settings_have_no_cli_flags(flag):
+    with pytest.raises(SystemExit):
+        create_blocks._parse_args([flag, "1"])
 
 
 @pytest.mark.parametrize(
@@ -126,7 +132,7 @@ def test_other_targets(target, suffix):
     }
     if target != "local":
         config.update(group="grp", queue="q")
-    kwargs, _, _ = _resolve(config=config)
+    kwargs = _resolve(config=config)
     assert kwargs["hpc_target"] == target
     assert kwargs["script_filename"] == f"fulqrum_solver{suffix}"
     assert kwargs["hpc_profile_block_name"] == f"hpc-{target}-sqd-fulqrum"
@@ -152,25 +158,21 @@ def test_missing_or_invalid_settings(config, message):
         _resolve(config=config)
 
 
-def test_dry_run_prints_settings_without_prefect(capsys, monkeypatch):
-    def fail(*_args, **_kwargs):
-        raise AssertionError("dry run must not save anything")
-
-    monkeypatch.setattr(create_blocks, "_set_variable", fail)
+def test_dry_run_prints_settings_without_prefect(capsys):
     create_blocks.main(["--config", str(EXAMPLE), "--dry-run"])
     printed = json.loads(capsys.readouterr().out)
+    assert set(printed) == {"blocks"}
     assert printed["blocks"]["solver_block_name"] == "sqd-fulqrum-solver"
-    assert printed["sampler_options"] == {"params": {"shots": 100000}}
 
 
 def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
-    """main() feeds create_fulqrum_blocks; saves and the variable are mocked."""
+    """main() feeds create_fulqrum_blocks; the block saves are mocked."""
 
     pytest.importorskip("prefect")
     pytest.importorskip("qiskit_addon_sqd")
     from qcsc_prefect_fulqrum import block_utils
 
-    kwargs, _, _ = _resolve(config=_example_config())
+    kwargs = _resolve(config=_example_config())
     inspect.signature(block_utils.create_fulqrum_blocks).bind(**kwargs)
 
     saved = {}
@@ -187,12 +189,9 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
     ):
         monkeypatch.setattr(cls, "save", fake_save, raising=False)
     monkeypatch.setattr(block_utils, "register_fulqrum_block_types", lambda: None)
-    variables = {}
-    monkeypatch.setattr(create_blocks, "_set_variable", variables.__setitem__)
 
     create_blocks.main(["--config", str(EXAMPLE)])
 
-    assert variables == {"sampler_options": {"params": {"shots": 100000}}}
     assert set(saved) == {
         "cmd-sqd-fulqrum-solver",
         "exec-sqd-fulqrum-slurm",
@@ -212,4 +211,4 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
     assert solver.execution_profile_block_name == "exec-sqd-fulqrum-slurm"
     assert solver.hpc_profile_block_name == "hpc-slurm-sqd-fulqrum"
     assert solver.return_sci_state is False
-    assert "Saved blocks and variable" in capsys.readouterr().out
+    assert "Saved blocks for SQD fulqrum workflow" in capsys.readouterr().out

@@ -21,7 +21,6 @@ command_block_name = "cmd-sqd-dice-solver"
 execution_profile_block_name = "exec-sqd-dice-fugaku"
 hpc_profile_block_name = "hpc-fugaku-sqd-dice"
 solver_block_name = "sqd-solver"
-options_variable_name = "sampler_options"
 script_filename = "dice_solver.pjm"
 metrics_artifact_key = "fugaku-sqd-dice-metrics"
 
@@ -30,5 +29,3 @@ davidson_tol = 1e-5
 energy_tol = 1e-10
 max_iter = 10
 return_sci_state = false
-
-shots = 100000

@@ -1,10 +1,10 @@
 """Post-selection and subsampling with precise control of the subspace dimension.
 
-Subsampling follows ``sqd_dice`` so both solvers see the same subspaces for the
-same RNG state. Differences:
+Both SQD workflows share this module, so the DICE and fulqrum solvers see the
+same subspaces for the same RNG state.
 
-- CI strings use Python ints (``object`` dtype) when ``norb >= 64``, which the
-  fulqrum solver accepts. Below that they are ``int64``, as in ``sqd_dice``.
+- CI strings are ``int64`` for ``norb < 64`` and Python ints (``object`` dtype)
+  otherwise, which the fulqrum solver accepts.
 - Open-shell batches keep at least one string per spin, so a very small
   ``subspace_dim`` cannot produce an empty subspace.
 """
