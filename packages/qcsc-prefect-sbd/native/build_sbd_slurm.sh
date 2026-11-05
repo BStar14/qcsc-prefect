@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 REPO_URL="${SBD_REPO_URL:-https://github.com/r-ccs-cms/sbd.git}"
-SBD_COMMIT="${SBD_COMMIT:-d3210615ec36581ec3a286b8e339492f20b4b529}"
+SBD_COMMIT="${SBD_COMMIT:-$(cat "$SCRIPT_DIR/SBD_REVISION")}"
 SBD_DIR="${SBD_DIR:-${SCRIPT_DIR}/sbd}"
 
 # Default portable build flags
@@ -44,8 +44,12 @@ else
     echo "SBD repo already exists: $SBD_DIR"
 fi
 
-echo "Checking out SBD commit: $SBD_COMMIT"
-git -C "$SBD_DIR" checkout "$SBD_COMMIT"
+# Use the revision matching main.cc on every platform, including existing clones.
+if ! git -C "$SBD_DIR" cat-file -e "${SBD_COMMIT}^{commit}" 2>/dev/null; then
+    git -C "$SBD_DIR" fetch origin "$SBD_COMMIT"
+fi
+git -C "$SBD_DIR" checkout --detach "$SBD_COMMIT"
+echo "Using SBD commit: $(git -C "$SBD_DIR" rev-parse HEAD)"
 
 # Clean previous build
 rm -f "$SCRIPT_DIR"/*.o "$SCRIPT_DIR"/diag
