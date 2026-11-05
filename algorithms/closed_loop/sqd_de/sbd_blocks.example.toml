@@ -1,0 +1,67 @@
+# Required for both targets
+hpc_target = "miyabi" # "miyabi" or "fugaku"
+# Miyabi uses project. Fugaku also accepts legacy project, but tutorials prefer `group = "ra000000"`.
+project = "gz00"
+# group = "ra000000"
+queue = "regular-c" # Miyabi queue, or Fugaku rscgrp (e.g. "small")
+work_dir = "/work/gz00/<user>/sbd_jobs"
+sbd_executable = "/work/gz00/<user>/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
+
+# Optional execution profile
+# launcher default: "mpiexec.hydra" (miyabi), "mpiexec" (fugaku)
+launcher = "mpiexec.hydra"
+walltime = "00:15:00"
+num_nodes = 1
+mpiprocs = 8
+modules = ["intel/2023.2.0", "impi/2021.10.0"]
+mpi_options = ["-np", "8"]
+
+# Optional Fugaku-specific settings (used only when hpc_target = "fugaku")
+# fugaku_gfscache = "/vol0002"
+# fugaku_spack_modules = ["fj", "fjmpi"]
+# fugaku_mpi_options_for_pjm = ["max-proc-per-node=8"]
+
+# Optional block/variable names
+command_block_name = "cmd-sbd-diag"
+execution_profile_block_name = "exec-sbd-mpi"     # Miyabi default
+# execution_profile_block_name = "exec-sbd-fugaku" # Fugaku suggested
+hpc_profile_block_name = "hpc-miyabi-sbd"         # Miyabi default
+# hpc_profile_block_name = "hpc-fugaku-sbd"        # Fugaku suggested
+solver_block_name = "davidson-solver"
+options_variable_name = "sqd_options"
+
+# Optional solver script / metrics naming
+# script_filename = "sbd_solver.pbs"  # Miyabi default
+# script_filename = "sbd_solver.pjm"  # Fugaku suggested
+# metrics_artifact_key = "miyabi-sbd-metrics"  # Miyabi default
+# metrics_artifact_key = "fugaku-sbd-metrics"  # Fugaku suggested
+
+# Optional solver parameters
+task_comm_size = 1
+adet_comm_size = 1
+bdet_comm_size = 1
+# Fast preset for low-accuracy runs
+block = 4
+iteration = 1
+tolerance = 0.01
+carryover_ratio = 0.1
+solver_mode = "cpu"
+
+# Optional runtime options variable
+# default if omitted: {"params":{"shots":500000}} for miyabi, {"params":{"shots":50000}} for fugaku
+shots = 50000 # Fugaku tutorial baseline; override for your workload
+
+# QrmiRuntimeBlock "qrmi-runtime" used for quantum_source = "real-device". For random or
+# qfw only, delete [runtime] and [runtime.qrmi]; an existing block is then kept. The flow
+# sets the SBD transpiler and its configuration itself.
+[runtime]
+# "iqp": submit from the workflow process. "slurm": use root_dir and three block names.
+scheduler = "iqp"
+resource = "ibm_kingston"
+
+# QRMI settings without the "<resource>_" prefix. Set QRMI_IBM_QCS_IAM_APIKEY in the
+# environment; it must not be written in this file.
+[runtime.qrmi]
+QRMI_IBM_QCS_ENDPOINT = "https://quantum.cloud.ibm.com/api/v1"
+QRMI_IBM_QCS_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
+QRMI_IBM_QCS_SERVICE_CRN = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"

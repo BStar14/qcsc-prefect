@@ -56,6 +56,58 @@ jobs:
       - name: Run pytest
         run: uv run --no-sync pytest
 
+  # The algorithms are not uv workspace members; install them with their solver and
+  # chemistry dependencies and run their tests (random mode, fake solvers, no HPC or QPU).
+  algorithms:
+    name: Algorithms (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # A test compares against the flows at an earlier commit.
+          fetch-depth: 0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install algorithms
+        run: |
+          uv venv
+          uv pip install \
+            -e packages/qcsc-prefect-core \
+            -e packages/qcsc-prefect-adapters \
+            -e packages/qcsc-prefect-blocks \
+            -e packages/qcsc-prefect-executor \
+            -e packages/qcsc-prefect-dice \
+            -e packages/qcsc-prefect-qiskit \
+            -e packages/qcsc-prefect-sbd \
+            -e packages/qcsc-prefect-fulqrum \
+            -e algorithms/qcsc_workflow_utility \
+            -e "algorithms/open_loop/sqd[all]" \
+            -e algorithms/open_loop/skqd \
+            -e algorithms/closed_loop/sqd_de \
+            pytest
+
+      - name: Run algorithm tests
+        run: uv run --no-sync pytest algorithms
+
+      - name: Install native SBD build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libopenmpi-dev openmpi-bin libopenblas-dev
+
+      - name: Build and test native SBD CPU driver
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          bash packages/qcsc-prefect-sbd/native/build_sbd_slurm.sh
+          export SBD_NATIVE_BINARY="$PWD/packages/qcsc-prefect-sbd/native/diag"
+          uv run --no-sync pytest packages/qcsc-prefect-sbd/tests/test_sbd_native.py -q
+
   # Single required status check for branch protection, independent of the matrix.
   ci-ok:
     name: CI OK
@@ -63,6 +115,7 @@ jobs:
     needs:
       - lint
       - test
+      - algorithms
     runs-on: ubuntu-latest
     steps:
       - name: Check job results

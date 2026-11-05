@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skqd_dice"
+version = "1.0.0"
+description = "Prefect workflow of SKQD experiment from arXiv:2501.09702."
+authors = [
+    { name = "Yuto Morohoshi", email = "mrhsyut@ibm.com" }
+]
+maintainers = [
+    { name = "Yuto Morohoshi", email = "mrhsyut@ibm.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "ffsim",
+    "qiskit-addon-sqd",
+    "prefect",
+    "qcsc-prefect-qiskit",
+    "qiskit-ibm-runtime",
+    "qcsc-prefect-dice",
+    "qcsc-prefect-sbd",
+    "qcsc_workflow_utility",
+]
+
+[tool.uv.sources]
+qcsc-prefect-core = { path = "../../../packages/qcsc-prefect-core", editable = true }
+qcsc-prefect-adapters = { path = "../../../packages/qcsc-prefect-adapters", editable = true }
+qcsc-prefect-blocks = { path = "../../../packages/qcsc-prefect-blocks", editable = true }
+qcsc-prefect-executor = { path = "../../../packages/qcsc-prefect-executor", editable = true }
+qcsc-prefect-dice = { path = "../../../packages/qcsc-prefect-dice", editable = true }
+qcsc-prefect-sbd = { path = "../../../packages/qcsc-prefect-sbd", editable = true }
+qcsc-prefect-qiskit = { path = "../../../packages/qcsc-prefect-qiskit", editable = true }
+qcsc_workflow_utility = { path = "../../qcsc_workflow_utility", editable = true }
+
+[tool.setuptools]
+packages = ["skqd_dice"]
+include-package-data = true
+zip-safe = false
+
+[project.scripts]
+skqd-deploy = "skqd_dice.main:deploy"
+skqd-create-blocks = "skqd_dice.create_blocks:main"

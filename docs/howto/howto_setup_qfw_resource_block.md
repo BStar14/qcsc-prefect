@@ -29,7 +29,7 @@ The `QFwResource` block contains the information needed to locate and access a Q
 The block implementation is located at:
 
 ```text
-/path/to/qcsc-prefect/algorithms/sbd/sbd/qfw_resource.py
+/path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd/qfw_resource.py
 ```
 Register the block type with Prefect from the `qcsc-prefect` repository root:
 
@@ -68,7 +68,7 @@ Create the `qfw-runner` block instance by specifying the QFw device ID and the d
 From the `qcsc-prefect` repository root, run:
 
 ```bash
-python algorithms/sbd/create_qfw_block.py \
+python algorithms/closed_loop/sqd_de/create_qfw_block.py \
   --device-id <device-id> \
   --device-access-config <path-to-device-access.yaml>
 ```
@@ -76,7 +76,7 @@ python algorithms/sbd/create_qfw_block.py \
 For example:
 
 ```bash
-python algorithms/sbd/create_qfw_block.py \
+python algorithms/closed_loop/sqd_de/create_qfw_block.py \
   --device-id ibm_fez \
   --device-access-config /workspace/qfw-container-base/device-access.yaml
 ```
@@ -92,7 +92,7 @@ If `--device-access-config` is omitted, the script uses the following default pa
 For example, when using the default configuration path:
 
 ```bash
-python algorithms/sbd/create_qfw_block.py \
+python algorithms/closed_loop/sqd_de/create_qfw_block.py \
   --device-id ibm_fez
 ```
 

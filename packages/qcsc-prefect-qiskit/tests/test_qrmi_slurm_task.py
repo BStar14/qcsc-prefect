@@ -76,18 +76,19 @@ def test_sampler_runs_as_prefect_task_with_prepare_callable(
         assert context is not None
         assert context.task.name == "quantum-sampling-qrmi-slurm"
         assert context.parameters["runtime"].prepare is prepare
-        assert isinstance(context.parameters["circuit"], QuantumCircuit)
+        (task_circuit,) = context.parameters["circuits"]
+        assert isinstance(task_circuit, QuantumCircuit)
         task_run_ids.append(context.task_run.id)
         work_dir = kwargs["work_dir"]
         with (work_dir / "circuit.qpy").open("rb") as stream:
             (restored,) = qpy.load(stream)
         assert restored.metadata == {"prepared": True}
-        assert json.loads((work_dir / "transpile_config.json").read_text()) == {
-            "seed_transpiler": 24
-        }
+        assert json.loads((work_dir / "transpile_config.json").read_text()) == [
+            {"seed_transpiler": 24}
+        ]
         request = json.loads((work_dir / "sampler_request.json").read_text())
         assert request["shots"] == 100
-        assert request["registers"] == {"meas": 2}
+        assert request["registers"] == [{"meas": 2}]
         result = PrimitiveResult(
             [
                 SamplerPubResult(

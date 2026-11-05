@@ -10,7 +10,7 @@ def resolve_sampler_options_and_work_dir(
 ) -> tuple[dict[str, Any], str | None]:
     """
     Resolve Prefect Variable payload into:
-    - sampler options for QuantumRuntime.sampler(...)
+    - sampler options for QrmiRuntime.sampler(...)
     - optional workflow base work_dir
 
     Supported payload shapes:
