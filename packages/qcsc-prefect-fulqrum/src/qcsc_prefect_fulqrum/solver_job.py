@@ -160,13 +160,19 @@ class FulqrumSolverJob(Block):
 
 
 def solution_to_sci_result(
-    solution: FulqrumSolution, *, norb: int, nelec: tuple[int, int]
+    solution: FulqrumSolution,
+    *,
+    norb: int,
+    nelec: tuple[int, int],
+    carryover_requested: bool = False,
 ) -> SCIResult:
     """Convert a :class:`FulqrumSolution` into a qiskit-addon-sqd ``SCIResult``.
 
     The energy is electronic only, as with the DICE solver. Without amplitudes the
-    ``sci_state`` is ``None``. The carryover strings go into ``SCIResult.carryover``,
-    or ``None`` when the solve returned none.
+    ``sci_state`` is ``None``. The carryover strings go into ``SCIResult.carryover``.
+    When carryover was requested it is always a pair of arrays, empty if the
+    fraction selected no string, so that it is not taken for a solver without
+    carryover; otherwise it is ``None`` unless the solve returned some.
     """
 
     sci_state = None
@@ -179,7 +185,7 @@ def solution_to_sci_result(
             nelec=tuple(nelec),
         )
     carryover = None
-    if len(solution.carryover_a) or len(solution.carryover_b):
+    if carryover_requested or len(solution.carryover_a) or len(solution.carryover_b):
         carryover = (np.asarray(solution.carryover_a), np.asarray(solution.carryover_b))
     return SCIResult(
         energy=float(solution.energy),
@@ -260,4 +266,6 @@ async def _run_fulqrum_inner(
         meta.get("timings"),
         job_work_dir,
     )
-    return solution_to_sci_result(solution, norb=norb, nelec=nelec)
+    return solution_to_sci_result(
+        solution, norb=norb, nelec=nelec, carryover_requested=solver.carryover_fraction > 0
+    )
