@@ -1,21 +1,25 @@
 """Create the Prefect blocks of the SQD workflow with the DICE solver.
 
 An optional ``[runtime]`` table also saves the ``QrmiRuntimeBlock`` that samples
-(``sampling.runtime_block_name`` of each run, default ``qrmi-runtime``). Shots are
-a flow parameter, not a block setting.
+(``sampling.runtime_block_name`` of each run, default ``qrmi-runtime``). The DICE
+blocks target Miyabi or Fugaku, so ``[qrmi]``, a QRMI job in Slurm, is not used
+with them. Shots are a flow parameter, not a block setting.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
 from qcsc_prefect_dice import create_dice_blocks
 from sqd_common.advanced_blocks import advanced_block_name, advanced_settings, save_advanced_block
 from sqd_common.block_config import load_block_config
+from sqd_common.block_names import solver_block_names, solver_ref
 from sqd_common.runtime_block import (
     build_runtime_block,
+    describe,
     runtime_block_name,
     runtime_block_settings,
 )
@@ -56,6 +60,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--hpc-profile-block-name")
     parser.add_argument("--solver-block-name")
     parser.add_argument("--runtime-block-name")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the resolved settings as JSON without saving blocks.",
+    )
 
     parser.add_argument("--select-cutoff", type=float)
     parser.add_argument("--davidson-tol", type=float)
@@ -110,23 +119,11 @@ def _require(name: str, value: Any) -> Any:
 
 
 def _default_names(*, hpc_target: str) -> dict[str, str]:
+    names = solver_block_names("dice", hpc_target)
     if hpc_target == "miyabi":
-        return {
-            "command_block_name": "cmd-sqd-dice-solver",
-            "execution_profile_block_name": "exec-sqd-dice-mpi",
-            "hpc_profile_block_name": "hpc-miyabi-sqd-dice",
-            "solver_block_name": "sqd-solver",
-            "script_filename": "dice_solver.pbs",
-            "metrics_artifact_key": "miyabi-sqd-dice-metrics",
-        }
-    return {
-        "command_block_name": "cmd-sqd-dice-solver",
-        "execution_profile_block_name": "exec-sqd-dice-fugaku",
-        "hpc_profile_block_name": "hpc-fugaku-sqd-dice",
-        "solver_block_name": "sqd-solver",
-        "script_filename": "dice_solver.pjm",
-        "metrics_artifact_key": "fugaku-sqd-dice-metrics",
-    }
+        # Miyabi runs DICE with mpiexec.hydra; keep the profile name of that launcher.
+        names["execution_profile_block_name"] = "exec-sqd-dice-miyabi"
+    return names
 
 
 def _default_mpi_options(*, hpc_target: str, mpiprocs: int) -> list[str]:
@@ -157,6 +154,11 @@ def main() -> None:
     runtime_name = runtime_block_name(args.runtime_block_name, config)
     advanced_name = advanced_block_name(config)
     advanced_settings(config, "dice_shci_solver_job/check")
+    if "qrmi" in config:
+        raise RuntimeError(
+            "[qrmi] samples through a QRMI job in Slurm, and the DICE blocks target Miyabi "
+            "or Fugaku. Use [runtime] (IBM Quantum from the workflow host) with DICE."
+        )
 
     hpc_target = (
         str(_pick_value(args.hpc_target, config.get("hpc_target"), "miyabi")).strip().lower()
@@ -180,7 +182,7 @@ def main() -> None:
         _pick_value(args.mpiprocs, config.get("mpiprocs"), 4 if hpc_target == "miyabi" else 2)
     )
 
-    block_names = create_dice_blocks(
+    block_kwargs = dict(
         hpc_target=hpc_target,
         project=str(project).strip(),
         queue=str(queue).strip(),
@@ -264,7 +266,19 @@ def main() -> None:
             _pick_value(args.fugaku_pjm_resources, config.get("fugaku_pjm_resources"))
         ),
     )
+    ref = solver_ref("dice", block_kwargs["solver_block_name"])
+    advanced = advanced_settings(config, ref)
+    if args.dry_run:
+        resolved = {
+            "blocks": block_kwargs,
+            "advanced_block": {"name": advanced_name, **advanced.model_dump()},
+        }
+        if runtime is not None:
+            resolved["runtime_block"] = {"name": runtime_name, **describe(runtime)}
+        print(json.dumps(resolved, indent=2, default=str))
+        return
 
+    block_names = create_dice_blocks(**block_kwargs)
     print(f"Saved blocks for SQD workflow (target={hpc_target})")
     print(f"  SQD solver block: {block_names['solver_block_name']}")
     print(f"  Command block: {block_names['command_block_name']}")
@@ -272,12 +286,11 @@ def main() -> None:
     print(f"  HPC profile block: {block_names['hpc_profile_block_name']}")
     print(f"  Work directory: {Path(str(work_dir)).expanduser().resolve()}")
     print(f"  DICE executable: {Path(str(dice_executable)).expanduser().resolve()}")
-    solver_ref = f"dice_shci_solver_job/{block_names['solver_block_name']}"
     if runtime is not None:
         build_runtime_block(runtime).save(runtime_name, overwrite=True)
         print(f"  QRMI runtime block: {runtime_name} (scheduler={runtime['scheduler']})")
-    save_advanced_block(advanced_settings(config, solver_ref), advanced_name)
-    print(f"  Advanced SQD Settings block: {advanced_name} (Solver Block {solver_ref})")
+    save_advanced_block(advanced, advanced_name)
+    print(f"  Advanced SQD Settings block: {advanced_name} (Solver Block {ref})")
 
 
 if __name__ == "__main__":

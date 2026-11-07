@@ -22,16 +22,18 @@ from qcsc_prefect_core.models.gpu_request import validate_gpu_request
 from qcsc_prefect_fulqrum.solver import FulqrumSolverOptions
 from sqd_common.advanced_blocks import advanced_block_name, advanced_settings, save_advanced_block
 from sqd_common.block_config import load_block_config
-from sqd_common.runtime_block import (
-    build_runtime_block,
-    describe,
-    runtime_block_name,
-    runtime_block_settings,
+from sqd_common.block_names import solver_block_names
+from sqd_common.block_names import solver_ref as solver_ref_of
+from sqd_common.qrmi_blocks import (
+    add_qrmi_arguments,
+    create_qrmi_blocks,
+    resolve_qrmi_settings,
+    resolve_runtime_settings,
 )
+from sqd_common.runtime_block import build_runtime_block, describe, runtime_block_name
 
 HPC_TARGETS = ("slurm", "local", "miyabi", "fugaku")
 BACKENDS = ("cpu", "gpu", "gpu-mpi")
-QRMI_WORKER_ARGS = ["-m", "qcsc_prefect.integrations.qiskit.qrmi.worker"]
 # Run settings that belong to the flow parameters, not to the blocks.
 FLOW_PARAMETER_KEYS = {
     "shots": "sampling.shots",
@@ -39,27 +41,6 @@ FLOW_PARAMETER_KEYS = {
     "options_variable_name": "sampling.shots",
     "carryover_fraction": "sqd.carryover_fraction",
 }
-QRMI_KEYS = frozenset(
-    {
-        "resource",
-        "python_executable",
-        "work_dir",
-        "queue",
-        "project",
-        "walltime",
-        "ompthreads",
-        "slurm_memory",
-        "modules",
-        "pre_commands",
-        "environments",
-        "extra_directives",
-        "timeout_seconds",
-        "watch_poll_interval",
-        "command_block_name",
-        "execution_profile_block_name",
-        "hpc_profile_block_name",
-    }
-)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -128,14 +109,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Whether to return the ground-state amplitudes as an SCIState.",
     )
-    parser.add_argument(
-        "--qrmi-resource",
-        help="QRMI resource ID; creates the QRMI sampler blocks (Slurm only).",
-    )
-    parser.add_argument(
-        "--qrmi-python-executable",
-        help="Compute-node Python that runs the QRMI worker.",
-    )
+    add_qrmi_arguments(parser)
     parser.add_argument(
         "--runtime-block-name",
         help="Name of the QrmiRuntimeBlock to save (default: qrmi-runtime).",
@@ -191,18 +165,6 @@ def _optional_str(value: Any) -> str | None:
     if value is None or not str(value).strip():
         return None
     return str(value).strip()
-
-
-def _default_names(*, hpc_target: str) -> dict[str, str]:
-    suffix = {"local": "", "slurm": ".slurm", "miyabi": ".pbs", "fugaku": ".pjm"}[hpc_target]
-    return {
-        "command_block_name": "cmd-sqd-fulqrum-solver",
-        "execution_profile_block_name": f"exec-sqd-fulqrum-{hpc_target}",
-        "hpc_profile_block_name": f"hpc-{hpc_target}-sqd-fulqrum",
-        "solver_block_name": "sqd-fulqrum-solver",
-        "script_filename": f"fulqrum_solver{suffix}",
-        "metrics_artifact_key": f"{hpc_target}-sqd-fulqrum-metrics",
-    }
 
 
 # create_fulqrum_blocks keywords that are FulqrumSolverOptions fields too.
@@ -267,7 +229,7 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
     hpc_target = str(pick("hpc_target", "slurm")).strip().lower()
     if hpc_target not in HPC_TARGETS:
         raise RuntimeError(f"'hpc_target' must be one of {', '.join(HPC_TARGETS)}.")
-    defaults = _default_names(hpc_target=hpc_target)
+    defaults = solver_block_names("fulqrum", hpc_target)
 
     project = _pick_value(args.project, config.get("project"), args.group, config.get("group"))
     if hpc_target in {"miyabi", "fugaku"}:
@@ -369,153 +331,6 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
     return block_kwargs
 
 
-def resolve_qrmi_settings(
-    args: argparse.Namespace, config: dict[str, Any], block_kwargs: dict[str, Any]
-) -> dict[str, Any] | None:
-    """Resolve the optional ``[qrmi]`` table, or None when QRMI is not configured.
-
-    Unset queue, project, work_dir, modules, pre_commands and environments
-    inherit the solver settings. The QRMI work directory defaults to a ``qrmi``
-    subdirectory of the solver's, and the job holds the QPU while it compiles,
-    so ``ompthreads`` defaults to the solver's thread count.
-    """
-    table = config.get("qrmi")
-    if table is None:
-        table = {}
-    if not isinstance(table, dict):
-        raise RuntimeError("'qrmi' must be a table.")
-    unknown = set(table) - QRMI_KEYS
-    if unknown:
-        raise RuntimeError(f"Unknown [qrmi] settings: {', '.join(sorted(unknown))}")
-    resource = _optional_str(_pick_value(args.qrmi_resource, table.get("resource")))
-    if resource is None:
-        if table or args.qrmi_python_executable:
-            raise RuntimeError("Missing required setting: qrmi.resource")
-        return None
-    if any(char.isspace() for char in resource):
-        raise RuntimeError("'qrmi.resource' must not contain whitespace.")
-    if block_kwargs["hpc_target"] != "slurm":
-        raise RuntimeError("QRMI sampling needs hpc_target = 'slurm'.")
-    python_executable = _require(
-        "qrmi.python_executable",
-        _pick_value(args.qrmi_python_executable, table.get("python_executable")),
-    )
-
-    def pick(name: str, default: Any = None) -> Any:
-        return _pick_value(table.get(name), default)
-
-    ompthreads = pick("ompthreads", block_kwargs["ompthreads"])
-    environments = _normalize_str_dict(table.get("environments"))
-    if environments is None:
-        environments = block_kwargs["environments"]
-    timeout_seconds = pick("timeout_seconds")
-    watch_poll_interval = pick("watch_poll_interval")
-    return dict(
-        resource=resource,
-        # Not resolved: the path must be valid on the compute node.
-        python_executable=str(Path(str(python_executable).strip()).expanduser()),
-        root_dir=str(
-            Path(str(pick("work_dir", Path(block_kwargs["root_dir"]) / "qrmi"))).expanduser()
-        ),
-        queue=str(pick("queue", block_kwargs["queue"])).strip(),
-        project=str(pick("project", block_kwargs["project"])).strip(),
-        walltime=str(pick("walltime", "00:30:00")).strip(),
-        ompthreads=None if ompthreads is None else int(ompthreads),
-        slurm_memory=_optional_str(pick("slurm_memory", block_kwargs["slurm_memory"])),
-        modules=_normalize_str_list(pick("modules", block_kwargs["modules"])),
-        pre_commands=_normalize_str_list(pick("pre_commands", block_kwargs["pre_commands"])),
-        environments=environments,
-        extra_directives=_normalize_str_list(pick("extra_directives")),
-        timeout_seconds=None if timeout_seconds is None else float(timeout_seconds),
-        watch_poll_interval=None if watch_poll_interval is None else float(watch_poll_interval),
-        command_block_name=str(pick("command_block_name", "cmd-sqd-fulqrum-qrmi")).strip(),
-        execution_profile_block_name=str(
-            pick("execution_profile_block_name", "exec-sqd-fulqrum-qrmi")
-        ).strip(),
-        hpc_profile_block_name=str(
-            pick("hpc_profile_block_name", "hpc-slurm-sqd-fulqrum-qrmi")
-        ).strip(),
-    )
-
-
-def qrmi_runtime_settings(qrmi: dict[str, Any]) -> dict[str, Any]:
-    """QrmiRuntimeBlock fields of a ``scheduler="slurm"`` runtime that uses these blocks."""
-    runtime = {
-        "scheduler": "slurm",
-        "root_dir": qrmi["root_dir"],
-        "command_block_name": qrmi["command_block_name"],
-        "execution_profile_block_name": qrmi["execution_profile_block_name"],
-        "hpc_profile_block_name": qrmi["hpc_profile_block_name"],
-        "resource": qrmi["resource"],
-    }
-    for name in ("timeout_seconds", "watch_poll_interval"):
-        if qrmi[name] is not None:
-            runtime[name] = qrmi[name]
-    return runtime
-
-
-def create_qrmi_blocks(qrmi: dict[str, Any]) -> None:
-    """Save the QRMI sampler job's Command, ExecutionProfile and HPCProfile blocks.
-
-    These blocks are separate from the solver's: the HPC profile requests the
-    QPU (``slurm_qpu``), which a fulqrum solve must not hold.
-    """
-    from qcsc_prefect_blocks.common.blocks import (
-        CommandBlock,
-        ExecutionProfileBlock,
-        HPCProfileBlock,
-    )
-
-    environments = dict(qrmi["environments"] or {})
-    if qrmi["ompthreads"] is not None and "OMP_NUM_THREADS" not in environments:
-        environments["OMP_NUM_THREADS"] = str(qrmi["ompthreads"])
-    CommandBlock(
-        command_name="sqd-fulqrum-qrmi",
-        executable_key="qrmi_python",
-        description="QRMI sampler worker (python -m qcsc_prefect.integrations.qiskit.qrmi.worker)",
-        default_args=list(QRMI_WORKER_ARGS),
-    ).save(qrmi["command_block_name"], overwrite=True)
-    ExecutionProfileBlock(
-        profile_name="sqd-fulqrum-qrmi",
-        command_name="sqd-fulqrum-qrmi",
-        num_nodes=1,
-        mpiprocs=1,
-        ompthreads=qrmi["ompthreads"],
-        walltime=qrmi["walltime"],
-        launcher="single",
-        modules=list(qrmi["modules"] or []),
-        pre_commands=list(qrmi["pre_commands"] or []),
-        environments=environments,
-    ).save(qrmi["execution_profile_block_name"], overwrite=True)
-    HPCProfileBlock(
-        hpc_target="slurm",
-        queue_cpu=qrmi["queue"],
-        queue_gpu=qrmi["queue"],
-        project_cpu=qrmi["project"],
-        project_gpu=qrmi["project"],
-        executable_map={"qrmi_python": qrmi["python_executable"]},
-        slurm_qpu=qrmi["resource"],
-        slurm_ntasks=1,
-        slurm_memory=qrmi["slurm_memory"],
-        slurm_extra_directives=list(qrmi["extra_directives"] or []),
-    ).save(qrmi["hpc_profile_block_name"], overwrite=True)
-
-
-def resolve_runtime_settings(
-    config: dict[str, Any], qrmi: dict[str, Any] | None
-) -> dict[str, Any] | None:
-    """QrmiRuntimeBlock fields from ``[qrmi]`` or ``[runtime]``, or None without either."""
-    if qrmi is not None and "runtime" in config:
-        raise RuntimeError(
-            "Set either [qrmi] (a Slurm QRMI job) or [runtime] (any QrmiRuntimeBlock), not both."
-        )
-    if qrmi is not None:
-        return qrmi_runtime_settings(qrmi)
-    if "runtime" in config:
-        return runtime_block_settings(config["runtime"])
-    return None
-
-
 def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     config = _load_config_file(args.config)
@@ -523,7 +338,7 @@ def main(argv: list[str] | None = None) -> None:
     qrmi = resolve_qrmi_settings(args, config, block_kwargs)
     runtime = resolve_runtime_settings(config, qrmi)
     runtime_name = runtime_block_name(args.runtime_block_name, config)
-    solver_ref = f"fulqrum_solver_job/{block_kwargs['solver_block_name']}"
+    solver_ref = solver_ref_of("fulqrum", block_kwargs["solver_block_name"])
     advanced = advanced_settings(config, solver_ref)
     advanced_name = advanced_block_name(config)
 

@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 PROFILES_DIR = Path(__file__).resolve().parent / "profiles"
-SOLVERS = ("fulqrum", "dice")
+SOLVERS = ("fulqrum", "dice", "sbd")
 # Keys that select the layers; they are not block settings.
 _SELECTORS = ("profile", "solver")
 # Tables that are layers, not settings of their own.

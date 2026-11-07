@@ -4,22 +4,27 @@ Usage::
 
     sqd-create-blocks --config sqd_blocks.toml       # solver from the file (default fulqrum)
     sqd-create-blocks --solver dice --config sqd_blocks.toml
+    sqd-create-blocks --solver sbd --config sqd_blocks.toml   # records the SBD block
 
 The remaining arguments go to the solver's own script (``sqd_fulqrum.create_blocks``
 or ``sqd_dice.create_blocks``). Each also saves the Advanced SQD Settings block,
 whose Solver Block names the solver block it created, so the runs use that solver.
-An SBD solver block is created with ``algorithms/closed_loop/sqd_de/create_blocks.py``;
-set Solver Block of the Advanced SQD Settings block to ``sbd_solver_job/<name>``.
+The SBD solver block is created with ``algorithms/closed_loop/sqd_de/create_blocks.py``;
+with ``solver = "sbd"`` this script saves only the Advanced SQD Settings block, whose
+Solver Block names that block: ``[sbd] solver_block_name``, default ``davidson-solver``.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 from sqd_common.block_config import read_config_file, solver_of
 
-SOLVERS = ("fulqrum", "dice")
+SOLVERS = ("fulqrum", "dice", "sbd")
+# The SBD solver block that algorithms/closed_loop/sqd_de/create_blocks.py saves by default.
+SBD_SOLVER_BLOCK_NAME = "davidson-solver"
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -32,11 +37,8 @@ def main(argv: list[str] | None = None) -> None:
         solver = argv[index + 1]
         del argv[index : index + 2]
     if solver == "sbd":
-        raise SystemExit(
-            "Create the SBD solver block with algorithms/closed_loop/sqd_de/create_blocks.py, "
-            "then set Solver Block of the Advanced SQD Settings block to "
-            "'sbd_solver_job/<name>'."
-        )
+        _record_sbd(argv)
+        return
     if solver not in SOLVERS:
         raise SystemExit(f"--solver must be one of {', '.join(SOLVERS)}; got {solver!r}")
 
@@ -53,6 +55,47 @@ def main(argv: list[str] | None = None) -> None:
         create()
         return
     create(argv)
+
+
+def _record_sbd(argv: list[str]) -> None:
+    """Save the Advanced SQD Settings block for an SBD solver block made elsewhere.
+
+    ``algorithms/closed_loop/sqd_de/create_blocks.py`` saves the SBD solver block
+    and its job blocks; ``[sqd_advanced]`` of this config applies as for the other
+    solvers.
+    """
+    from sqd_common.advanced_blocks import (
+        advanced_block_name,
+        advanced_settings,
+        save_advanced_block,
+    )
+    from sqd_common.block_config import load_block_config
+    from sqd_common.block_names import solver_ref
+
+    config_path = _config_path(argv)
+    config = load_block_config(config_path) if config_path is not None else {}
+    name = str(config.get("solver_block_name") or SBD_SOLVER_BLOCK_NAME).strip()
+    ref = solver_ref("sbd", name)
+    settings = advanced_settings(config, ref)
+    block_name = advanced_block_name(config)
+    if "--dry-run" in argv:
+        print(
+            json.dumps({"advanced_block": {"name": block_name, **settings.model_dump()}}, indent=2)
+        )
+        return
+    save_advanced_block(settings, block_name)
+    print(f"Advanced SQD Settings block: {block_name} (Solver Block {ref})")
+    print(
+        "Create the SBD solver block itself with algorithms/closed_loop/sqd_de/create_blocks.py "
+        f"(name {name!r}); this script does not."
+    )
+
+
+def _config_path(argv: list[str]) -> Path | None:
+    if "--config" not in argv:
+        return None
+    index = argv.index("--config")
+    return Path(argv[index + 1]) if index + 1 < len(argv) else None
 
 
 def _config_solver(argv: list[str]) -> str:
