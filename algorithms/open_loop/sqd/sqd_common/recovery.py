@@ -201,6 +201,8 @@ async def run_configuration_recovery(
 
     Raises:
         RuntimeError: If no bitstring survives post-selection.
+        RoundFailedError: If a solver job fails. The round's other jobs are
+            cancelled and ``on_round_end`` is not called for it.
     """
     logger = logger or logging.getLogger(__name__)
     n_alpha, n_beta = nelec
@@ -258,7 +260,7 @@ async def run_configuration_recovery(
         if batch_transform is not None:
             batches = batch_transform(batches, rng, current_carryover)
         batches = list(batches)
-        results: list[SCIResult] = await asyncio.gather(*(solve(ci) for ci in batches))
+        results = await _solve_round(solve, batches, round_idx)
 
         best_result_in_batch = min(results, key=lambda result: result.energy)
         round_energy = float(best_result_in_batch.energy + nuclear_repulsion_energy)
@@ -306,6 +308,42 @@ async def run_configuration_recovery(
         records=outcome_records,
         final_carryover=current_carryover,
     )
+
+
+class RoundFailedError(RuntimeError):
+    """A solver job of a recovery round failed, so the round has no result.
+
+    The round's checkpoint is not written, so a Retry of the run starts again at
+    this round, after the last completed one.
+    """
+
+
+async def _solve_round(
+    solve: SolveFn, batches: list[tuple[np.ndarray, np.ndarray]], round_idx: int
+) -> list[SCIResult]:
+    """Solve the batches of a round concurrently; the first failure fails the round.
+
+    The other batches are then cancelled, which cancels their scheduler jobs, so
+    no job of a failed round keeps running.
+
+    Raises:
+        RoundFailedError: If any batch fails. Its cause is the first failure.
+    """
+    jobs = [asyncio.ensure_future(solve(ci)) for ci in batches]
+    done, pending = await asyncio.wait(jobs, return_when=asyncio.FIRST_EXCEPTION)
+    failed = [i for i, job in enumerate(jobs) if job in done and job.exception() is not None]
+    if not failed:
+        return [job.result() for job in jobs]
+    for job in pending:
+        job.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    first = jobs[failed[0]].exception()
+    names = ", ".join(str(i + 1) for i in failed)
+    raise RoundFailedError(
+        f"SQD iteration {round_idx + 1} failed: batch {names} of {len(jobs)} raised "
+        f"{type(first).__name__}: {first}. {len(pending)} other batch job(s) were cancelled. "
+        "The checkpoint holds the last completed iteration, so a Retry continues from this one."
+    ) from first
 
 
 def _has_carryover(carryover: tuple[np.ndarray, np.ndarray]) -> bool:
