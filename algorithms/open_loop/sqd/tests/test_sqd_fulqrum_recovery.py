@@ -172,7 +172,7 @@ def test_resume_runs_only_the_remaining_rounds_and_reports_them():
     assert outcome.round_energies == [-2.0, -0.5]
     # The stored best is a floor; no round of this call beats it.
     assert outcome.best_energy == -10.0 and outcome.best_result is None
-    assert [(n, best) for n, _, best in ends] == [(3, -10.0), (4, -10.0)]
+    assert [(n, best) for n, _, best, _ in ends] == [(3, -10.0), (4, -10.0)]
     # Call 2 (E=-3) is the best of round 2, so its occupancies seed round 3.
     np.testing.assert_allclose(ends[0][1][0], np.full(norb, 0.2))
 
