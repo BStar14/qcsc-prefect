@@ -367,3 +367,13 @@ def test_pre_init_cannot_run_after_qpy_so_prepare_runs_it_first(h2):
     assert [(reg.name, len(reg)) for reg in prepared.cregs] == [
         (reg.name, len(reg)) for reg in circuit.cregs
     ]
+
+
+def test_a_per_run_backend_replaces_the_resource_and_the_qpu(tmp_path):
+    block_runtime = slurm_runtime(tmp_path)
+    same = make_qrmi_runtime(block_runtime, transpile_config={}, resource="test_heron")
+    assert (same.resource, same.slurm_qpu) == ("test_heron", None)
+    other = make_qrmi_runtime(block_runtime, transpile_config={}, resource="ibm_kingston")
+    assert (other.resource, other.slurm_qpu) == ("ibm_kingston", "ibm_kingston")
+    unset = make_qrmi_runtime(block_runtime, transpile_config={})
+    assert (unset.resource, unset.slurm_qpu) == ("test_heron", None)

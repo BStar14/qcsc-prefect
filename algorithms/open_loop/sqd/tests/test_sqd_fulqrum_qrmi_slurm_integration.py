@@ -101,8 +101,13 @@ class QRMIService:
 
 
 def _record_modules():
+    import os
+
     loaded = sorted({name.split(".")[0] for name in sys.modules})
     Path("node_modules.json").write_text(json.dumps(loaded))
+    # The QRMI settings the job sees: the block's plain ones arrive through sbatch.
+    qrmi_env = {k: v for k, v in os.environ.items() if "_QRMI_" in k}
+    Path("node_qrmi_env.json").write_text(json.dumps(qrmi_env))
 
 
 def get_backend(resource):
@@ -226,8 +231,12 @@ def qrmi_runtime(monkeypatch):
     assert blocks[qrmi["hpc_profile_block_name"]].slurm_qpu == RESOURCE
     blocks[qrmi["hpc_profile_block_name"]].slurm_qpu = None
     blocks[qrmi["command_block_name"]].default_args += ["--task-runner", str(runner)]
-    # The QrmiRuntimeBlock that create_blocks saves for [qrmi], loaded as the flow does.
-    block_runtime = runtime_mod.QrmiRuntime(**qrmi_blocks.qrmi_runtime_settings(qrmi))
+    # The QrmiRuntimeBlock that create_blocks saves for [qrmi], loaded as the flow does, with
+    # a plain CRN that the job must see and no API key.
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    settings = {**qrmi_blocks.qrmi_runtime_settings(qrmi), "service_crn": "crn:v1:testbed"}
+    block_runtime = QrmiRuntimeBlock(**settings).get_runtime()
 
     async def load(name):
         assert name == "qrmi-runtime"
@@ -272,7 +281,13 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_runtime, caplog):
         pub["seed_transpiler"]
         == lucj.circuit_transpile_options(params, np.random.default_rng(24))["seed_transpiler"]
     )
-    assert "#SBATCH --qpu" not in (job_dir / "sampler.slurm").read_text()
+    script = (job_dir / "sampler.slurm").read_text()
+    assert "#SBATCH --qpu" not in script
+    # The block's CRN reaches the job through sbatch's environment, not the script.
+    qrmi_env = json.loads((job_dir / "node_qrmi_env.json").read_text())
+    assert qrmi_env[f"{RESOURCE}_QRMI_IBM_QCS_SERVICE_CRN"] == "crn:v1:testbed"
+    assert "crn:v1:testbed" not in script
+    assert not any("APIKEY" in key for key in qrmi_env)
     loaded = set(json.loads((job_dir / "node_modules.json").read_text()))
     assert "sqd_common" in loaded
     assert loaded.isdisjoint(HEAVY), sorted(loaded & set(HEAVY))

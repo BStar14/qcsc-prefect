@@ -841,3 +841,30 @@ from qcsc_prefect.integrations.qiskit.qrmi.worker import main
     src = Path(__file__).parents[1] / "src"
     env = {**os.environ, "PYTHONPATH": str(src)}
     subprocess.run([sys.executable, "-c", program], env=env, check=True, capture_output=True)
+
+
+def test_job_settings_go_to_the_sbatch_environment_not_the_files(runtime, submitted):
+    run = replace(
+        runtime,
+        resource="ibm_kingston",
+        slurm_qpu="ibm_kingston",
+        job_settings={"QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:x", "QRMI_IBM_QCS_SESSION_MODE": "batch"},
+    )
+    asyncio.run(run.sampler([(measured_circuit(),)], shots=4))
+    (call,) = submitted
+    # SPANK reads the settings under the resource prefix; --qpu follows the resource.
+    assert call["submit_env"] == {
+        "ibm_kingston_QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:x",
+        "ibm_kingston_QRMI_IBM_QCS_SESSION_MODE": "batch",
+    }
+    assert call["slurm_qpu"] == "ibm_kingston"
+    job_dir = call["work_dir"]
+    for name in ("sampler_request.json", "transpile_config.json", "slurm_job.json"):
+        assert "crn:v1:x" not in (job_dir / name).read_text()
+
+
+def test_without_job_settings_the_submit_env_is_empty(runtime, submitted):
+    asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    assert submitted[0]["submit_env"] == {}
+    # Without a per-run backend, --qpu stays the HPC profile's.
+    assert submitted[0]["slurm_qpu"] is None

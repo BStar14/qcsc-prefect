@@ -151,7 +151,7 @@ def test_dice_runtime_table_saves_the_block_after_the_solver(monkeypatch, tmp_pa
     dice.main()
     ((name, settings),) = saved
     assert name == "qrmi-runtime" and settings["scheduler"] == "iqp"
-    assert settings["resource_config"]["QRMI_IBM_QCS_IAM_APIKEY"] == "secret-key"
+    assert settings["api_key"] == "secret-key"
     # The runs use the DICE block through the Advanced SQD Settings block.
     ((name, settings),) = advanced
     assert name == "sqd-advanced-settings"

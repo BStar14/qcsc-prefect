@@ -147,7 +147,18 @@ def test_runtime_table_reads_the_api_key_from_the_environment(monkeypatch, tmp_p
     assert "secret-key" not in out
     runtime = json.loads(out)["runtime_block"]
     assert runtime["name"] == "rt" and runtime["scheduler"] == "iqp"
-    assert runtime["resource_config"]["QRMI_IBM_QCS_IAM_APIKEY"] == "***"
+    # The key goes to the block's secret api_key field; the endpoint is a plain field.
+    assert runtime["api_key"] == "set"
+    assert runtime["endpoint"] == "https://quantum.cloud.ibm.com/api/v1"
+    assert "resource_config" not in runtime
+
+
+def test_qrmi_table_takes_the_crn_and_rejects_an_api_key():
+    qrmi = _resolve(config=_config(**QRMI, service_crn="crn:v1:x"))
+    runtime = qrmi_blocks.qrmi_runtime_settings(qrmi)
+    assert runtime["service_crn"] == "crn:v1:x" and "api_key" not in runtime
+    with pytest.raises(RuntimeError, match="Do not write api_key in \\[qrmi\\]"):
+        _resolve(config=_config(**QRMI, api_key="secret"))
 
 
 @pytest.mark.parametrize(

@@ -768,3 +768,66 @@ def uuid():
     import uuid as uuid_module
 
     return uuid_module.uuid4()
+
+
+def test_iqp_block_fields_reach_qrmi_and_only_the_key_is_secret():
+    block = QrmiRuntimeBlock(
+        scheduler="iqp",
+        resource="ibm_test",
+        service_crn="crn:v1:visible",
+        api_key="secret-api-key",
+    )
+    schema = QrmiRuntimeBlock.model_json_schema()["properties"]
+    # Prefect Cloud masks a password-format, write-only field.
+    (secret,) = [item for item in schema["api_key"]["anyOf"] if item.get("type") == "string"]
+    assert secret["format"] == "password" and secret["writeOnly"] is True
+    plain = schema["service_crn"]["anyOf"][0]
+    assert "format" not in plain and "writeOnly" not in plain
+    assert "secret-api-key" not in repr(block)
+    assert "crn:v1:visible" in repr(block)  # the CRN is plain, by design
+    masked = block._to_block_document(name="t", block_schema_id=uuid(), block_type_id=uuid())
+    assert "secret-api-key" not in str(masked.data)
+    assert "crn:v1:visible" in str(masked.data)
+    runtime = block.get_runtime()
+    assert runtime.resource_config == {
+        "QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:visible",
+        "QRMI_IBM_QCS_IAM_APIKEY": "secret-api-key",
+        "QRMI_IBM_QCS_ENDPOINT": "https://quantum.cloud.ibm.com/api/v1",
+        "QRMI_IBM_QCS_IAM_ENDPOINT": "https://iam.cloud.ibm.com",
+    }
+    assert "secret-api-key" not in repr(runtime)
+
+
+def test_block_fields_win_over_the_resource_config():
+    block = QrmiRuntimeBlock(
+        scheduler="iqp",
+        resource="ibm_test",
+        endpoint="https://new.example/api/v1",
+        resource_config={"QRMI_IBM_QCS_ENDPOINT": "https://old.example", "OTHER": "kept"},
+        api_key="k",
+    )
+    config = block.get_runtime().resource_config
+    assert config["QRMI_IBM_QCS_ENDPOINT"] == "https://new.example/api/v1"
+    assert config["OTHER"] == "kept"
+
+
+def test_slurm_block_passes_plain_settings_and_rejects_an_api_key(tmp_path):
+    slurm = dict(
+        resource="test_heron",
+        root_dir=str(tmp_path),
+        command_block_name="c",
+        execution_profile_block_name="e",
+        hpc_profile_block_name="h",
+    )
+    runtime = QrmiRuntimeBlock(**slurm, service_crn="crn:v1:x", session_mode="batch").get_runtime()
+    assert runtime.job_settings == {
+        "QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:x",
+        "QRMI_IBM_QCS_SESSION_MODE": "batch",
+    }
+    assert runtime.resource_config is None
+    with pytest.raises(ValueError, match="leave\\s+IBM Cloud API Key empty"):
+        QrmiRuntimeBlock(**slurm, api_key="secret")
+    with pytest.raises(ValueError, match="job_settings must not contain"):
+        runtime_mod.QrmiRuntime(
+            **{**slurm, "root_dir": tmp_path}, job_settings={"QRMI_IBM_QCS_IAM_APIKEY": "x"}
+        )
