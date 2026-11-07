@@ -209,15 +209,12 @@ class CircuitParameters(BaseModel):
         title="Reset Mitigation",
         json_schema_extra=_at(3),
     )
-    qpu_topology: Literal["auto", "heavy-hex", "square"] = Field(
-        default="auto",
+    qpu_topology: Literal["heavy-hex", "square"] = Field(
+        default="heavy-hex",
         description=(
-            "Qubit connectivity the LUCJ interaction pairs are chosen for. heavy-hex (Heron): "
-            "alpha-beta pairs on every 4th orbital, at most 5. square (Nighthawk): alpha-beta "
-            "pairs on every orbital. auto classifies the backend coupling map if the workflow "
-            "host has it before Optimize. QRMI reads the backend only when it compiles, after "
-            "the pairs are chosen, so there auto uses heavy-hex and logs a warning; set square "
-            "for a Nighthawk."
+            "Qubit connectivity of the QPU, which sets the LUCJ interaction pairs. heavy-hex "
+            "(IBM Heron): alpha-beta pairs on every 4th orbital, at most 5. square (IBM "
+            "Nighthawk): alpha-beta pairs on every orbital."
         ),
         title="QPU Topology",
         json_schema_extra=_at(4),

@@ -62,9 +62,9 @@ def get_lucj_params(
     Args:
         circuit_params: LUCJ layers and compression settings.
         elec_props: Electronic properties with the CCSD t2 amplitudes.
-        qpu_topology: Resolved QPU topology, never ``auto`` (see
-            ``sqd_common.topology.resolve_topology``). It is an input of its own,
-            so the persisted result of one topology is not reused for another.
+        qpu_topology: QPU topology from ``sqd_common.topology.resolve_topology``.
+            It is an input of its own, so the persisted result of one topology is
+            not reused for another.
 
     Returns:
         LUCJ operator parameters, including the system size and the topology.

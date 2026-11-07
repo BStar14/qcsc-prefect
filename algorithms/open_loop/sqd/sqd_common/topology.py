@@ -1,4 +1,4 @@
-"""QPU topology of the LUCJ ansatz: interaction pairs and how ``auto`` is resolved.
+"""QPU topology of the LUCJ ansatz: its interaction pairs and the topology of a backend.
 
 This module imports neither ffsim nor Qiskit. It reads a Qiskit ``Target`` or
 ``CouplingMap`` through their methods only.
@@ -33,8 +33,7 @@ def interaction_pairs(
     - ``square`` (IBM Nighthawk): directly, on every orbital.
 
     Raises:
-        ValueError: For any other topology. Resolve ``auto`` with
-            ``resolve_topology`` first.
+        ValueError: For any other topology.
     """
     aa_indices = [(p, p + 1) for p in range(norb - 1)]
     if topology == "heavy-hex":
@@ -92,31 +91,24 @@ def resolve_topology(
     sampling_params: SamplingParameters,
     coupling: Any = None,
 ) -> Topology:
-    """The concrete QPU topology of a run, needed before Optimize.
+    """The QPU topology the LUCJ interaction pairs of a run are chosen for.
 
-    A topology set in the circuit parameters is used as is. ``auto`` classifies
-    ``coupling``, the backend ``Target`` or ``CouplingMap`` if the workflow host
-    holds one. Otherwise it falls back to heavy-hex with a warning, as when QRMI
-    reads the target only when it compiles, after Optimize. A random quantum
-    source runs no circuit and gets heavy-hex without a warning.
+    This is the QPU Topology of the run. With ``coupling``, the backend ``Target``
+    or ``CouplingMap``, a run whose QPU Topology does not match the backend fails
+    before Optimize. The workflow host holds no backend before Optimize today, as
+    QRMI reads the target only when it compiles, so the flow passes none.
 
     Raises:
-        ValueError: If ``coupling`` is neither heavy-hex nor square.
+        ValueError: If ``coupling`` is not of the topology set, or neither
+            heavy-hex nor square.
     """
-    logger = get_run_logger()
     topology = circuit_params.qpu_topology
-    if topology != "auto":
-        logger.info("QPU topology: %s, as set in QPU Topology.", topology)
-        return topology
-    if sampling_params.quantum_source == "random":
-        return "heavy-hex"
-    if coupling is not None:
-        topology = classify_coupling_map(coupling)
-        logger.info("QPU topology: %s, read from the backend coupling map.", topology)
-        return topology
-    logger.warning(
-        "QPU Topology is auto, but the workflow host cannot read the backend coupling map "
-        "before Optimize. Using heavy-hex (IBM Heron); set Circuit > QPU Topology to square "
-        "for a square-lattice QPU (IBM Nighthawk)."
-    )
-    return "heavy-hex"
+    if coupling is not None and sampling_params.quantum_source != "random":
+        backend_topology = classify_coupling_map(coupling)
+        if backend_topology != topology:
+            raise ValueError(
+                f"QPU Topology is {topology}, but the backend coupling map is {backend_topology}. "
+                f"Set Circuit > QPU Topology to {backend_topology}."
+            )
+    get_run_logger().info("QPU topology: %s.", topology)
+    return topology

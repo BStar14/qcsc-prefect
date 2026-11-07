@@ -125,20 +125,15 @@ def test_patterns_stages_hand_results_on_unchanged(stages):
     ]
 
 
-@pytest.mark.parametrize(
-    "qpu_topology, expected",
-    [("auto", "heavy-hex"), ("heavy-hex", "heavy-hex"), ("square", "square")],
-)
-def test_optimize_gets_the_resolved_topology(stages, caplog, qpu_topology, expected):
+@pytest.mark.parametrize("qpu_topology", [None, "heavy-hex", "square"])
+def test_optimize_gets_the_qpu_topology(stages, caplog, qpu_topology):
+    circuit = {} if qpu_topology is None else {"qpu_topology": qpu_topology}
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
-        _run(stages, _parameters(circuit={"qpu_topology": qpu_topology}))
+        _run(stages, _parameters(circuit=circuit))
+    expected = qpu_topology or "heavy-hex"
     assert dict(stages["log"])["optimize"]["qpu_topology"] == expected
-    # QRMI reads the backend only when it compiles, after Optimize, so auto warns.
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    if qpu_topology == "auto":
-        assert len(warnings) == 1 and "Using heavy-hex" in warnings[0]
-    else:
-        assert warnings == [] and f"QPU topology: {expected}, as set" in caplog.text
+    assert warnings == [] and f"QPU topology: {expected}." in caplog.text
 
 
 def test_molecule_settings_reach_the_map_stage(stages):

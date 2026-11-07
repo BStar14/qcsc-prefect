@@ -114,7 +114,7 @@ def test_target_with_all_to_all_connectivity_asks_for_the_topology():
 # ---------------------------------------------------------------- resolution
 
 
-def _resolve(caplog, qpu_topology="auto", coupling=None, **sampling):
+def _resolve(caplog, qpu_topology="heavy-hex", coupling=None, **sampling):
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
         return topology.resolve_topology(
             CircuitParameters(qpu_topology=qpu_topology),
@@ -127,36 +127,38 @@ def _warnings(caplog):
     return [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
 
 
-@pytest.mark.parametrize("name", ["heavy-hex", "square"])
-def test_a_set_topology_is_used_as_is(caplog, name):
-    # Even against the coupling map of the other topology.
-    assert _resolve(caplog, name, coupling=CouplingMap.from_line(3)) == name
-    assert f"QPU topology: {name}, as set" in caplog.text
+def test_the_default_topology_is_heavy_hex(caplog):
+    assert CircuitParameters().qpu_topology == "heavy-hex"
+    assert _resolve(caplog) == "heavy-hex"
+    assert "QPU topology: heavy-hex." in caplog.text
     assert _warnings(caplog) == []
 
 
-def test_auto_without_a_coupling_map_warns_and_uses_heavy_hex(caplog):
-    assert _resolve(caplog) == "heavy-hex"
-    (warning,) = _warnings(caplog)
-    assert "Using heavy-hex" in warning and "QPU Topology" in warning
-
-
-def test_auto_with_a_random_source_uses_heavy_hex_without_a_warning(caplog):
-    assert _resolve(caplog, quantum_source="random") == "heavy-hex"
+@pytest.mark.parametrize("name", ["heavy-hex", "square"])
+def test_a_set_topology_is_used_as_is(caplog, name):
+    assert _resolve(caplog, name) == name
     assert _warnings(caplog) == []
 
 
 @pytest.mark.parametrize(
-    "coupling, expected",
+    "coupling, name",
     [(CouplingMap.from_heavy_hex(3), "heavy-hex"), (CouplingMap.from_grid(3, 3), "square")],
 )
-def test_auto_classifies_a_coupling_map(caplog, coupling, expected):
-    assert _resolve(caplog, coupling=coupling) == expected
-    assert f"QPU topology: {expected}, read from the backend" in caplog.text
-    assert _warnings(caplog) == []
+def test_a_matching_backend_is_accepted(caplog, coupling, name):
+    assert _resolve(caplog, name, coupling=coupling) == name
 
 
-def test_auto_with_an_irregular_coupling_map_raises(caplog):
+def test_a_backend_of_the_other_topology_fails_before_optimize(caplog):
+    with pytest.raises(ValueError, match="backend coupling map is square.*QPU Topology to square"):
+        _resolve(caplog, "heavy-hex", coupling=CouplingMap.from_grid(3, 3))
+
+
+def test_a_random_source_ignores_the_backend(caplog):
+    coupling = CouplingMap.from_grid(3, 3)
+    assert _resolve(caplog, "heavy-hex", coupling=coupling, quantum_source="random") == "heavy-hex"
+
+
+def test_an_irregular_backend_raises(caplog):
     with pytest.raises(ValueError, match="QPU Topology"):
         _resolve(caplog, coupling=CouplingMap.from_full(6))
 
@@ -169,7 +171,8 @@ def test_qpu_topology_keeps_the_circuit_form_positions_contiguous():
     positions = sorted(field["position"] for field in properties.values())
     assert positions == list(range(len(properties)))
     assert properties["qpu_topology"]["position"] == 4
-    assert properties["qpu_topology"]["enum"] == ["auto", *topology.TOPOLOGIES]
+    assert properties["qpu_topology"]["enum"] == list(topology.TOPOLOGIES)
+    assert properties["qpu_topology"]["default"] == "heavy-hex"
 
 
 def test_removed_max_ab_pairs_points_to_qpu_topology():

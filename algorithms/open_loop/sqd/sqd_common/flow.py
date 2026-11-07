@@ -152,8 +152,7 @@ async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> floa
             circuit_params=parameters.circuit,
         )
     else:
-        # Optimize. QRMI reads the backend target only when it compiles, after this
-        # stage, so the workflow host has no coupling map to classify.
+        # Optimize
         lucj_params = get_lucj_params(
             circuit_params=parameters.circuit,
             elec_props=elec_props,
