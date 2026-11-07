@@ -69,25 +69,28 @@ dice_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/D
 
 # QRMI sampler job in Slurm, the default. Creates its three blocks (cmd-sqd-qrmi,
 # exec-sqd-qrmi, hpc-slurm-sqd-qrmi) and the qrmi-runtime block that real-device runs
-# use. The QPU credentials stay in the cluster's qrmi_config.json, so nothing secret goes
-# in this file. The job's walltime, threads and timeout come from the profile.
+# use. The API key stays in the cluster's qrmi_config.json, so nothing secret goes in this
+# file. The job's walltime, threads and timeout come from the profile.
 [qrmi]
-resource = "YOUR_QRMI_RESOURCE"   # Slurm --qpu; must match the QRMI configuration
+resource = "YOUR_QRMI_RESOURCE"   # Slurm --qpu and the backend; must be in qrmi_config.json
 # Compute-node Python that imports qrmi (with task_runner beside it), the worker
 # (qcsc-prefect-qiskit, which brings Prefect) and sqd_common
 python_executable = "/opt/venvs/qrmi/bin/python"
 # queue = "cpu"                   # Default: the solver's queue
+# Plain block settings, editable in Prefect Cloud; they win over qrmi_config.json.
+# service_crn = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"
+# endpoint = "https://quantum.cloud.ibm.com/api/v1"
+# iam_endpoint = "https://iam.cloud.ibm.com"
 
 # To sample from the workflow process through IBM Quantum (IQP) instead, comment out the
 # whole [qrmi] table above and uncomment [runtime]. Set QRMI_IBM_QCS_IAM_APIKEY in the
-# environment; it must not be written in this file.
+# environment; it must not be written in this file. The block keeps it as a secret.
 # [runtime]
 # scheduler = "iqp"
 # resource = "ibm_kingston"
-# [runtime.qrmi]
-# QRMI_IBM_QCS_ENDPOINT = "https://quantum.cloud.ibm.com/api/v1"
-# QRMI_IBM_QCS_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
-# QRMI_IBM_QCS_SERVICE_CRN = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"
+# service_crn = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"
+# endpoint = "https://quantum.cloud.ibm.com/api/v1"   # Default for IQP
+# iam_endpoint = "https://iam.cloud.ibm.com"          # Default for IQP
 
 # ============================================================ 5. Advanced SQD settings
 

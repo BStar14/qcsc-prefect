@@ -153,6 +153,7 @@ async def quantum_sampling(
     runtime = make_qrmi_runtime(
         await _load_qrmi_runtime(sampling_params.runtime_block_name),
         transpile_config=circuit_transpile_options(advanced, rng),
+        resource=sampling_params.qpu_resource,
     )
     lucj_circ = build_lucj_circuit(
         lucj_params=lucj_params, use_reset_mitigation=advanced.use_reset_mitigation

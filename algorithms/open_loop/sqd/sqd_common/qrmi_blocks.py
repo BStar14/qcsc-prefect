@@ -35,8 +35,13 @@ QRMI_KEYS = frozenset(
         "command_block_name",
         "execution_profile_block_name",
         "hpc_profile_block_name",
+        "service_crn",
+        "endpoint",
+        "iam_endpoint",
     }
 )
+# The QRMI job's settings that its QrmiRuntimeBlock holds, not its job blocks.
+QRMI_RUNTIME_KEYS = ("service_crn", "endpoint", "iam_endpoint")
 
 
 def add_qrmi_arguments(parser: argparse.ArgumentParser) -> None:
@@ -108,6 +113,11 @@ def resolve_qrmi_settings(
         table = {}
     if not isinstance(table, dict):
         raise RuntimeError("'qrmi' must be a table.")
+    if "api_key" in table:
+        raise RuntimeError(
+            "Do not write api_key in [qrmi]: Slurm compute nodes read the API key from "
+            "qrmi_config.json, and the job environment would store it."
+        )
     unknown = set(table) - QRMI_KEYS
     if unknown:
         raise RuntimeError(f"Unknown [qrmi] settings: {', '.join(sorted(unknown))}")
@@ -153,6 +163,7 @@ def resolve_qrmi_settings(
         timeout_seconds=None if timeout_seconds is None else float(timeout_seconds),
         watch_poll_interval=None if watch_poll_interval is None else float(watch_poll_interval),
         **{name: str(pick(name, default)).strip() for name, default in QRMI_BLOCK_NAMES.items()},
+        **{name: _optional_str(table.get(name)) for name in QRMI_RUNTIME_KEYS},
     )
 
 
@@ -166,8 +177,8 @@ def qrmi_runtime_settings(qrmi: dict[str, Any]) -> dict[str, Any]:
         "hpc_profile_block_name": qrmi["hpc_profile_block_name"],
         "resource": qrmi["resource"],
     }
-    for name in ("timeout_seconds", "watch_poll_interval"):
-        if qrmi[name] is not None:
+    for name in ("timeout_seconds", "watch_poll_interval", *QRMI_RUNTIME_KEYS):
+        if qrmi.get(name) is not None:
             runtime[name] = qrmi[name]
     return runtime
 

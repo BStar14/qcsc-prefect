@@ -75,7 +75,7 @@ and fields in this order, following the Qiskit Patterns stages:
 | --- | --- |
 | `molecule` | `{atom, basis, symmetry}` or `{fcidump_file}`, plus `spin_sq` (number or `null`) |
 | `circuit` | `n_lucj_layers` (1), `compress` (on), `compress_maxiter` (20), `qpu_topology` (`heavy-hex`) |
-| `sampling` | `quantum_source`, `shots` (10000), `runtime_block_name`, `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (reload only) |
+| `sampling` | `quantum_source`, `shots` (10000), `runtime_block_name`, `qpu_resource` (QPU Backend; empty uses the block's), `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (reload only) |
 | `sqd` | `subspace_dim` (90000), `num_batches` (4), `max_iterations` (5), `carryover_fraction` (0.5), `checkpoint` (on), `resume_checkpoint` |
 | `advanced_block_name` | Advanced SQD Settings block, default `sqd-advanced-settings` |
 | `solver_block_ref` | Solver Block Override, empty by default: `<block type slug>/<block name>` to run with another solver block than the advanced block names |
@@ -369,13 +369,22 @@ runs depends on the block's scheduler:
   profile and HPC profile blocks of the QRMI Slurm job, separate from the solver's
   because they request the QPU (`slurm_qpu`), plus a `scheduler = "slurm"` runtime
   block that names them. This is the default: `sqd_blocks.example.toml` has the table
-  active, with a placeholder `resource`. See also the
+  active, with a placeholder `resource`. `service_crn`, `endpoint` and `iam_endpoint`
+  are optional plain block fields that the job gets in its environment, with priority
+  over `qrmi_config.json`. The API key stays in `qrmi_config.json` on the compute
+  nodes; `[qrmi]` rejects `api_key`. See also the
   [QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md) for Batch
   mode and shared storage.
-- `[runtime]`: any `QrmiRuntimeBlock` fields. For IQP, `[runtime.qrmi]` holds QRMI's
-  settings without the `<resource>_` prefix, and `QRMI_IBM_QCS_IAM_APIKEY` is read
-  from the environment; it must not be written in the file. The block stores the API
-  key as a secret.
+- `[runtime]`: any `QrmiRuntimeBlock` fields, such as `resource` and `service_crn`.
+  For IQP, `QRMI_IBM_QCS_IAM_APIKEY` is read from the environment into the block's
+  secret API Key; it must not be written in the file. `[runtime.qrmi]` takes other
+  QRMI settings without the `<resource>_` prefix.
+
+The QRMI Runtime block shows the resource, Service CRN and endpoints in Prefect
+Cloud, so they can be edited there; the API key is masked. The run form's QPU
+Backend (`sampling.qpu_resource`) samples one run on another backend than the
+block's. For Slurm it also becomes the job's `--qpu` and must be configured in
+`qrmi_config.json`.
 
 Without either table, an existing block is kept.
 
@@ -413,6 +422,8 @@ and `resume_checkpoint` refuses it.
 | DICE solver block `sqd-solver`; QRMI blocks `cmd-sqd-fulqrum-qrmi`, `exec-sqd-fulqrum-qrmi`, `hpc-slurm-sqd-fulqrum-qrmi` | `sqd-dice-solver`; `cmd-sqd-qrmi`, `exec-sqd-qrmi`, `hpc-slurm-sqd-qrmi` |
 | Top-level `fulqrum_executable`, `eigensolver` in `sqd_blocks.toml` | `[fulqrum]` (top-level keys still work) |
 | `carryover_fraction` in `sqd_blocks.toml` | `sqd.carryover_fraction` of each run |
+| IQP CRN and endpoints in `[runtime.qrmi]`, stored in the secret `resource_config` | Plain Service CRN, endpoint and IAM endpoint fields of the QRMI Runtime block; only the API key is secret |
+| Backend only in the QRMI Runtime block | Also `sampling.qpu_resource` (QPU Backend) for one run |
 
 Re-run `sqd-create-blocks` once: it saves the blocks under the new names and creates
 the Advanced SQD Settings block, and the blocks under the old names can then be

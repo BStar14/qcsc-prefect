@@ -37,19 +37,28 @@ def prepare_sampler_circuit(circuit, *, transpile_config: dict) -> PreparedCircu
     raise RuntimeError("ffsim gates remain after ten decomposition rounds")
 
 
-def make_qrmi_runtime(block_runtime: QrmiRuntime, transpile_config: dict) -> QrmiRuntime:
+def make_qrmi_runtime(
+    block_runtime: QrmiRuntime, transpile_config: dict, resource: str | None = None
+) -> QrmiRuntime:
     """Replace the hooks of a ``QrmiRuntimeBlock`` runtime with the SQD ones.
 
     The block holds where to sample (scheduler, resource, Slurm blocks or IQP
     settings). The preparation, the compilation hook and its configuration come
-    from the workflow's circuit parameters, so the block's ``transpiler`` and
-    ``transpile_config`` are replaced.
+    from the workflow's settings, so the block's ``transpiler`` and
+    ``transpile_config`` are replaced. ``resource``, when given, replaces the
+    block's backend for this run (and, for Slurm, its ``--qpu``).
     """
+    changes = {}
+    if resource and resource != block_runtime.resource:
+        changes["resource"] = resource
+        if block_runtime.scheduler == "slurm":
+            changes["slurm_qpu"] = resource
     return dataclasses.replace(
         block_runtime,
         prepare=partial(prepare_sampler_circuit, transpile_config=transpile_config),
         transpiler=TRANSPILER,
         transpile_config={},
+        **changes,
     )
 
 
