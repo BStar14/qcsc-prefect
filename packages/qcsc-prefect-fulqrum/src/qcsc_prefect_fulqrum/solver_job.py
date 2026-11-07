@@ -19,7 +19,7 @@ from .io_utils import (
     read_solver_output,
     write_solver_input,
 )
-from .solver import FulqrumSolution, FulqrumSolverOptions
+from .solver import Backend, FulqrumSolution, FulqrumSolverOptions
 
 
 def _logger():
@@ -99,6 +99,24 @@ class FulqrumSolverJob(Block):
         title="SCI State",
         description="Return the ground-state amplitudes as an SCIState.",
     )
+    backend: Backend = Field(
+        default="cpu",
+        title="Backend",
+        description=(
+            "'cpu' (OpenMP), 'gpu' (one process on the GPUs of a node) or 'gpu-mpi' (one "
+            "MPI rank per GPU, across nodes). The GPU backends need a GPU build of fulqrum."
+        ),
+    )
+    carryover_fraction: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        title="Carryover Fraction",
+        description=(
+            "Share of each spin's CI strings, heaviest first, returned for the next "
+            "configuration recovery round. 0 returns none. The SQD flow sets it per run."
+        ),
+    )
 
     def solver_options(self) -> FulqrumSolverOptions:
         """Return the numerical controls passed to the compute-node solver."""
@@ -110,6 +128,8 @@ class FulqrumSolverJob(Block):
             max_iter=self.max_iter,
             dense_max_dim=self.dense_max_dim,
             return_amplitudes=self.return_sci_state,
+            backend=self.backend,
+            carryover_fraction=self.carryover_fraction,
         )
 
     async def run(
@@ -144,7 +164,8 @@ def solution_to_sci_result(
     """Convert a :class:`FulqrumSolution` into a qiskit-addon-sqd ``SCIResult``.
 
     The energy is electronic only, as with the DICE solver. Without amplitudes the
-    ``sci_state`` is ``None``.
+    ``sci_state`` is ``None``. The carryover strings go into ``SCIResult.carryover``,
+    or ``None`` when the solve returned none.
     """
 
     sci_state = None
@@ -156,6 +177,9 @@ def solution_to_sci_result(
             norb=norb,
             nelec=tuple(nelec),
         )
+    carryover = None
+    if len(solution.carryover_a) or len(solution.carryover_b):
+        carryover = (np.asarray(solution.carryover_a), np.asarray(solution.carryover_b))
     return SCIResult(
         energy=float(solution.energy),
         sci_state=sci_state,
@@ -163,6 +187,7 @@ def solution_to_sci_result(
             np.asarray(solution.orbital_occupancies[0]),
             np.asarray(solution.orbital_occupancies[1]),
         ),
+        carryover=carryover,
     )
 
 

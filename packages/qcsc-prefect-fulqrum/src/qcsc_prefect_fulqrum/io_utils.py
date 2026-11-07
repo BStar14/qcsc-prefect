@@ -9,13 +9,19 @@ Layout of one job directory:
   ``two_body_tensor``.
 - ``solver.json``: ``norb``, ``nelec``, and the :class:`FulqrumSolverOptions`.
 - ``output.npz``: ``occupancies_a``, ``occupancies_b``, ``ci_strs_a``,
-  ``ci_strs_b``, and ``amplitudes`` when requested.
+  ``ci_strs_b``, ``carryover_a``, ``carryover_b``, and ``amplitudes`` when
+  requested.
 - ``result.json``: energy and solver metadata. Written last, so its presence
   means the outputs are complete.
 - ``error.json``: written instead of the outputs when the solve fails.
 
 CI strings are stored as ``int64`` for ``norb < 64`` and as decimal strings
 otherwise, so no file needs pickle.
+
+Files are written with :data:`FORMAT_VERSION` 2, which added the solver
+``backend`` and ``carryover_fraction`` and the carryover arrays. Version 1 files
+are still read; their carryover is empty. A compute node with an older package
+rejects version 2 input instead of ignoring the new options.
 """
 
 from __future__ import annotations
@@ -35,7 +41,9 @@ from .solver import FulqrumSolution, FulqrumSolverOptions, normalize_problem
 
 logger = logging.getLogger(__name__)
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+# Versions this module reads; a missing key of an older version takes its default.
+READABLE_FORMAT_VERSIONS = (1, 2)
 INPUT_ARRAYS = "input.npz"
 INPUT_SPEC = "solver.json"
 OUTPUT_ARRAYS = "output.npz"
@@ -111,7 +119,7 @@ def _write_npz(path: Path, **arrays: np.ndarray) -> None:
 def _read_json(path: Path) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
     version = payload.get("format_version")
-    if version != FORMAT_VERSION:
+    if version not in READABLE_FORMAT_VERSIONS:
         raise ValueError(f"{path.name}: unsupported format_version {version!r}")
     return payload
 
@@ -198,6 +206,8 @@ def write_solver_output(work_dir: Path, solution: FulqrumSolution) -> None:
         "occupancies_b": np.asarray(solution.orbital_occupancies[1]),
         "ci_strs_a": _encode_ci_strs(solution.ci_strs_a),
         "ci_strs_b": _encode_ci_strs(solution.ci_strs_b),
+        "carryover_a": _encode_ci_strs(np.asarray(solution.carryover_a)),
+        "carryover_b": _encode_ci_strs(np.asarray(solution.carryover_b)),
     }
     if solution.amplitudes is not None:
         arrays["amplitudes"] = solution.amplitudes
@@ -260,6 +270,11 @@ def read_solver_output(work_dir: Path, norb: int) -> FulqrumSolution:
         strs_a = _decode_ci_strs(data["ci_strs_a"], norb)
         strs_b = _decode_ci_strs(data["ci_strs_b"], norb)
         amplitudes = data["amplitudes"] if "amplitudes" in data.files else None
+        empty = np.empty(0, dtype=np.int64)
+        carryover = [
+            _decode_ci_strs(data[key], norb) if key in data.files else empty
+            for key in ("carryover_a", "carryover_b")
+        ]
     return FulqrumSolution(
         energy=float(result["energy"]),
         orbital_occupancies=(occ_a, occ_b),
@@ -267,4 +282,6 @@ def read_solver_output(work_dir: Path, norb: int) -> FulqrumSolution:
         ci_strs_b=strs_b,
         amplitudes=amplitudes,
         metadata=dict(result.get("metadata") or {}),
+        carryover_a=carryover[0],
+        carryover_b=carryover[1],
     )
