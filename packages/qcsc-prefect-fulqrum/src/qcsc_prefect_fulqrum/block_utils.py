@@ -40,10 +40,11 @@ def create_fulqrum_blocks(
     profile_name: str = "fulqrum-omp",
     launcher: Literal["single", "srun", "mpirun", "mpiexec", "mpiexec.hydra"] = "single",
     num_nodes: int = 1,
-    mpiprocs: int = 1,
+    mpiprocs: int | None = None,
     ompthreads: int | None = None,
     walltime: str = "01:00:00",
     resource_class: Literal["cpu", "gpu"] = "cpu",
+    gpus_per_node: int | None = None,
     modules: list[str] | None = None,
     mpi_options: list[str] | None = None,
     pre_commands: list[str] | None = None,
@@ -57,6 +58,8 @@ def create_fulqrum_blocks(
     max_iter: int | None = None,
     dense_max_dim: int = 64,
     return_sci_state: bool = True,
+    backend: Literal["cpu", "gpu", "gpu-mpi"] = "cpu",
+    carryover_fraction: float = 0.0,
     slurm_memory: str | None = None,
     gfscache: str | None = None,
     spack_modules: list[str] | None = None,
@@ -69,10 +72,22 @@ def create_fulqrum_blocks(
     compute-node environment, for example
     ``/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve``.
 
-    Fulqrum currently runs as one OpenMP process, so the defaults are
-    ``launcher="single"``, ``num_nodes=1`` and ``mpiprocs=1``. When ``ompthreads``
-    is set and ``environments`` has no ``OMP_NUM_THREADS``, it is exported with
-    the same value, because not every scheduler template sets it.
+    ``backend`` selects the solver path (see :mod:`qcsc_prefect_fulqrum.solver`):
+
+    - ``"cpu"`` and ``"gpu"`` run one process, so the defaults are
+      ``launcher="single"``, ``num_nodes=1`` and ``mpiprocs=1``.
+    - ``"gpu-mpi"`` runs one MPI rank per GPU. It needs an MPI ``launcher``
+      (``"srun"``, ``"mpirun"``, ...), and ``mpiprocs`` defaults to
+      ``gpus_per_node`` (or 1 when that is unset).
+
+    ``gpus_per_node`` is the scheduler GPU request on the execution profile; use
+    it with ``resource_class="gpu"`` so the GPU queue is selected. Fugaku and
+    local execution reject it, and Miyabi-G accepts only 1. ``carryover_fraction``
+    is the solver block default; the SQD flow sets it per run.
+
+    When ``ompthreads`` is set and ``environments`` has no ``OMP_NUM_THREADS``,
+    it is exported with the same value, because not every scheduler template
+    sets it.
 
     This helper keeps a typed, explicit API on purpose. Algorithm-specific
     wrappers can translate TOML or CLI config dictionaries into these arguments
@@ -86,6 +101,13 @@ def create_fulqrum_blocks(
         if pre_commands:
             unsupported.append("pre_commands")
         raise ValueError("Local execution does not support " + " or ".join(unsupported) + ".")
+    if backend == "gpu-mpi" and launcher == "single":
+        raise ValueError(
+            "backend='gpu-mpi' runs one MPI rank per GPU; set launcher to an MPI launcher "
+            "such as 'srun' or 'mpirun'."
+        )
+    if mpiprocs is None:
+        mpiprocs = (gpus_per_node or 1) if backend == "gpu-mpi" else 1
 
     register_fulqrum_block_types()
 
@@ -118,6 +140,7 @@ def create_fulqrum_blocks(
         mpiprocs=mpiprocs,
         ompthreads=ompthreads,
         walltime=walltime,
+        gpus_per_node=gpus_per_node,
         launcher=launcher,
         mpi_options=list(mpi_options or []),
         modules=list(modules or []),
@@ -153,6 +176,8 @@ def create_fulqrum_blocks(
         max_iter=max_iter,
         dense_max_dim=dense_max_dim,
         return_sci_state=return_sci_state,
+        backend=backend,
+        carryover_fraction=carryover_fraction,
     ).save(solver_block_name, overwrite=True)
 
     return {
