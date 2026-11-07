@@ -327,24 +327,59 @@ def test_user_file_and_advanced_override_the_gpu_profile(tmp_path):
     assert _resolve(config=load_block_config(path))["gpus_per_node"] == 3
 
 
-def test_gpu_mpi_defaults_mpiprocs_to_gpus_per_node():
+def test_gpu_mpi_runs_one_rank_per_gpu():
     config = {
         "hpc_target": "slurm",
         "queue": "gpu",
         "work_dir": "/data/x",
         "fulqrum_executable": "qcsc-fulqrum-solve",
         "launcher": "srun",
+        "resource_class": "gpu",
         "gpus_per_node": 8,
         "backend": "gpu-mpi",
     }
     assert _resolve(config=config)["mpiprocs"] == 8
-    assert _resolve(config={**config, "mpiprocs": 2})["mpiprocs"] == 2
+    # A config's mpiprocs, for example a CPU profile's 1, gives way to the GPU count.
+    assert _resolve(config={**config, "mpiprocs": 1})["mpiprocs"] == 8
+    with pytest.raises(RuntimeError, match="one MPI rank per GPU.*--mpiprocs 2"):
+        _resolve(["--mpiprocs", "2"], config)
     cpu = _resolve(config={**config, "backend": "cpu"})
     assert (cpu["mpiprocs"], cpu["gpus_per_node"]) == (1, 8)
 
 
+def test_cpu_profile_with_gpu_mpi_gets_one_rank_per_gpu(tmp_path):
+    """The slurm profile sets mpiprocs = 1; gpu-mpi with 4 GPUs must still run 4 ranks."""
+    path = _gpu_config(
+        tmp_path,
+        "slurm",
+        advanced='backend = "gpu-mpi"\nlauncher = "srun"\nresource_class = "gpu"\n'
+        "gpus_per_node = 4",
+    )
+    kwargs = _resolve(config=load_block_config(path))
+    assert (kwargs["mpiprocs"], kwargs["gpus_per_node"]) == (4, 4)
+
+
+def test_slurm_gpu_profile_follows_a_lower_gpu_count(tmp_path):
+    path = _gpu_config(tmp_path, "slurm-gpu", advanced="gpus_per_node = 2")
+    kwargs = _resolve(config=load_block_config(path))
+    assert (kwargs["mpiprocs"], kwargs["gpus_per_node"]) == (2, 2)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"hpc_target": "fugaku", "project": "g", "gpus_per_node": 1}, "takes no GPU request"),
+        ({"hpc_target": "miyabi", "project": "g", "gpus_per_node": 4}, "have 1 GPU"),
+        ({"gpus_per_node": 4}, "needs resource_class='gpu'"),
+    ],
+)
+def test_a_bad_gpu_request_fails_at_block_creation(overrides, match):
+    with pytest.raises(RuntimeError, match=match):
+        _resolve(config={**_example_config(), **overrides})
+
+
 def test_gpu_cli_flags_override_config():
-    argv = ["--backend", "gpu", "--gpus-per-node", "2"]
+    argv = ["--backend", "gpu", "--gpus-per-node", "2", "--resource-class", "gpu"]
     kwargs = _resolve(argv, _example_config())
     assert (kwargs["backend"], kwargs["gpus_per_node"]) == ("gpu", 2)
     assert _resolve(config=_example_config())["gpus_per_node"] is None

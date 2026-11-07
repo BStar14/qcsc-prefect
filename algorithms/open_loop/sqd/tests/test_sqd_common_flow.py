@@ -246,3 +246,29 @@ def test_missing_solver_package_names_the_extra(monkeypatch):
     with pytest.raises(ModuleNotFoundError, match=r"sqd\[dice\]"):
         solvers.solver_class("dice_shci_solver_job")
     assert solvers.solver_class("fulqrum_solver_job").__name__ == "FulqrumSolverJob"
+
+
+def test_a_bad_gpu_request_fails_when_the_solver_is_loaded(stages, monkeypatch):
+    import qcsc_prefect_executor.from_blocks as from_blocks
+
+    class Solver:
+        hpc_profile_block_name = "hpc-fugaku"
+        execution_profile_block_name = "exec-gpu"
+
+        @classmethod
+        async def load(cls, name):
+            return cls()
+
+    loaded = {
+        "hpc-fugaku": type("H", (), {"hpc_target": "fugaku"})(),
+        "exec-gpu": type("E", (), {"resource_class": "gpu", "gpus_per_node": 1})(),
+    }
+
+    async def fake_load(block_cls, name):
+        return loaded[name]
+
+    monkeypatch.setattr(from_blocks, "_load_block", fake_load)
+    stages["Solver"] = Solver
+    with pytest.raises(ValueError, match="takes no GPU request"):
+        _run(stages, _parameters())
+    assert stages["log"] == []

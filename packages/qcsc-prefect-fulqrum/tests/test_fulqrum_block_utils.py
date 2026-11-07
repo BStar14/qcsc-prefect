@@ -188,17 +188,44 @@ def test_gpu_mpi_runs_one_rank_per_gpu(saved, tmp_path):
     assert (solver.backend, solver.carryover_fraction) == ("gpu-mpi", 0.0)
 
 
-def test_gpu_mpi_keeps_an_explicit_mpiprocs(saved, tmp_path):
-    mod.create_fulqrum_blocks(
-        hpc_target="slurm",
-        root_dir=str(tmp_path),
-        fulqrum_executable=EXE,
-        launcher="srun",
-        gpus_per_node=4,
-        mpiprocs=2,
-        backend="gpu-mpi",
-    )
-    assert _block(saved, "execution").mpiprocs == 2
+def test_gpu_mpi_rejects_an_mpiprocs_other_than_the_gpu_count(saved, tmp_path):
+    with pytest.raises(ValueError, match="one MPI rank per GPU.*mpiprocs=2 and gpus_per_node=4"):
+        mod.create_fulqrum_blocks(
+            hpc_target="slurm",
+            root_dir=str(tmp_path),
+            fulqrum_executable=EXE,
+            launcher="srun",
+            resource_class="gpu",
+            gpus_per_node=4,
+            mpiprocs=2,
+            backend="gpu-mpi",
+        )
+    assert saved == []
+
+
+@pytest.mark.parametrize(
+    ("hpc_target", "gpus", "resource_class", "match"),
+    [
+        ("fugaku", 1, "gpu", "takes no GPU request"),
+        ("local", 1, "gpu", "takes no GPU request"),
+        ("miyabi", 4, "gpu", "have 1 GPU"),
+        ("slurm", 4, "cpu", "needs resource_class='gpu'"),
+    ],
+)
+def test_a_bad_gpu_request_fails_before_any_block_is_saved(
+    saved, tmp_path, hpc_target, gpus, resource_class, match
+):
+    with pytest.raises(ValueError, match=match):
+        mod.create_fulqrum_blocks(
+            hpc_target=hpc_target,
+            queue="q",
+            project="p",
+            root_dir=str(tmp_path),
+            fulqrum_executable=EXE,
+            resource_class=resource_class,
+            gpus_per_node=gpus,
+        )
+    assert saved == []
 
 
 def test_gpu_mpi_without_gpus_per_node_runs_one_rank(saved, tmp_path):
@@ -226,6 +253,7 @@ def test_single_gpu_backend_keeps_one_process(saved, tmp_path):
         hpc_target="slurm",
         root_dir=str(tmp_path),
         fulqrum_executable=EXE,
+        resource_class="gpu",
         gpus_per_node=1,
         backend="gpu",
     )
