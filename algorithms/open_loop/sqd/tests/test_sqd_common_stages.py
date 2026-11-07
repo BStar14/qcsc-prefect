@@ -19,7 +19,7 @@ from qiskit.primitives import PrimitiveResult, SamplerPubResult  # noqa: E402
 from qiskit.primitives.containers import BitArray, DataBin  # noqa: E402
 from qiskit_addon_sqd.fermion import SCIResult, solve_fermion  # noqa: E402
 from qiskit_ibm_runtime import RuntimeEncoder  # noqa: E402
-from sqd_common import flow_params, lucj, postprocess, sampling, topology  # noqa: E402
+from sqd_common import flow_params, lucj, postprocess, recovery, sampling, topology  # noqa: E402
 
 LOGGER = logging.getLogger("sqd_common.test")
 LIH = "Li 0 0 0; H 0 0 1.6"
@@ -106,7 +106,8 @@ def test_removed_solver_block_name_points_to_solver_block_ref():
         ({"qiskit_runtime_job_id": "j", "qrmi_result_dir": "/d"}, "at most one"),
         ({"quantum_source": "random", "qiskit_runtime_job_id": "j"}, "random"),
         ({"quantum_source": "random", "qrmi_result_dir": "/d"}, "random"),
-        ({"qrmi_runtime_config": {}}, "runtime_block_name"),
+        # An empty value is a hidden key of an old run form and is ignored; a set one fails.
+        ({"qrmi_runtime_config": {"resource": "ibm_kingston"}}, "runtime_block_name"),
         ({"sampler_options": {"params": {"shots": 5}}}, "only the Shots parameter"),
     ],
 )
@@ -224,7 +225,8 @@ def test_interaction_pairs_heavy_hex():
 def test_get_lucj_params_matches_ffsim(lih, qpu_topology):
     import ffsim
 
-    circuit_params = flow_params.CircuitParameters(n_lucj_layers=2)
+    # Without compression, the parameters are ffsim's own truncated factorization.
+    circuit_params = flow_params.CircuitParameters(n_lucj_layers=2, compress=False)
     params = lucj.get_lucj_params.fn(circuit_params, lih, qpu_topology)
     ref = ffsim.UCJOpSpinBalanced.from_t_amplitudes(
         lih.t2, n_reps=2, interaction_pairs=lucj.interaction_pairs(lih.num_orbitals, qpu_topology)
@@ -598,8 +600,10 @@ def _ckpt(path):
 
 
 def test_retry_resumes_after_the_last_completed_round(ckpt_run):
-    with pytest.raises(_Crash):
+    # A crashed solver job fails its whole round, naming the crash as the cause.
+    with pytest.raises(recovery.RoundFailedError, match="iteration 3 failed") as info:
         ckpt_run("run-a", _CrashingSolve(crash_at=4), max_iterations=4)
+    assert isinstance(info.value.__cause__, _Crash)
     assert _ckpt(ckpt_run.root / "run-a")[0] == 2
 
     energy, solver, artifacts = ckpt_run("run-a", max_iterations=4)
@@ -636,7 +640,7 @@ def test_resume_checkpoint_accepts_the_folder(ckpt_run):
 def test_a_retry_before_the_first_new_round_still_resumes(ckpt_run):
     ckpt_run("run-a", max_iterations=2)
     given = str(ckpt_run.root / "run-a")
-    with pytest.raises(_Crash):
+    with pytest.raises(recovery.RoundFailedError):
         ckpt_run("run-b", _CrashingSolve(crash_at=0), max_iterations=4, resume_checkpoint=given)
     assert _ckpt(ckpt_run.root / "run-b")[0] == 2
     # The retry of run-b finds its own copy, even without resume_checkpoint.
