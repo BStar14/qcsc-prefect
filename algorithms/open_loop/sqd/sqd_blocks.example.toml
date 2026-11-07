@@ -1,42 +1,82 @@
-# Prefect blocks of the SQD workflow. Copy this file, edit your settings below and run:
+# Prefect blocks of the SQD workflow. Copy this file, edit it, and run:
 #   sqd-create-blocks --config sqd_blocks.toml
 # Add --dry-run to print the resolved settings without saving anything.
 #
-# The settings come in three tiers:
-#   1. Your settings (this file): paths, queue, solver and the QPU resource.
-#   2. A system profile (`profile`): scheduler and resource settings such as nodes,
-#      threads, walltime and modules. A key set in this file overrides the profile.
-#   3. [advanced] (end of this file): block names, timeouts and solver tuning.
+# Sections:
+#   1. Solver and system   which solver, and the system profile with its scheduler settings
+#   2. Cluster             queue, account and the shared work directory
+#   3. Solver              [fulqrum], [dice] or [sbd]: only the selected one is read
+#   4. Quantum sampling    [qrmi] (a QRMI job in Slurm) or [runtime] (IBM Quantum, IQP)
+#   5. Advanced SQD        [sqd_advanced]: CCSD restarts, reset mitigation, the transpiler
+#   6. Block overrides     [advanced]: block names and timeouts
+#
+# Block names follow the solver and system, for example sqd-fulqrum-solver and
+# exec-sqd-fulqrum-slurm, or sqd-dice-solver and exec-sqd-dice-miyabi. The run form
+# needs no solver: this script records the solver block in the Advanced SQD Settings
+# block (sqd-advanced-settings), which every run reads.
 
-# ---------------------------------------------------------------- 1. Your settings
+# ============================================================ 1. Solver and system
 
-solver = "fulqrum"                  # "fulqrum" or "dice" (needs sqd[dice])
-profile = "slurm"                   # "slurm", "miyabi", "fugaku", or a path to your profile
-# GPU fulqrum (one MPI rank per GPU): "slurm-gpu" or "miyabi-gpu"; set queue to a GPU queue
+solver = "fulqrum"      # "fulqrum", "dice" (needs sqd[dice]) or "sbd" (blocks from closed_loop/sqd_de)
+profile = "slurm"       # "slurm", "miyabi", "fugaku", or a path to your own profile
+                        # GPU fulqrum, one MPI rank per GPU: "slurm-gpu" or "miyabi-gpu"
+# Any key of the profile, for example walltime, num_nodes, mpiprocs or modules, can be
+# set here to override it.
 
-queue = "normal"                    # Partition (Slurm) or resource group (Miyabi, Fugaku)
-# project = "YOUR_ACCOUNT"          # Slurm account; required as the group on Miyabi and Fugaku
-work_dir = "/data/sqd-fulqrum"      # Shared between the workflow host and the compute nodes
+# ============================================================ 2. Cluster
 
-# fulqrum: qcsc-fulqrum-solve of the compute-node environment that has fulqrum built
+queue = "normal"        # Slurm partition, or Miyabi/Fugaku resource group; a GPU queue for GPU
+# project = "YOUR_ACCOUNT"  # Slurm account; required as the group on Miyabi and Fugaku
+work_dir = "/data/sqd"  # Shared between the workflow host and the compute nodes
+
+# Keys after a [table] header belong to that table, so keep top-level keys above here.
+
+# ============================================================ 3. Solver
+
+# fulqrum: qcsc-fulqrum-solve of the compute-node environment that has fulqrum built.
+[fulqrum]
 fulqrum_executable = "/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve"
-eigensolver = "scipy"               # "primme" needs primme on the compute node
+eigensolver = "scipy"   # "primme" needs primme on the compute node
+# Tuning; empty keys keep the solver's defaults.
+# tol = 1e-8                        # Eigensolver tolerance
+# max_iter = 1000                   # Default: solver default
+# hamiltonian_format = "csr"        # "matrix_free" saves memory
+# dense_max_dim = 64
+# max_basis_size = 64               # Search subspace (ncv); scipy, primme, gpu-mpi
+# block_size = 4                    # PRIMME block size; primme and gpu-mpi
+# min_restart_size = 16             # PRIMME restart size; primme and gpu-mpi
+# primme_method = "PRIMME_DYNAMIC"  # PRIMME preset; primme and gpu-mpi
+# backend = "cpu"                   # "gpu" or "gpu-mpi" (set by the GPU profiles)
+# gpus_per_node = 4                 # Scheduler GPU request (set by the GPU profiles)
+# convergence = "abs"               # gpu-mpi: abs, rel, norm or energy
+# energy_tol = 1e-6                 # gpu-mpi with convergence = "energy"
+# process_grid = [2, 2]             # gpu-mpi: alpha x beta ranks, product = MPI ranks
+# comm_backend = "auto"             # gpu-mpi: auto, nccl, host_mpi or cuda_mpi
 
-# Keys after a table header below belong to that table, so keep top-level keys above here.
-
-# DICE: used only with solver = "dice".
+# DICE: used only with solver = "dice", on Miyabi or Fugaku.
 [dice]
 dice_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice"
+# select_cutoff = 5e-4
+# davidson_tol = 1e-5
+# energy_tol = 1e-10
 
-# QRMI sampler job in Slurm, the default sampling path. Creates its three blocks and the
-# qrmi-runtime block that real-device runs use. The QPU credentials stay in the cluster's
-# qrmi_config.json, so nothing secret goes in this file. The job's walltime, threads and
-# timeout come from the profile.
+# SBD: used only with solver = "sbd". algorithms/closed_loop/sqd_de/create_blocks.py
+# creates the SBD blocks; this file only records which one the runs use.
+# [sbd]
+# solver_block_name = "davidson-solver"
+
+# ============================================================ 4. Quantum sampling
+
+# QRMI sampler job in Slurm, the default. Creates its three blocks (cmd-sqd-qrmi,
+# exec-sqd-qrmi, hpc-slurm-sqd-qrmi) and the qrmi-runtime block that real-device runs
+# use. The QPU credentials stay in the cluster's qrmi_config.json, so nothing secret goes
+# in this file. The job's walltime, threads and timeout come from the profile.
 [qrmi]
-resource = "YOUR_QRMI_RESOURCE"     # Slurm --qpu; must match the QRMI configuration
+resource = "YOUR_QRMI_RESOURCE"   # Slurm --qpu; must match the QRMI configuration
 # Compute-node Python that imports qrmi (with task_runner beside it), the worker
 # (qcsc-prefect-qiskit, which brings Prefect) and sqd_common
 python_executable = "/opt/venvs/qrmi/bin/python"
+# queue = "cpu"                   # Default: the solver's queue
 
 # To sample from the workflow process through IBM Quantum (IQP) instead, comment out the
 # whole [qrmi] table above and uncomment [runtime]. Set QRMI_IBM_QCS_IAM_APIKEY in the
@@ -49,35 +89,27 @@ python_executable = "/opt/venvs/qrmi/bin/python"
 # QRMI_IBM_QCS_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
 # QRMI_IBM_QCS_SERVICE_CRN = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"
 
-# ---------------------------------------------------------------- 3. Advanced
-# Uncomment a key to change its default. Block names default per solver and system; the
-# values shown are the fulqrum defaults on Slurm.
+# ============================================================ 5. Advanced SQD settings
+
+# The sqd-advanced-settings block, also editable in Prefect Cloud. Defaults shown.
+# [sqd_advanced]
+# ccsd_maxiter = 10                 # CCSD Restarts
+# use_reset_mitigation = false      # Reset Mitigation; reloads of earlier samples use it too
+# optimization_level = 3            # Transpiler
+# sabre_layout_trials = 10000
+# sabre_swap_trials = 10
+# sabre_max_iterations = 8
+
+# ============================================================ 6. Block overrides
+
+# Rarely changed. Uncomment a key to replace its default.
 # [advanced]
-# solver_block_name = "sqd-fulqrum-solver"
-# command_block_name = "cmd-sqd-fulqrum-solver"
-# execution_profile_block_name = "exec-sqd-fulqrum-slurm"
-# hpc_profile_block_name = "hpc-slurm-sqd-fulqrum"
+# solver_block_name = "sqd-<solver>-solver"
+# command_block_name = "cmd-sqd-<solver>-solver"
+# execution_profile_block_name = "exec-sqd-<solver>-<system>"
+# hpc_profile_block_name = "hpc-<system>-sqd-<solver>"
+# script_filename = "<solver>_solver.<suffix>"
+# metrics_artifact_key = "<system>-sqd-<solver>-metrics"
 # runtime_block_name = "qrmi-runtime"
-# script_filename = "fulqrum_solver.slurm"
-# metrics_artifact_key = "slurm-sqd-fulqrum-metrics"
+# advanced_block_name = "sqd-advanced-settings"
 # timeout_seconds = 7200            # Monitoring of each solver job
-# # fulqrum tuning
-# hamiltonian_format = "csr"        # "matrix_free" saves memory
-# tol = 1e-8
-# max_iter = 1000                   # Default: solver default
-# dense_max_dim = 64
-# return_sci_state = false          # The workflow only needs energies and occupancies
-# backend = "cpu"                   # "gpu" or "gpu-mpi" (set by the GPU profiles)
-# gpus_per_node = 4                 # Scheduler GPU request; unset for CPU runs
-# max_basis_size = 64               # Eigensolver search subspace (ncv); scipy, primme, gpu-mpi
-# block_size = 4                    # PRIMME block size; primme and gpu-mpi
-# min_restart_size = 16             # PRIMME restart size; primme and gpu-mpi
-# primme_method = "PRIMME_DYNAMIC"  # PRIMME preset; primme and gpu-mpi
-# convergence = "abs"               # gpu-mpi: abs, rel, norm or energy
-# energy_tol = 1e-6                 # gpu-mpi with convergence = "energy"
-# process_grid = [2, 2]             # gpu-mpi: alpha x beta ranks, product = MPI ranks
-# comm_backend = "auto"             # gpu-mpi: auto, nccl, host_mpi or cuda_mpi
-# # DICE tuning
-# select_cutoff = 5e-4
-# davidson_tol = 1e-5
-# energy_tol = 1e-10

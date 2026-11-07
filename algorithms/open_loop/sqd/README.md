@@ -1,15 +1,18 @@
 # Sample-based Quantum Diagonalization
 
-This package (`sqd` 2.0) implements the QCSC algorithm demonstrated in the paper [Chemistry Beyond the Scale of Exact Diagonalization on a Quantum-Centric Supercomputer](https://arxiv.org/abs/2405.05068).
+This package (`sqd` 2.2) implements the QCSC algorithm demonstrated in the paper [Chemistry Beyond the Scale of Exact Diagonalization on a Quantum-Centric Supercomputer](https://arxiv.org/abs/2405.05068).
 
-It provides one Prefect flow, `sqd` (deploy with `sqd-deploy`). The solver block that
-diagonalizes each subspace is chosen per run with `solver_block_ref`:
+It provides one Prefect flow, `sqd` (deploy with `sqd-deploy`). The solver that
+diagonalizes each subspace is chosen once, with `solver` in `sqd_blocks.toml`:
+`sqd-create-blocks` saves that solver's blocks and records its solver block in the
+Advanced SQD Settings block (`sqd-advanced-settings`), which every run reads. The run
+form stays the same for every solver.
 
-| `solver_block_ref` | Solver block | Install |
+| `solver` | Solver block (default name) | Install |
 | --- | --- | --- |
-| `fulqrum_solver_job/<name>` (default `sqd-fulqrum-solver`) | `FulqrumSolverJob` (`qcsc-prefect-fulqrum`) | `sqd` |
-| `dice_shci_solver_job/<name>` | `DiceSHCISolverJob` (`qcsc-prefect-dice`) | `sqd[dice]` |
-| `sbd_solver_job/<name>` | `SBDSolverJob` (`qcsc-prefect-sbd`) | `sqd[sbd]` |
+| `fulqrum` (default) | `FulqrumSolverJob` (`sqd-fulqrum-solver`, `qcsc-prefect-fulqrum`) | `sqd` |
+| `dice` | `DiceSHCISolverJob` (`sqd-dice-solver`, `qcsc-prefect-dice`) | `sqd[dice]` |
+| `sbd` | `SBDSolverJob` (`davidson-solver`, from `closed_loop/sqd_de`, `qcsc-prefect-sbd`) | `sqd[sbd]` |
 
 Quantum sampling goes through a `QrmiRuntimeBlock` (default `qrmi-runtime`), either
 from the workflow process (`scheduler = "iqp"`) or in a Slurm job (`scheduler = "slurm"`).
@@ -34,7 +37,8 @@ sqd_loop [post-process] ◄─────────────────�
 
 - **Map** (`compute_molecular_integrals`): molecular integrals from a geometry or an
   FCIDUMP file, CCSD amplitudes and the initial orbital occupancies. The CCSD kernel
-  restarts `ccsd_maxiter` times from its previous amplitudes.
+  restarts CCSD Restarts times (Advanced SQD Settings, default 10) from its previous
+  amplitudes.
 - **Optimize** (`get_lucj_params`): LUCJ parameters from the CCSD t2 amplitudes,
   restricted to the interactions the QPU implements without SWAP gates. With
   `circuit.qpu_topology` `heavy-hex` (IBM Heron, the default), alpha-beta pairs sit
@@ -69,17 +73,26 @@ and fields in this order, following the Qiskit Patterns stages:
 
 | Group | Fields |
 | --- | --- |
-| `molecule` | `{atom, basis, symmetry}` or `{fcidump_file}`, plus `spin_sq` (number or `null`) and `ccsd_maxiter` (default 4) |
-| `circuit` | `n_lucj_layers` (1), `compress` (on), `compress_maxiter` (20), `use_reset_mitigation`, `qpu_topology` (`heavy-hex`), `configure_transpiler` (off) and `transpiler` |
+| `molecule` | `{atom, basis, symmetry}` or `{fcidump_file}`, plus `spin_sq` (number or `null`) |
+| `circuit` | `n_lucj_layers` (1), `compress` (on), `compress_maxiter` (20), `qpu_topology` (`heavy-hex`) |
 | `sampling` | `quantum_source`, `shots` (10000), `runtime_block_name`, `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (reload only) |
 | `sqd` | `subspace_dim` (90000), `num_batches` (4), `max_iterations` (5), `carryover_fraction` (0.5), `checkpoint` (on), `resume_checkpoint` |
-| `solver_block_ref` | `<block type slug>/<block name>`, default `fulqrum_solver_job/sqd-fulqrum-solver` |
+| `advanced_block_name` | Advanced SQD Settings block, default `sqd-advanced-settings` |
+| `solver_block_ref` | Solver Block Override, empty by default: `<block type slug>/<block name>` to run with another solver block than the advanced block names |
 
 Only `molecule` must be set. The form still marks the three `sqd` fields as required,
-so that they stand out. `circuit.transpiler` holds the optimization level and the SABRE
-layout search (layout trials 10000, SWAP trials 10, max iterations 8). It applies only
-when `configure_transpiler` is on; otherwise these defaults are used. Set
-`circuit.qpu_topology` to `square` for an IBM Nighthawk QPU.
+so that they stand out. Set `circuit.qpu_topology` to `square` for an IBM Nighthawk QPU.
+
+The rarely changed settings are in the **Advanced SQD Settings** block, which you can
+edit in Prefect Cloud; `sqd-create-blocks` saves it from `[sqd_advanced]`. Without the
+block, a run uses its defaults:
+
+| Field | Default | Used by |
+| --- | --- | --- |
+| Solver Block | the solver block `sqd-create-blocks` created, else `fulqrum_solver_job/sqd-fulqrum-solver` | Post-process |
+| CCSD Restarts | 10 | Map |
+| Reset Mitigation | off | Execute, and reloads of earlier samples |
+| Optimization Level, SABRE Layout Trials, SABRE SWAP Trials, SABRE Max Iteration | 3, 10000, 10, 8 | Execute (the transpiler) |
 
 `sqd.carryover_fraction` sets how many CI strings carry over: of the best ground
 state of a round, each spin's `int(fraction × n)` strings with the largest marginal
@@ -101,13 +114,14 @@ from the working directory, then from the repository root.
 | `n2_random.json` | fulqrum | Random bitstrings, no QPU (a first check of the blocks) |
 | `n2.json` | fulqrum | The `qrmi-runtime` block |
 | `n2_reload.json` | fulqrum | Samples of an earlier IBM Quantum job, with a larger subspace |
-| `n2_dice.json` | DICE | The `qrmi-runtime` block |
+| `n2_dice.json` | DICE (with the DICE blocks created) | The `qrmi-runtime` block |
 | `n2_sbd.json` | SBD | Random bitstrings, `spin_sq = null` |
 
 ### Solver selection
 
-The slug of `solver_block_ref` selects the block class and an unknown slug is
-rejected; Prefect's hyphenated spelling (`sbd-solver-job`) is accepted too. DICE and
+The slug of the Solver Block (`<block type slug>/<block name>`) selects the block class
+and an unknown slug is rejected; Prefect's hyphenated spelling (`sbd-solver-job`) is
+accepted too. DICE and
 SBD are imported only when a run selects them; without their extra the run fails
 with the `pip install` command to run.
 
@@ -254,18 +268,38 @@ reflect the same runtime libraries in `fugaku_spack_modules`, `modules` or
 On Fugaku, `work_dir` and `dice_executable` should point to a shared path that
 compute nodes can read, for example a `/vol...` location.
 
-Then start a run of the `sqd` deployment with `default_params/n2_dice.json`, whose
-`solver_block_ref` is `dice_shci_solver_job/sqd-solver`.
+This saves `sqd-dice-solver` and its job blocks, and records
+`dice_shci_solver_job/sqd-dice-solver` as the Solver Block of the Advanced SQD
+Settings block. Then start a run of the `sqd` deployment with
+`default_params/n2_dice.json`; nothing in the run form names the solver.
 
 ### Block configuration
 
-`sqd_blocks.example.toml` sorts the settings by how often you change them:
+`sqd_blocks.example.toml` is laid out by topic:
 
-| Tier | Where | Settings |
-| --- | --- | --- |
-| Your settings | top of the file | `solver`, `profile`, `queue`, `project`, `work_dir`, `fulqrum_executable`, `eigensolver`, `[dice] dice_executable`, `[qrmi] resource` and `python_executable` |
-| System profile | `sqd_common/profiles/<profile>.toml`, or your own file given by path | `hpc_target`, `resource_class`, `launcher`, `num_nodes`, `mpiprocs`, `ompthreads`, `gpus_per_node`, `walltime`, `modules`, `pre_commands`, `environments`, the fulqrum `backend`, the `fugaku_*` keys, the DICE MPI settings (`[dice]`), the QRMI job's `walltime`, `ompthreads` and `timeout_seconds` (`[qrmi]`) |
-| Advanced | the commented `[advanced]` table | block names, `runtime_block_name`, `script_filename`, `metrics_artifact_key`, `timeout_seconds`, solver tuning |
+| Section | Keys |
+| --- | --- |
+| 1. Solver and system | `solver`, `profile` |
+| 2. Cluster | `queue`, `project`, `work_dir` |
+| 3. Solver | `[fulqrum]` (`fulqrum_executable`, `eigensolver`, the eigensolver tuning), `[dice]` (`dice_executable`, the DICE tuning), `[sbd]` (`solver_block_name`); only the selected solver's table is read |
+| 4. Quantum sampling | `[qrmi]` (`resource`, `python_executable`, optional `queue`) or `[runtime]` |
+| 5. Advanced SQD settings | `[sqd_advanced]`: the Advanced SQD Settings block |
+| 6. Block overrides | `[advanced]`: block names, `runtime_block_name`, `advanced_block_name`, `timeout_seconds` |
+
+The system profile, `sqd_common/profiles/<profile>.toml` or your own file given by path,
+holds the scheduler settings: `hpc_target`, `resource_class`, `launcher`, `num_nodes`,
+`mpiprocs`, `ompthreads`, `gpus_per_node`, `walltime`, `modules`, `pre_commands`,
+`environments`, the fulqrum `backend`, the `fugaku_*` keys, the DICE MPI settings
+(`[dice]`) and the QRMI job's `walltime`, `ompthreads` and `timeout_seconds` (`[qrmi]`).
+
+Block names follow the solver and system:
+
+| Block | Default name |
+| --- | --- |
+| Solver, command | `sqd-<solver>-solver`, `cmd-sqd-<solver>-solver` |
+| Execution profile, HPC profile | `exec-sqd-<solver>-<system>`, `hpc-<system>-sqd-<solver>` |
+| QRMI job (any solver) | `cmd-sqd-qrmi`, `exec-sqd-qrmi`, `hpc-slurm-sqd-qrmi` |
+| QRMI runtime, advanced settings | `qrmi-runtime`, `sqd-advanced-settings` |
 
 Later layers override earlier ones: the profile, then `[advanced]`, then the top
 level of your file, then its `[<solver>]` table. Any profile key can be set in your
@@ -287,9 +321,11 @@ build of fulqrum, which run one MPI rank per GPU (`backend = "gpu-mpi"`):
 ### SQD with the SBD eigensolver
 
 Create an `SBDSolverJob` block with
-[`algorithms/closed_loop/sqd_de/create_blocks.py`](../../closed_loop/sqd_de/README.md)
-and set `solver_block_ref = "sbd_solver_job/<name>"`, with `spin_sq = null`, as in
-`default_params/n2_sbd.json`.
+[`algorithms/closed_loop/sqd_de/create_blocks.py`](../../closed_loop/sqd_de/README.md).
+Then run `sqd-create-blocks` with `solver = "sbd"` (and `[sbd] solver_block_name` if the
+block is not `davidson-solver`): it records `sbd_solver_job/<name>` in the Advanced
+SQD Settings block without creating solver blocks. Runs need `spin_sq = null`, as in
+`default_params/n2_sbd.json`, which also names its block as a Solver Block Override.
 
 ## Quantum sampling
 
@@ -366,6 +402,23 @@ That happens, for example, when a run form filled before 2.0 still holds hidden 
 The resume key of a checkpoint now includes the solver type, so a checkpoint
 written before 2.0 is not resumed: a Retry moves it aside and starts at round 1,
 and `resume_checkpoint` refuses it.
+
+### From 2.1 to 2.2
+
+| 2.1 | 2.2 |
+| --- | --- |
+| `molecule.ccsd_maxiter` (default 4) | CCSD Restarts of the Advanced SQD Settings block (default 10) |
+| `circuit.use_reset_mitigation`, `circuit.configure_transpiler`, `circuit.transpiler.*` | Reset Mitigation, Optimization Level and the SABRE fields of the Advanced SQD Settings block |
+| `solver_block_ref` in the run form, default `fulqrum_solver_job/sqd-fulqrum-solver` | Solver Block of the Advanced SQD Settings block, set by `sqd-create-blocks`; `solver_block_ref` overrides it for one run |
+| DICE solver block `sqd-solver`; QRMI blocks `cmd-sqd-fulqrum-qrmi`, `exec-sqd-fulqrum-qrmi`, `hpc-slurm-sqd-fulqrum-qrmi` | `sqd-dice-solver`; `cmd-sqd-qrmi`, `exec-sqd-qrmi`, `hpc-slurm-sqd-qrmi` |
+| Top-level `fulqrum_executable`, `eigensolver` in `sqd_blocks.toml` | `[fulqrum]` (top-level keys still work) |
+| `carryover_fraction` in `sqd_blocks.toml` | `sqd.carryover_fraction` of each run |
+
+Re-run `sqd-create-blocks` once: it saves the blocks under the new names and creates
+the Advanced SQD Settings block, and the blocks under the old names can then be
+deleted in Prefect Cloud. To keep using the old blocks instead, name them in
+`[advanced]`. A run form filled before 2.2 keeps the moved fields hidden at their old
+values; those are ignored, and a changed value fails with a pointer to the block.
 
 ## Tests
 
