@@ -30,8 +30,10 @@ Subspaces small enough for a dense solve use the CPU path with every backend.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Literal
@@ -246,13 +248,208 @@ def _solve_cpu(hsub, dim: int, options: FulqrumSolverOptions, timings: dict):
     return energy, vec, solver_path, nnz
 
 
+# Node-local rank variables, in priority order, for choosing a rank's GPU.
+_LOCAL_RANK_ENV_VARS = (
+    "OMPI_COMM_WORLD_LOCAL_RANK",  # Open MPI
+    "MPI_LOCALRANKID",  # Intel MPI, MPICH Hydra
+    "SLURM_LOCALID",  # srun
+)
+# The GPU kernels are verified only with two or more electrons per half string.
+_GPU_MIN_HALF_WEIGHT = 2
+# Distributed PRIMME tests ``residual < tol``, so tol=0 would never converge.
+_GPU_MPI_MIN_TOL = 1e-12
+
+
+def _version_tuple(version: str | None) -> tuple[int, int] | None:
+    match = re.match(r"\s*(\d+)\.(\d+)", version or "")
+    return (int(match[1]), int(match[2])) if match else None
+
+
+def _require_fulqrum_gpu(backend: str, hsub):
+    """Import ``fulqrum.gpu`` and CuPy, or fail with what the backend needs."""
+    if np.dtype(hsub.dtype).kind == "c":
+        raise NotImplementedError(f"the {backend!r} backend supports real integrals only")
+    try:
+        import fulqrum
+    except ImportError as exc:
+        raise ImportError(f"the {backend!r} backend needs fulqrum: {exc}") from exc
+    version = getattr(fulqrum, "__version__", None)
+    parsed = _version_tuple(version)
+    if parsed is not None and parsed < (1, 0):
+        raise ImportError(
+            f"the {backend!r} backend needs fulqrum >= 1.0 with GPU support, found {version}"
+        )
+    try:
+        import cupy
+        import fulqrum.gpu as fq_gpu
+
+        # The compiled CUDA launcher exists only in an FQ_BUILD_GPU=1 build;
+        # fulqrum.gpu itself imports in a CPU-only build too.
+        importlib.import_module("fulqrum.gpu.distributed.kernel_launch")
+    except ImportError as exc:
+        raise ImportError(
+            f"the {backend!r} backend needs fulqrum built with FQ_BUILD_GPU=1 and CuPy: {exc}"
+        ) from exc
+    return fq_gpu, cupy
+
+
+def _device_count(cupy) -> int:
+    # Counts the devices visible to this process, so CUDA_VISIBLE_DEVICES applies.
+    count = int(cupy.cuda.runtime.getDeviceCount())
+    if count < 1:
+        raise RuntimeError("no CUDA device is visible to this process")
+    return count
+
+
+def _min_half_weight(strs_a, strs_b) -> int:
+    # Every string of a spin has the same electron count (see normalize_problem).
+    return min(int(strs_a[0]).bit_count(), int(strs_b[0]).bit_count())
+
+
+def _warn_cpu_fallback(backend: str, weight: int) -> None:
+    logger.warning(
+        "Fulqrum %r backend: %d electron(s) in a spin is below the %d the GPU kernels "
+        "support; solving on the CPU instead.",
+        backend,
+        weight,
+        _GPU_MIN_HALF_WEIGHT,
+    )
+
+
 def _solve_gpu(hsub, dim: int, options: FulqrumSolverOptions, timings: dict):
     """Lowest eigenpair with ``fulqrum.gpu.GPUHamiltonian`` on this node's GPUs.
 
+    The operator spans every visible device. It is a SciPy ``LinearOperator``
+    over the full subspace, so ``scipy`` and ``primme`` run as on the CPU, from the
+    same starting vector. ``_build_hamiltonian`` already gives what the GPU
+    operator requires: a half-string ``Subspace`` and a type-2 operator
+    (``extended_jw_transformation`` sets type 2). A spin with fewer than two
+    electrons is outside the verified GPU support and is solved on the CPU.
+
     Returns:
         ``(energy, vector, solver_path, nnz)``, as :func:`_solve_cpu`.
+
+    Raises:
+        NotImplementedError: If the integrals are complex.
+        ImportError: If fulqrum >= 1.0 with GPU support or CuPy is missing.
+        RuntimeError: If no CUDA device is visible.
     """
-    raise NotImplementedError("the 'gpu' fulqrum backend is not implemented yet")
+    fq_gpu, cupy = _require_fulqrum_gpu("gpu", hsub)
+    subspace = hsub.spmv.subspace
+    weight = min(subspace.alpha_strs[0].count("1"), subspace.beta_strs[0].count("1"))
+    if weight < _GPU_MIN_HALF_WEIGHT:
+        _warn_cpu_fallback("gpu", weight)
+        return _solve_cpu(hsub, dim, options, timings)
+
+    gpu_ids = tuple(range(_device_count(cupy)))
+    t0 = time.perf_counter()
+    op = fq_gpu.GPUHamiltonian(hsub, gpu_ids=gpu_ids)
+    timings["projection"] = time.perf_counter() - t0
+    logger.info("Fulqrum GPU operator on devices %s", gpu_ids)
+
+    t0 = time.perf_counter()
+    v0 = _initial_vector(hsub, dim, np.float64)
+    energy, vec = _eigsh_lowest(op, dim, v0, options)
+    timings["eigensolve"] = time.perf_counter() - t0
+    return energy, vec, f"gpu-{options.eigensolver}", None
+
+
+def _local_rank() -> int:
+    """This process's rank on its node, from the launcher; 0 if none is set."""
+    for name in _LOCAL_RANK_ENV_VARS:
+        value = os.environ.get(name)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except ValueError:
+            logger.warning("Ignoring non-integer %s=%r.", name, value)
+    return 0
+
+
+def _split_even(n: int, parts: int) -> list[tuple[int, int]]:
+    # Same split as fulqrum.gpu.distributed.dist_matvec._split_ranges_even
+    # (dist_matvec.py:62-71 at 2e2d66e): the first n % parts ranges get one extra.
+    base, rem = divmod(int(n), int(parts))
+    ranges, start = [], 0
+    for part in range(int(parts)):
+        stop = start + base + (1 if part < rem else 0)
+        ranges.append((start, stop))
+        start = stop
+    return ranges
+
+
+def _tile_ranges(H, na: int, nb: int) -> tuple[int, int, int, int]:
+    """``(a0, a1, b0, b1)``: the alpha and beta index ranges of this rank's tile.
+
+    In fulqrum 2e2d66e (fulqrum/gpu/distributed/):
+
+    - dist_matvec_tile_resident.py:450-452: ``coord_alpha = rank // p_beta`` and
+      ``coord_beta = rank % p_beta`` (also ``TileGrid.coords``, grid.py:58-60).
+    - dist_matvec_tile_resident.py:489-494 and grid.py:39-51: the ranges are
+      ``_split_ranges_even(n_a, p_alpha)[coord_alpha]`` and
+      ``_split_ranges_even(n_b, p_beta)[coord_beta]`` over the sorted strings
+      (``_resolve_uniq_arrays``, :1307-1316), stored as the private ``_a0, _a1,
+      _b0, _b1``. ``GPUHamiltonian`` reads those (gpu_hamiltonian.py:147).
+
+    Only ``process_grid``, ``coord_alpha``, ``coord_beta``, ``n_a_local`` and
+    ``n_b_local`` are public, so the ranges are rebuilt from them and checked
+    against the local sizes, and against the private fields where present.
+
+    Raises:
+        RuntimeError: If the rebuilt ranges disagree with the operator.
+    """
+    p_alpha, p_beta = (int(p) for p in H.process_grid)
+    a0, a1 = _split_even(na, p_alpha)[int(H.coord_alpha)]
+    b0, b1 = _split_even(nb, p_beta)[int(H.coord_beta)]
+    expected = {"n_a_local": a1 - a0, "n_b_local": b1 - b0}
+    actual = {name: int(getattr(H, name)) for name in expected}
+    for name, value in {"_a0": a0, "_a1": a1, "_b0": b0, "_b1": b1}.items():
+        if hasattr(H, name):
+            expected[name], actual[name] = value, int(getattr(H, name))
+    if actual != expected:
+        raise RuntimeError(
+            f"unexpected fulqrum tile layout: expected {expected}, the operator has {actual}"
+        )
+    return a0, a1, b0, b1
+
+
+def _fold_tile_weights(evec_local, na: int, nb: int, ranges) -> tuple[np.ndarray, np.ndarray]:
+    """This rank's share of the marginal weights, as global-length vectors.
+
+    The local tile is beta-outer, alpha-inner: local index ``b * n_a_local + a``
+    (dist_matvec_tile_resident.py:265-268 at 2e2d66e).
+    """
+    a0, a1, b0, b1 = ranges
+    tile = np.abs(np.asarray(evec_local, dtype=np.float64).reshape(b1 - b0, a1 - a0)) ** 2
+    w_a = np.zeros(na, dtype=np.float64)
+    w_b = np.zeros(nb, dtype=np.float64)
+    w_a[a0:a1] = tile.sum(axis=0)
+    w_b[b0:b1] = tile.sum(axis=1)
+    return w_a, w_b
+
+
+def _distributed_v0(diag_local: np.ndarray, comm, MPI) -> np.ndarray:
+    """Unit vector at the lowest diagonal entry over all ranks (lowest rank on ties)."""
+    local_min = float(diag_local.min()) if diag_local.size else float("inf")
+    owner = comm.allreduce((local_min, comm.Get_rank()), op=MPI.MINLOC)[1]
+    v0 = np.zeros(diag_local.size, dtype=np.float64)
+    if comm.Get_rank() == owner:
+        v0[int(np.argmin(diag_local))] = 1.0
+    return v0
+
+
+def _solve_gpu_mpi_on_cpu(hsub, strs_a, strs_b, options, timings, comm):
+    # Rank 0 solves and broadcasts, so every rank returns the same values.
+    na, nb = len(strs_a), len(strs_b)
+    result = None
+    if comm.Get_rank() == 0:
+        energy, vec, solver_path, _ = _solve_cpu(hsub, na * nb, options, timings)
+        probs = np.abs(vec) ** 2
+        w_a, w_b = marginal_weights(probs / probs.sum(), na, nb)
+        result = (energy, w_a, w_b, solver_path)
+    energy, w_a, w_b, solver_path = comm.bcast(result, root=0)
+    return energy, (w_a, w_b), solver_path
 
 
 def _solve_gpu_mpi(hsub, subspace, strs_a, strs_b, options: FulqrumSolverOptions, timings: dict):
@@ -261,11 +458,81 @@ def _solve_gpu_mpi(hsub, subspace, strs_a, strs_b, options: FulqrumSolverOptions
     The eigenvector is never gathered: every rank folds its tile into the
     marginal weights, which are then summed over the ranks.
 
+    Each rank uses device ``local_rank % device_count``, with the node-local
+    rank from :data:`_LOCAL_RANK_ENV_VARS`. The solver is fulqrum's distributed
+    PRIMME, started from the lowest diagonal entry and preconditioned with the
+    diagonal; ``eigensolver`` and ``hamiltonian_format`` do not apply. Its
+    convergence test is an absolute residual below ``tol`` (``tol=0`` uses
+    ``1e-12``), and ``max_iter`` caps its matrix-vector products. A spin with
+    fewer than two electrons is solved on the CPU of rank 0 and broadcast.
+
     Returns:
         ``(energy, (w_a, w_b), solver_path)``, identical on every rank. The weights
         follow the order of ``strs_a`` and ``strs_b`` and sum to 1.
+
+    Raises:
+        NotImplementedError: If the integrals are complex.
+        ImportError: If mpi4py, fulqrum >= 1.0 with GPU support, CuPy or
+            fulqrum's distributed PRIMME is missing.
+        RuntimeError: If no CUDA device is visible or the tile layout is not
+            the expected one.
     """
-    raise NotImplementedError("the 'gpu-mpi' fulqrum backend is not implemented yet")
+    try:
+        from mpi4py import MPI
+    except ImportError as exc:
+        raise ImportError(f"the 'gpu-mpi' backend needs mpi4py: {exc}") from exc
+    fq_gpu, cupy = _require_fulqrum_gpu("gpu-mpi", hsub)
+    if not fq_gpu.is_primme_mpi_available():
+        raise ImportError(
+            "the 'gpu-mpi' backend needs fulqrum's distributed PRIMME "
+            "(fulqrum.gpu.eigensolver._primme_mpi), built with FQ_BUILD_GPU=1"
+        )
+    comm = MPI.COMM_WORLD
+    weight = _min_half_weight(strs_a, strs_b)
+    if weight < _GPU_MIN_HALF_WEIGHT:
+        if comm.Get_rank() == 0:
+            _warn_cpu_fallback("gpu-mpi", weight)
+        return _solve_gpu_mpi_on_cpu(hsub, strs_a, strs_b, options, timings, comm)
+
+    na, nb = len(strs_a), len(strs_b)
+    device = _local_rank() % _device_count(cupy)
+    t0 = time.perf_counter()
+    H = fq_gpu.DistributedMPIGPUHamiltonian(hsub, comm=comm, gpu_ids=(device,))
+    ranges = _tile_ranges(H, na, nb)
+    timings["projection"] = time.perf_counter() - t0
+    if comm.Get_rank() == 0:
+        logger.info(
+            "Fulqrum distributed GPU operator: %d ranks, process grid %s",
+            comm.Get_size(),
+            tuple(H.process_grid),
+        )
+
+    t0 = time.perf_counter()
+    diag = np.asarray(H.diag_local, dtype=np.float64)
+    evals, evecs = fq_gpu.distributed_primme_eigsh(
+        H,
+        k=1,
+        which="SA",
+        tol=options.tol if options.tol > 0 else _GPU_MPI_MIN_TOL,
+        maxiter=options.max_iter,
+        v0_local=_distributed_v0(diag, comm, MPI),
+        precond_diag_local=diag,
+        gpu="auto",
+    )
+    energy = float(np.real(evals[0]))
+    timings["eigensolve"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    w_a, w_b = _fold_tile_weights(np.asarray(evecs)[:, 0], na, nb, ranges)
+    weights = np.concatenate([w_a, w_b])
+    comm.Allreduce(MPI.IN_PLACE, weights, op=MPI.SUM)
+    # The vector norm is global, so normalize after the sum.
+    w_a, w_b = weights[:na], weights[na:]
+    total = float(w_a.sum())
+    if not total > 0:
+        raise RuntimeError("distributed PRIMME returned a zero eigenvector")
+    timings["weights"] = time.perf_counter() - t0
+    return energy, (w_a / total, w_b / total), "gpu-mpi-primme"
 
 
 def solve_fulqrum(
