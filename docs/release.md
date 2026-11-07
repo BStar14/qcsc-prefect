@@ -4,6 +4,10 @@ This page describes the production PyPI release steps for maintainers.
 
 Use the same version for all `qcsc-prefect` packages in one release.
 
+When a release adds a new package under `packages/`, register a pending Trusted Publisher
+for that PyPI project (workflow `pypi-publish.yml`, environment `pypi`) before pushing the tag.
+`qcsc-prefect-sbd` and `qcsc-prefect-fulqrum` are new in `0.3.1`.
+
 ## Step 1: Choose the Release Version
 
 Choose the next release version, for example:
@@ -132,7 +136,11 @@ All extras install:
 python -m venv /tmp/qcsc-prefect-release-all
 /tmp/qcsc-prefect-release-all/bin/python -m pip install --upgrade pip
 /tmp/qcsc-prefect-release-all/bin/python -m pip install "qcsc-prefect[all]==<version>"
-/tmp/qcsc-prefect-release-all/bin/python -c "import qcsc_prefect.integrations.qiskit"
+/tmp/qcsc-prefect-release-all/bin/python -c "import qcsc_prefect.integrations.qiskit, qcsc_prefect_dice, qcsc_prefect_sbd, qcsc_prefect_fulqrum"
 ```
+
+The `fulqrum` extra installs only the Python-side integration. The fulqrum solver itself is
+built per site with `packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`, because the
+fulqrum version it needs is not on PyPI.
 
 Replace `<version>` with the release version without the leading `v`, for example `0.1.1`.
