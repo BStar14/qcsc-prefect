@@ -100,6 +100,25 @@ def test_return_sci_state_false_skips_amplitudes(monkeypatch, tmp_path: Path):
     result = _run(FulqrumSolverJob(root_dir=str(tmp_path), return_sci_state=False))
     assert result.sci_state is None
     assert result.energy == -1.5
+    assert result.carryover is None
+
+
+def test_carryover_reaches_the_sci_result(monkeypatch, tmp_path: Path):
+    def on_run(work_dir: Path):
+        options = io_utils.read_solver_input(work_dir)["options"]
+        assert (options.backend, options.carryover_fraction) == ("gpu", 0.5)
+        solution = _solution(amplitudes=False)
+        solution.carryover_a = np.array([1], dtype=np.int64)
+        solution.carryover_b = np.array([1], dtype=np.int64)
+        io_utils.write_solver_output(work_dir, solution)
+
+    _fake_scheduler(monkeypatch, on_run=on_run)
+    solver = FulqrumSolverJob(
+        root_dir=str(tmp_path), return_sci_state=False, backend="gpu", carryover_fraction=0.5
+    )
+    result = _run(solver)
+    np.testing.assert_array_equal(result.carryover[0], [1])
+    np.testing.assert_array_equal(result.carryover[1], [1])
 
 
 def test_spin_sq_is_ignored_with_warning(monkeypatch, tmp_path: Path, caplog):
@@ -149,6 +168,10 @@ def test_block_validates_solver_fields(tmp_path: Path):
         FulqrumSolverJob(root_dir=str(tmp_path), eigensolver="lanczos")
     with pytest.raises(ValueError):
         FulqrumSolverJob(root_dir=str(tmp_path), tol=-1.0)
+    with pytest.raises(ValueError):
+        FulqrumSolverJob(root_dir=str(tmp_path), backend="tpu")
+    with pytest.raises(ValueError):
+        FulqrumSolverJob(root_dir=str(tmp_path), carryover_fraction=1.5)
     options = FulqrumSolverJob(
         root_dir=str(tmp_path), hamiltonian_format="matrix_free", max_iter=10, dense_max_dim=0
     ).solver_options()

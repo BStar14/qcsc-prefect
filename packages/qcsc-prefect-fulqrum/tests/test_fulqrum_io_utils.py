@@ -29,7 +29,9 @@ def test_make_job_work_dir_is_unique(tmp_path: Path):
 
 def test_solver_input_round_trip(tmp_path: Path):
     ci_strings, h1, eri = _problem()
-    options = FulqrumSolverOptions(eigensolver="primme", tol=1e-10, max_iter=50)
+    options = FulqrumSolverOptions(
+        eigensolver="primme", tol=1e-10, max_iter=50, backend="gpu-mpi", carryover_fraction=0.5
+    )
     io_utils.write_solver_input(
         work_dir=tmp_path,
         ci_strings=ci_strings,
@@ -108,7 +110,42 @@ def test_solver_output_round_trip(tmp_path: Path, with_amplitudes: bool):
     else:
         assert loaded.amplitudes is None
     assert loaded.metadata == {"subspace_dim": 6, "nnz": 20, "timings": {"eigensolve": 0.1}}
+    assert len(loaded.carryover_a) == len(loaded.carryover_b) == 0
     assert not list(tmp_path.glob("*.tmp*"))
+
+
+def test_carryover_round_trip(tmp_path: Path):
+    solution = FulqrumSolution(
+        energy=-1.0,
+        orbital_occupancies=(np.zeros(4), np.zeros(4)),
+        ci_strs_a=np.array([3, 5, 12], dtype=np.int64),
+        ci_strs_b=np.array([3, 10], dtype=np.int64),
+        amplitudes=None,
+        carryover_a=np.array([12, 3], dtype=np.int64),
+        carryover_b=np.array([10], dtype=np.int64),
+    )
+    io_utils.write_solver_output(tmp_path, solution)
+    loaded = io_utils.read_solver_output(tmp_path, norb=4)
+    # Heaviest-first order is kept.
+    np.testing.assert_array_equal(loaded.carryover_a, [12, 3])
+    np.testing.assert_array_equal(loaded.carryover_b, [10])
+
+
+def test_format_version_1_output_reads_with_empty_carryover(tmp_path: Path):
+    """An output written before carryover existed still reads."""
+    np.savez(
+        tmp_path / "output.npz",
+        occupancies_a=np.zeros(4),
+        occupancies_b=np.zeros(4),
+        ci_strs_a=np.array([3], dtype=np.int64),
+        ci_strs_b=np.array([3], dtype=np.int64),
+    )
+    (tmp_path / "result.json").write_text(
+        json.dumps({"format_version": 1, "energy": -1.0, "has_amplitudes": False, "metadata": {}})
+    )
+    loaded = io_utils.read_solver_output(tmp_path, norb=4)
+    assert loaded.energy == -1.0
+    assert len(loaded.carryover_a) == len(loaded.carryover_b) == 0
 
 
 def test_wide_ci_strings_round_trip_without_pickle(tmp_path: Path):
@@ -120,12 +157,15 @@ def test_wide_ci_strings_round_trip_without_pickle(tmp_path: Path):
         ci_strs_a=np.array([3, big], dtype=object),
         ci_strs_b=np.array([big], dtype=object),
         amplitudes=np.ones((2, 1)),
+        carryover_a=np.array([big], dtype=object),
+        carryover_b=np.array([big], dtype=object),
     )
     io_utils.write_solver_output(tmp_path, solution)
     loaded = io_utils.read_solver_output(tmp_path, norb=norb)
     assert loaded.ci_strs_a.dtype == object
     assert [int(x) for x in loaded.ci_strs_a] == [3, big]
     assert [int(x) for x in loaded.ci_strs_b] == [big]
+    assert [int(x) for x in loaded.carryover_a] == [big]
 
 
 def test_error_json_takes_precedence(tmp_path: Path):

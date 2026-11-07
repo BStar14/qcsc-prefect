@@ -16,6 +16,10 @@ def test_options_reject_unknown_values():
         FulqrumSolverOptions(tol=-1.0)
     with pytest.raises(ValueError, match="max_iter"):
         FulqrumSolverOptions(max_iter=0)
+    with pytest.raises(ValueError, match="backend"):
+        FulqrumSolverOptions(backend="tpu")
+    with pytest.raises(ValueError, match="carryover_fraction"):
+        FulqrumSolverOptions(carryover_fraction=1.5)
 
 
 def test_unique_ci_strs_sorts_and_deduplicates():
