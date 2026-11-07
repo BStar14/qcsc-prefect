@@ -4,7 +4,7 @@
 
     compute_molecular_integrals [map] ──────────────┐
        ▼ elec_props                                 │
-    get_lucj_params [optimize]                      │
+    get_lucj_params [optimize] ◄ resolve_topology   │
        ▼ lucj_params                                │
     quantum_sampling | load_qrmi_result |           │
     load_runtime_job [execute]                      │
@@ -13,6 +13,8 @@
 
 Prefect draws an edge between two tasks when the result of one is passed
 unchanged into the other, so each stage hands its return value straight on.
+``resolve_topology`` is a plain function: it picks the LUCJ interaction
+pattern for the QPU topology before Optimize.
 The Map, Optimize and Execute results are persisted. Retrying a failed flow
 run therefore reuses them and repeats only ``sqd_loop``, which continues from
 its checkpoint after the last completed recovery round.
@@ -38,6 +40,7 @@ from sqd_common.sampling import (
     random_bool_array,
 )
 from sqd_common.solvers import FULQRUM_SLUG, SBD_SLUG, solver_class, solver_slug
+from sqd_common.topology import resolve_topology
 
 
 async def load_solver_block(solver_cls: type, name: str) -> SolverBlock:
@@ -149,10 +152,12 @@ async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> floa
             circuit_params=parameters.circuit,
         )
     else:
-        # Optimize
+        # Optimize. QRMI reads the backend target only when it compiles, after this
+        # stage, so the workflow host has no coupling map to classify.
         lucj_params = get_lucj_params(
             circuit_params=parameters.circuit,
             elec_props=elec_props,
+            qpu_topology=resolve_topology(parameters.circuit, sampling),
         )
         # Execute
         bool_array = await quantum_sampling(

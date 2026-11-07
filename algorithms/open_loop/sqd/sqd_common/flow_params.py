@@ -214,8 +214,10 @@ class CircuitParameters(BaseModel):
         description=(
             "Qubit connectivity the LUCJ interaction pairs are chosen for. heavy-hex (Heron): "
             "alpha-beta pairs on every 4th orbital, at most 5. square (Nighthawk): alpha-beta "
-            "pairs on every orbital. auto reads the backend when the workflow host can see it, "
-            "and uses heavy-hex otherwise."
+            "pairs on every orbital. auto classifies the backend coupling map if the workflow "
+            "host has it before Optimize. QRMI reads the backend only when it compiles, after "
+            "the pairs are chosen, so there auto uses heavy-hex and logs a warning; set square "
+            "for a Nighthawk."
         ),
         title="QPU Topology",
         json_schema_extra=_at(4),
@@ -248,8 +250,8 @@ class CircuitParameters(BaseModel):
             data = _drop_empty(data, "max_ab_pairs")
             if "max_ab_pairs" in data:
                 raise ValueError(
-                    "circuit.max_ab_pairs was removed: the heavy-hex pattern keeps at most 5 "
-                    "alpha-beta pairs."
+                    "circuit.max_ab_pairs was removed: the alpha-beta pairs follow "
+                    "circuit.qpu_topology (QPU Topology); heavy-hex keeps at most 5."
                 )
             # A key left at its old default, or at the value it moved to, changes nothing.
             transpiler = data.get("transpiler")

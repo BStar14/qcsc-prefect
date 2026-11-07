@@ -70,12 +70,17 @@ def random_bool_array(sampling_params: SamplingParameters, norb: int) -> np.ndar
 
 
 async def record_sampling_source(*, bool_array: np.ndarray, shots: int, **source) -> None:
-    """Write the ``sqd-sampling-source`` artifact, so a later run can reload the samples."""
+    """Write the ``sqd-sampling-source`` artifact, so a later run can reload the samples.
+
+    ``qpu_topology`` is the topology the LUCJ interaction pairs were chosen for. A
+    reload does not build the circuit and leaves it empty.
+    """
     row = {
         "source": source.pop("source"),
         "resource": source.pop("resource", None),
         "qiskit_runtime_job_id": source.pop("qiskit_runtime_job_id", None),
         "qrmi_result_dir": source.pop("qrmi_result_dir", None),
+        "qpu_topology": source.pop("qpu_topology", None),
         **source,
         "shots": int(shots),
         "shots_kept": int(len(bool_array)),
@@ -176,6 +181,7 @@ async def quantum_sampling(
         shots=num_shots,
         source=f"qrmi-{runtime.scheduler}",
         resource=runtime.resource,
+        qpu_topology=lucj_params.qpu_topology,
         **source,
     )
     return bool_array
