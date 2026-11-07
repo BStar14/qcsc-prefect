@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from qcsc_prefect_dice import create_dice_blocks
+from sqd_common.advanced_blocks import advanced_block_name, advanced_settings, save_advanced_block
 from sqd_common.block_config import load_block_config
 from sqd_common.runtime_block import (
     build_runtime_block,
@@ -151,9 +152,11 @@ def main() -> None:
                 f"'{key}' is not a block setting. Set {parameter} in the flow "
                 "parameters of each run instead."
             )
-    # Validate [runtime] before saving any block.
+    # Validate [runtime] and [sqd_advanced] before saving any block.
     runtime = runtime_block_settings(config["runtime"]) if "runtime" in config else None
     runtime_name = runtime_block_name(args.runtime_block_name, config)
+    advanced_name = advanced_block_name(config)
+    advanced_settings(config, "dice_shci_solver_job/check")
 
     hpc_target = (
         str(_pick_value(args.hpc_target, config.get("hpc_target"), "miyabi")).strip().lower()
@@ -270,10 +273,11 @@ def main() -> None:
     print(f"  Work directory: {Path(str(work_dir)).expanduser().resolve()}")
     print(f"  DICE executable: {Path(str(dice_executable)).expanduser().resolve()}")
     solver_ref = f"dice_shci_solver_job/{block_names['solver_block_name']}"
-    print(f"  Flow parameter: solver_block_ref = '{solver_ref}'")
     if runtime is not None:
         build_runtime_block(runtime).save(runtime_name, overwrite=True)
         print(f"  QRMI runtime block: {runtime_name} (scheduler={runtime['scheduler']})")
+    save_advanced_block(advanced_settings(config, solver_ref), advanced_name)
+    print(f"  Advanced SQD Settings block: {advanced_name} (Solver Block {solver_ref})")
 
 
 if __name__ == "__main__":

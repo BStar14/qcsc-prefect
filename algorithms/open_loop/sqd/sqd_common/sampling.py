@@ -17,7 +17,8 @@ from qiskit.primitives import PrimitiveResult
 from qiskit.primitives.containers import BitArray
 from qiskit_addon_sqd.counts import generate_bit_array_uniform
 
-from sqd_common.flow_params import CircuitParameters, SamplingParameters
+from sqd_common.advanced import AdvancedSettings
+from sqd_common.flow_params import SamplingParameters
 from sqd_common.lucj import LUCJParameters, build_lucj_circuit, circuit_transpile_options
 
 SAMPLING_ARTIFACT_KEY = "sqd-sampling-source"
@@ -126,7 +127,7 @@ async def _load_qrmi_runtime(block_name: str):
 )
 async def quantum_sampling(
     lucj_params: LUCJParameters,
-    circuit_params: CircuitParameters,
+    advanced: AdvancedSettings,
     sampling_params: SamplingParameters,
 ) -> np.ndarray:
     """Build the LUCJ circuit and sample it through the QRMI runtime block.
@@ -138,7 +139,7 @@ async def quantum_sampling(
 
     Args:
         lucj_params: LUCJ operator parameters, including the system size.
-        circuit_params: Circuit and transpiler settings.
+        advanced: Advanced SQD Settings: reset mitigation and the transpiler.
         sampling_params: Shots and the QRMI runtime block.
 
     Returns:
@@ -151,9 +152,11 @@ async def quantum_sampling(
     shots = sampling_params.shots
     runtime = make_qrmi_runtime(
         await _load_qrmi_runtime(sampling_params.runtime_block_name),
-        transpile_config=circuit_transpile_options(circuit_params, rng),
+        transpile_config=circuit_transpile_options(advanced, rng),
     )
-    lucj_circ = build_lucj_circuit(lucj_params=lucj_params, circuit_params=circuit_params)
+    lucj_circ = build_lucj_circuit(
+        lucj_params=lucj_params, use_reset_mitigation=advanced.use_reset_mitigation
+    )
     logger.info(
         "Submitting sampler workload to QRMI resource %s (scheduler=%s, shots=%s).",
         runtime.resource,
@@ -161,7 +164,7 @@ async def quantum_sampling(
         shots,
     )
     pub_result = await runtime.sampler(sampler_pubs=[(lucj_circ,)], shots=shots)
-    bool_array, num_shots = extract_bool_array(pub_result, circuit_params.use_reset_mitigation)
+    bool_array, num_shots = extract_bool_array(pub_result, advanced.use_reset_mitigation)
 
     slurm = pub_result.metadata.get("qcsc_slurm")
     if slurm is not None:
@@ -196,14 +199,14 @@ async def quantum_sampling(
 async def load_runtime_job(
     job_id: str,
     runner_name: str,
-    circuit_params: CircuitParameters,
+    use_reset_mitigation: bool,
 ) -> np.ndarray:
     """Load the samples of a finished IBM Quantum Runtime job.
 
     Args:
         job_id: Qiskit Runtime job ID.
         runner_name: QuantumRuntime block whose credentials can read the job.
-        circuit_params: Circuit settings the job was sampled with (reset mitigation).
+        use_reset_mitigation: Whether the job was sampled with reset mitigation.
 
     Returns:
         Sampled bitstrings as a 2D bool array.
@@ -213,7 +216,7 @@ async def load_runtime_job(
     logger.info("Loading samples from Qiskit Runtime job %s.", job_id)
     client = runtime.credentials.get_client()
     pub_result = await client.get_primitive_result(job_id=job_id)
-    bool_array, num_shots = extract_bool_array(pub_result, circuit_params.use_reset_mitigation)
+    bool_array, num_shots = extract_bool_array(pub_result, use_reset_mitigation)
     await record_sampling_source(
         bool_array=bool_array,
         shots=num_shots,
@@ -232,13 +235,13 @@ async def load_runtime_job(
 )
 async def load_qrmi_result(
     work_dir: str,
-    circuit_params: CircuitParameters,
+    use_reset_mitigation: bool,
 ) -> np.ndarray:
     """Load the samples of a finished QRMI Slurm job from its job directory.
 
     Args:
         work_dir: QRMI job directory holding ``sampler_request.json`` and ``result.json``.
-        circuit_params: Circuit settings the job was sampled with (reset mitigation).
+        use_reset_mitigation: Whether the job was sampled with reset mitigation.
 
     Returns:
         Sampled bitstrings as a 2D bool array.
@@ -259,7 +262,7 @@ async def load_qrmi_result(
     if isinstance(registers, dict):
         registers = [registers]
     pub_result = decode_result(result_path, request["shots"], registers)
-    bool_array, num_shots = extract_bool_array(pub_result, circuit_params.use_reset_mitigation)
+    bool_array, num_shots = extract_bool_array(pub_result, use_reset_mitigation)
     await record_sampling_source(
         bool_array=bool_array,
         shots=num_shots,

@@ -34,7 +34,7 @@ _SELECTORS = ("profile", "solver")
 # Tables that are layers, not settings of their own.
 _LAYER_TABLES = ("advanced", *SOLVERS)
 # Tables that the solver scripts read as tables.
-_SETTING_TABLES = ("qrmi", "runtime", "environments")
+_SETTING_TABLES = ("qrmi", "runtime", "environments", "sqd_advanced")
 # Keys that only [qrmi] has. Elsewhere they mean its header line is commented out.
 _QRMI_ONLY_KEYS = ("resource", "python_executable")
 
@@ -120,6 +120,8 @@ def merge_layers(config: dict[str, Any], base: Path | None = None) -> dict[str, 
         merged["qrmi"] = {**_table(profile, "qrmi"), **_table(config, "qrmi")}
     if "runtime" in config:
         merged["runtime"] = config["runtime"]
+    if "sqd_advanced" in config:
+        merged["sqd_advanced"] = config["sqd_advanced"]
     return merged
 
 

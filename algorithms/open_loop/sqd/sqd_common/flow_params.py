@@ -14,6 +14,18 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 DEFAULT_QRMI_BLOCK_NAME = "qrmi-runtime"
 DEFAULT_RUNTIME_BLOCK_NAME = "ibm-runner"
 DEFAULT_SOLVER_BLOCK_REF = "fulqrum_solver_job/sqd-fulqrum-solver"
+DEFAULT_ADVANCED_BLOCK_NAME = "sqd-advanced-settings"
+# Run-form fields moved to the Advanced SQD Settings block, with their last run-form defaults.
+MOVED_TO_ADVANCED = {
+    "ccsd_maxiter": 4,
+    "use_reset_mitigation": False,
+    "configure_transpiler": False,
+    "transpiler": None,
+    "optimization_level": 3,
+    "sabre_layout_trials": 10000,
+    "sabre_swap_trials": 10,
+    "sabre_max_iterations": 8,
+}
 # Repository root of a source checkout (algorithms/open_loop/sqd/sqd_common/ is four levels down).
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -31,6 +43,43 @@ def _drop_empty(data: dict[str, Any], *names: str) -> dict[str, Any]:
     return {
         key: value for key, value in data.items() if key not in names or value not in (None, {})
     }
+
+
+def _drop_moved_to_advanced(data: dict[str, Any], where: str) -> dict[str, Any]:
+    """Drop a stale field that moved to the Advanced SQD Settings block; reject a set one.
+
+    A run form filled before the move keeps the fields hidden at their old values. A
+    value equal to its old default, or a transpiler that was not switched on, is stale.
+    """
+    configured = bool(data.get("configure_transpiler"))
+    kept = {}
+    for key, value in data.items():
+        if key not in MOVED_TO_ADVANCED:
+            kept[key] = value
+            continue
+        if key == "transpiler":
+            stale = value in (None, {}) or not configured or value == _OLD_TRANSPILER_DEFAULTS
+        else:
+            stale = value is None or value == MOVED_TO_ADVANCED[key]
+        if not stale:
+            raise ValueError(
+                f"{where}.{key} moved to the Advanced SQD Settings block "
+                f"({DEFAULT_ADVANCED_BLOCK_NAME}): set it there, or in [sqd_advanced] of the "
+                "sqd-create-blocks config."
+            )
+    return kept
+
+
+# The circuit.transpiler group of a run form before the move, at its defaults.
+_OLD_TRANSPILER_DEFAULTS = {
+    key: MOVED_TO_ADVANCED[key]
+    for key in (
+        "optimization_level",
+        "sabre_layout_trials",
+        "sabre_swap_trials",
+        "sabre_max_iterations",
+    )
+}
 
 
 def _shown_as_required(*names: str):
@@ -72,16 +121,11 @@ class MoleculeGeometry(BaseModel):
         title="Total Spin Squared",
         json_schema_extra=_at(3),
     )
-    ccsd_maxiter: int = Field(
-        default=4,
-        description=(
-            "Number of CCSD kernel runs. Each run after the first restarts from the "
-            "previous amplitudes, which removes the memory effect of the DIIS history."
-        ),
-        title="CCSD Restarts",
-        ge=1,
-        json_schema_extra=_at(4),
-    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_moved(cls, data: Any) -> Any:
+        return _drop_moved_to_advanced(data, "molecule") if isinstance(data, dict) else data
 
 
 class FCIDumpFile(BaseModel):
@@ -118,63 +162,15 @@ class FCIDumpFile(BaseModel):
         title="Total Spin Squared",
         json_schema_extra=_at(1),
     )
-    ccsd_maxiter: int = Field(
-        default=4,
-        description=(
-            "Number of CCSD kernel runs. Each run after the first restarts from the "
-            "previous amplitudes, which removes the memory effect of the DIIS history."
-        ),
-        title="CCSD Restarts",
-        ge=1,
-        json_schema_extra=_at(2),
-    )
 
-
-class TranspilerParameters(BaseModel):
-    """Preset pass manager with a large SABRE layout search."""
-
-    optimization_level: int = Field(
-        default=3,
-        description="Optimization level of the preset pass manager.",
-        title="Optimization Level",
-        ge=0,
-        le=3,
-        json_schema_extra=_at(0),
-    )
-    sabre_layout_trials: int = Field(
-        default=10000,
-        description=(
-            "The number of random initial layouts tested, selecting the one that minimizes "
-            "SWAP gates."
-        ),
-        title="SABRE Layout Trials",
-        ge=1,
-        json_schema_extra=_at(1),
-    )
-    sabre_swap_trials: int = Field(
-        default=10,
-        description=(
-            "The number of routing trials for each layout, refining gate placement for "
-            "better routing."
-        ),
-        title="SABRE SWAP Trials",
-        ge=1,
-        json_schema_extra=_at(2),
-    )
-    sabre_max_iterations: int = Field(
-        default=8,
-        description=(
-            "The number of forward-backward routing iterations to refine the layout and "
-            "reduce routing costs."
-        ),
-        title="SABRE Max Iteration",
-        ge=1,
-        json_schema_extra=_at(3),
-    )
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_moved(cls, data: Any) -> Any:
+        return _drop_moved_to_advanced(data, "molecule") if isinstance(data, dict) else data
 
 
 class CircuitParameters(BaseModel):
-    """LUCJ ansatz and transpiler settings."""
+    """LUCJ ansatz settings."""
 
     n_lucj_layers: int = Field(
         default=1,
@@ -199,16 +195,6 @@ class CircuitParameters(BaseModel):
         ge=1,
         json_schema_extra=_at(2),
     )
-    use_reset_mitigation: bool = Field(
-        default=False,
-        description=(
-            "Use reset mitigation scheme that post-selects outcomes with non-ground initial state. "
-            "This post-selection reduces the net shot number and its retention rate depends on "
-            "the quality of hardware reset instruction."
-        ),
-        title="Reset Mitigation",
-        json_schema_extra=_at(3),
-    )
     qpu_topology: Literal["heavy-hex", "square"] = Field(
         default="heavy-hex",
         description=(
@@ -217,28 +203,8 @@ class CircuitParameters(BaseModel):
             "Nighthawk): alpha-beta pairs on every orbital."
         ),
         title="QPU Topology",
-        json_schema_extra=_at(4),
+        json_schema_extra=_at(3),
     )
-    configure_transpiler: bool = Field(
-        default=False,
-        description=(
-            "Use the Transpiler settings below. Off: optimization level 3 with the default "
-            "SABRE layout search (10000 layout trials, 10 SWAP trials, 8 iterations)."
-        ),
-        title="Configure Transpiler",
-        json_schema_extra=_at(5),
-    )
-    transpiler: TranspilerParameters = Field(
-        default_factory=TranspilerParameters,
-        description="Used only when Configure Transpiler is on.",
-        title="Transpiler",
-        json_schema_extra=_at(6),
-    )
-
-    @property
-    def transpile_options(self) -> TranspilerParameters:
-        """The transpiler settings in effect: the configured ones, or the defaults."""
-        return self.transpiler if self.configure_transpiler else TranspilerParameters()
 
     @model_validator(mode="before")
     @classmethod
@@ -250,22 +216,7 @@ class CircuitParameters(BaseModel):
                     "circuit.max_ab_pairs was removed: the alpha-beta pairs follow "
                     "circuit.qpu_topology (QPU Topology); heavy-hex keeps at most 5."
                 )
-            # A key left at its old default, or at the value it moved to, changes nothing.
-            transpiler = data.get("transpiler")
-            configured = transpiler if isinstance(transpiler, dict) else {}
-            defaults = TranspilerParameters()
-            data = {
-                key: value
-                for key, value in data.items()
-                if key not in TranspilerParameters.model_fields
-                or value not in (getattr(defaults, key), configured.get(key))
-            }
-            moved = sorted(set(data) & set(TranspilerParameters.model_fields))
-            if moved:
-                raise ValueError(
-                    f"circuit.{moved[0]} moved to circuit.transpiler.{moved[0]}: set "
-                    "configure_transpiler = true and the transpiler settings there."
-                )
+            data = _drop_moved_to_advanced(data, "circuit")
         return data
 
 
@@ -438,7 +389,8 @@ class FlowParameters(BaseModel):
     """Parameters of an SQD workflow run, grouped by Qiskit Patterns stage.
 
     Map: ``molecule``. Optimize and Execute: ``circuit`` and ``sampling``.
-    Post-process: ``sqd`` and ``solver_block_ref``.
+    Post-process: ``sqd``. The solver block and the rarely changed settings are in the
+    Advanced SQD Settings block named by ``advanced_block_name``.
     """
 
     molecule: MoleculeGeometry | FCIDumpFile = Field(
@@ -464,16 +416,24 @@ class FlowParameters(BaseModel):
         title="SQD",
         json_schema_extra=_at(3),
     )
-    solver_block_ref: str = Field(
-        default=DEFAULT_SOLVER_BLOCK_REF,
+    advanced_block_name: str = Field(
+        default=DEFAULT_ADVANCED_BLOCK_NAME,
         description=(
-            "Solver block that diagonalizes each subspace, as '<block type slug>/<block "
-            "name>': fulqrum_solver_job/<name> (default), dice_shci_solver_job/<name> "
-            "(needs sqd[dice]) or sbd_solver_job/<name> (needs sqd[sbd]; closed shell, "
-            "Total Spin Squared null)."
+            "Advanced SQD Settings block with the solver block, CCSD restarts, reset "
+            "mitigation and the transpiler. sqd-create-blocks saves it; without it the "
+            "defaults apply."
         ),
-        title="Solver Block",
+        title="Advanced Settings Block",
         json_schema_extra=_at(4),
+    )
+    solver_block_ref: str | None = Field(
+        default=None,
+        description=(
+            "Leave empty to use the Solver Block of the Advanced Settings Block. Set it, as "
+            "'<block type slug>/<block name>', only to run with another solver block."
+        ),
+        title="Solver Block Override",
+        json_schema_extra=_at(5),
     )
 
     @model_validator(mode="before")
@@ -481,8 +441,13 @@ class FlowParameters(BaseModel):
     def _reject_solver_block_name(cls, data: Any) -> Any:
         if isinstance(data, dict) and "solver_block_name" in data:
             raise ValueError(
-                "solver_block_name was removed in sqd 2.0: set solver_block_ref to "
-                f"'fulqrum_solver_job/{data['solver_block_name']}' (or "
-                "dice_shci_solver_job/..., sbd_solver_job/...)."
+                "solver_block_name was removed in sqd 2.0: set Solver Block in the Advanced "
+                "SQD Settings block (sqd-create-blocks sets it for the solver it creates)."
             )
+        if isinstance(data, dict) and data.get("solver_block_ref") in (
+            "",
+            DEFAULT_SOLVER_BLOCK_REF,
+        ):
+            # The default of a run form filled before 2.2 is stale: the block holds it now.
+            data = {key: value for key, value in data.items() if key != "solver_block_ref"}
         return data

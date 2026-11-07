@@ -29,6 +29,7 @@ from qcsc_workflow_utility import (
     to_sbd_closed_shell,
 )
 
+from sqd_common.advanced import AdvancedSettings, load_advanced_settings
 from sqd_common.flow_params import FCIDumpFile, FlowParameters, MoleculeGeometry
 from sqd_common.lucj import get_lucj_params
 from sqd_common.postprocess import SolverBlock, sqd_loop
@@ -115,7 +116,9 @@ def batch_transform(
     return to_sbd
 
 
-def compute_molecular_integrals(parameters: FlowParameters) -> ElectronicProperties:
+def compute_molecular_integrals(
+    parameters: FlowParameters, advanced: AdvancedSettings
+) -> ElectronicProperties:
     """Map stage: molecular integrals, CCSD amplitudes and initial occupancies."""
     molecule = parameters.molecule
     if isinstance(molecule, MoleculeGeometry):
@@ -124,13 +127,13 @@ def compute_molecular_integrals(parameters: FlowParameters) -> ElectronicPropert
             basis=molecule.basis,
             symmetry=molecule.symmetry,
             spin_sq=molecule.spin_sq,
-            ccsd_maxiter=molecule.ccsd_maxiter,
+            ccsd_maxiter=advanced.ccsd_maxiter,
         )
     if isinstance(molecule, FCIDumpFile):
         return compute_molecular_integrals_from_fcidump.with_options(tags=["map"])(
             fcidump_file=molecule.fcidump_file,
             spin_sq=molecule.spin_sq,
-            ccsd_maxiter=molecule.ccsd_maxiter,
+            ccsd_maxiter=advanced.ccsd_maxiter,
         )
     raise TypeError("Unsupported molecule type")
 
@@ -138,9 +141,10 @@ def compute_molecular_integrals(parameters: FlowParameters) -> ElectronicPropert
 async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> float:
     """Run Map → Optimize → Execute → Post-process and return the lowest energy.
 
-    The solver block of ``parameters.solver_block_ref`` is loaded first and the
-    molecule is checked against it right after Map, so a bad block name or input
-    the solver cannot solve fails before any quantum job.
+    The Advanced SQD Settings block and its solver block are loaded first, and the
+    molecule is checked against the solver right after Map, so a bad block name or
+    input the solver cannot solve fails before any quantum job.
+    ``parameters.solver_block_ref``, when set, overrides the block's Solver Block.
 
     Args:
         parameters: Flow parameters.
@@ -150,12 +154,19 @@ async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> floa
         Minimum ground state energy solved by SQD.
     """
     logger = get_run_logger()
-    slug, block_name = solver_slug(parameters.solver_block_ref)
+    advanced = await load_advanced_settings(parameters.advanced_block_name, logger)
+    solver_ref = parameters.solver_block_ref or advanced.solver_block_ref
+    if parameters.solver_block_ref:
+        logger.info(
+            f"Solver Block Override {solver_ref} replaces Solver Block "
+            f"{advanced.solver_block_ref} of {parameters.advanced_block_name}."
+        )
+    slug, block_name = solver_slug(solver_ref)
     solver = await load_solver_block(solver_class(slug), block_name)
     sampling = parameters.sampling
 
     # Map
-    elec_props = compute_molecular_integrals(parameters)
+    elec_props = compute_molecular_integrals(parameters, advanced)
     check_solver_input(slug, elec_props)
 
     if sampling.quantum_source == "random":
@@ -164,13 +175,13 @@ async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> floa
     elif sampling.qrmi_result_dir is not None:
         bool_array = await load_qrmi_result(
             work_dir=sampling.qrmi_result_dir,
-            circuit_params=parameters.circuit,
+            use_reset_mitigation=advanced.use_reset_mitigation,
         )
     elif sampling.qiskit_runtime_job_id is not None:
         bool_array = await load_runtime_job(
             job_id=sampling.qiskit_runtime_job_id,
             runner_name=sampling.runner_name,
-            circuit_params=parameters.circuit,
+            use_reset_mitigation=advanced.use_reset_mitigation,
         )
     else:
         # Optimize
@@ -182,7 +193,7 @@ async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> floa
         # Execute
         bool_array = await quantum_sampling(
             lucj_params=lucj_params,
-            circuit_params=parameters.circuit,
+            advanced=advanced,
             sampling_params=sampling,
         )
 

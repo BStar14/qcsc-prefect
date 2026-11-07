@@ -13,6 +13,7 @@ from qcsc_workflow_utility import ElectronicProperties, NpStrict4DArrayF64
 from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
 from qiskit.transpiler import Target
 
+from sqd_common.advanced import TRANSPILER_KEYS, AdvancedSettings
 from sqd_common.flow_params import CircuitParameters
 from sqd_common.topology import MAX_AB_PAIRS as MAX_AB_PAIRS
 from sqd_common.topology import Topology, interaction_pairs
@@ -114,7 +115,7 @@ def get_lucj_params(
 @task(name="build_lucj_circuit", tags=["execute"], cache_policy=NO_CACHE)
 def build_lucj_circuit(
     lucj_params: LUCJParameters,
-    circuit_params: CircuitParameters,
+    use_reset_mitigation: bool = False,
 ) -> QuantumCircuit:
     """Build the measured LUCJ circuit on the Hartree-Fock state.
 
@@ -127,11 +128,11 @@ def build_lucj_circuit(
     creg_meas = ClassicalRegister(2 * lucj_params.norb, name="meas")
 
     regs = [qreg, creg_meas]
-    if circuit_params.use_reset_mitigation:
+    if use_reset_mitigation:
         regs.append(creg_test)
 
     lucj_circ = QuantumCircuit(*regs)
-    if circuit_params.use_reset_mitigation:
+    if use_reset_mitigation:
         lucj_circ.measure(qreg, creg_test)
         lucj_circ.barrier()
     lucj_circ.append(
@@ -152,35 +153,25 @@ def build_lucj_circuit(
 
 
 def circuit_transpile_options(
-    circuit_params: CircuitParameters, seed: int | np.random.Generator
+    advanced: AdvancedSettings, seed: int | np.random.Generator
 ) -> dict[str, int]:
-    """JSON-safe ``build_pass_manager`` options for the configured circuit.
-
-    The transpiler settings apply only with ``configure_transpiler``; otherwise
-    the defaults of ``TranspilerParameters`` are used.
-    """
-    options = circuit_params.transpile_options
-    return {
-        "optimization_level": options.optimization_level,
-        "seed_transpiler": derive_seed(seed),
-        "sabre_max_iterations": options.sabre_max_iterations,
-        "sabre_layout_trials": options.sabre_layout_trials,
-        "sabre_swap_trials": options.sabre_swap_trials,
-    }
+    """JSON-safe ``build_pass_manager`` options from the Advanced SQD Settings."""
+    options = {key: getattr(advanced, key) for key in TRANSPILER_KEYS}
+    return {**options, "seed_transpiler": derive_seed(seed)}
 
 
 @task(name="transpile_lucj_circuit", tags=["execute"], cache_policy=NO_CACHE)
 def transpile_lucj_circuit(
     circuit: QuantumCircuit,
     target: Target,
-    circuit_params: CircuitParameters,
+    advanced: AdvancedSettings,
     seed: int | np.random.Generator,
 ) -> QuantumCircuit:
     """Compile the LUCJ circuit for ``target`` with a massive SABRE layout search."""
     logger = get_run_logger()
     passmanager = build_pass_manager(
         target,
-        **circuit_transpile_options(circuit_params, seed),
+        **circuit_transpile_options(advanced, seed),
         pre_init=PRE_INIT,
     )
     logger.info("Transpiling ansatz circuit...")

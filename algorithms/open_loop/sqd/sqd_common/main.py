@@ -1,7 +1,7 @@
 """The SQD workflow (arXiv:2405.05068) as one Prefect flow, ``sqd``.
 
 The stages (integrals, LUCJ parameters, quantum sampling, configuration
-recovery) live in ``sqd_common``. ``parameters.solver_block_ref`` selects the
+recovery) live in ``sqd_common``. The Advanced SQD Settings block names the
 solver block that diagonalizes each subspace: fulqrum (default), DICE or SBD.
 """
 

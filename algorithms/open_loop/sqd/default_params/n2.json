@@ -1,15 +1,12 @@
 {
   "molecule": {
     "fcidump_file": "algorithms/open_loop/sqd/data/n2_631g_fc.fcidump",
-    "spin_sq": 0.0,
-    "ccsd_maxiter": 4
+    "spin_sq": 0.0
   },
   "circuit": {
     "n_lucj_layers": 1,
     "compress": true,
-    "compress_maxiter": 20,
-    "use_reset_mitigation": false,
-    "configure_transpiler": false
+    "compress_maxiter": 20
   },
   "sampling": {
     "quantum_source": "real-device",
@@ -20,6 +17,5 @@
     "subspace_dim": 90000,
     "num_batches": 4,
     "max_iterations": 5
-  },
-  "solver_block_ref": "fulqrum_solver_job/sqd-fulqrum-solver"
+  }
 }

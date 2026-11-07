@@ -20,6 +20,7 @@ from typing import Any
 
 from qcsc_prefect_core.models.gpu_request import validate_gpu_request
 from qcsc_prefect_fulqrum.solver import FulqrumSolverOptions
+from sqd_common.advanced_blocks import advanced_block_name, advanced_settings, save_advanced_block
 from sqd_common.block_config import load_block_config
 from sqd_common.runtime_block import (
     build_runtime_block,
@@ -522,9 +523,13 @@ def main(argv: list[str] | None = None) -> None:
     qrmi = resolve_qrmi_settings(args, config, block_kwargs)
     runtime = resolve_runtime_settings(config, qrmi)
     runtime_name = runtime_block_name(args.runtime_block_name, config)
+    solver_ref = f"fulqrum_solver_job/{block_kwargs['solver_block_name']}"
+    advanced = advanced_settings(config, solver_ref)
+    advanced_name = advanced_block_name(config)
 
     if args.dry_run:
         resolved = {"blocks": block_kwargs}
+        resolved["advanced_block"] = {"name": advanced_name, **advanced.model_dump()}
         if qrmi is not None:
             resolved["qrmi_blocks"] = qrmi
         if runtime is not None:
@@ -539,6 +544,7 @@ def main(argv: list[str] | None = None) -> None:
         create_qrmi_blocks(qrmi)
     if runtime is not None:
         build_runtime_block(runtime).save(runtime_name, overwrite=True)
+    save_advanced_block(advanced, advanced_name)
 
     print(f"Saved blocks for SQD fulqrum workflow (target={block_kwargs['hpc_target']})")
     print(f"  SQD solver block: {block_names['solver_block_name']}")
@@ -556,6 +562,9 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  QRMI runtime block: {runtime_name} (scheduler={runtime['scheduler']})")
         if runtime_name != "qrmi-runtime":
             print(f"Set sampling.runtime_block_name of each run to {runtime_name!r}.")
+    print(f"  Advanced SQD Settings block: {advanced_name} (Solver Block {solver_ref})")
+    if advanced_name != "sqd-advanced-settings":
+        print(f"Set advanced_block_name of each run to {advanced_name!r}.")
 
 
 if __name__ == "__main__":
