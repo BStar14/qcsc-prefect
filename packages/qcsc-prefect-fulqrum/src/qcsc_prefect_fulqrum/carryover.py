@@ -81,8 +81,13 @@ def select_carryover(
 
 def _occupancy(weights: np.ndarray, strs: np.ndarray, norb: int) -> np.ndarray:
     # Bit i of a CI string is the occupation of orbital i.
-    bits = np.array([[(int(s) >> i) & 1 for i in range(norb)] for s in strs], dtype=np.float64)
-    return np.asarray(weights, dtype=np.float64) @ bits.reshape(len(strs), norb)
+    strs = np.asarray(strs)
+    if strs.dtype != object:
+        bits = (strs.astype(np.int64)[:, None] >> np.arange(norb)) & 1
+    else:
+        bits = np.array([[(int(s) >> i) & 1 for i in range(norb)] for s in strs])
+    bits = bits.reshape(len(strs), norb).astype(np.float64)
+    return np.asarray(weights, dtype=np.float64) @ bits
 
 
 def occupancies_from_marginals(

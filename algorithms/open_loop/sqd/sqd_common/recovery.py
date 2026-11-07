@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from qcsc_prefect_fulqrum.carryover import marginal_weights, select_carryover
 from qiskit_addon_sqd.configuration_recovery import recover_configurations
+from qiskit_addon_sqd.counts import bitstring_matrix_to_integers
 from qiskit_addon_sqd.fermion import SCIResult
 
 from sqd_common.subsample import postselect, subsample
@@ -89,11 +90,9 @@ def _carryover_and_source(
 
 def _bool_rows_to_ints(rows: np.ndarray, norb: int) -> np.ndarray:
     """CI strings of ``(n, norb)`` bool rows whose first column is orbital ``norb - 1``."""
-    dtype = np.int64 if norb < 64 else object
-    strings = np.zeros(len(rows), dtype=dtype)
-    for p in range(min(norb, rows.shape[1] if rows.ndim == 2 else 0)):
-        strings += rows[:, p].astype(dtype) * (1 << (norb - 1 - p))
-    return strings
+    rows = rows.reshape(-1, norb)
+    strings = bitstring_matrix_to_integers(rows)
+    return strings.astype(np.int64) if norb < 64 else strings
 
 
 def with_carryover_fraction(solver, fraction: float):

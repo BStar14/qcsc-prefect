@@ -97,13 +97,20 @@ def make_job_work_dir(base_work_dir: Path) -> Path:
     return job_dir
 
 
-def _encode_ci_strs(strs: np.ndarray) -> np.ndarray:
+def encode_ci_strs(strs) -> np.ndarray:
+    """CI strings for a file read without pickle.
+
+    ``int64`` strings are kept; Python ints (``object`` dtype, 64 or more orbitals)
+    become decimal strings. :func:`decode_ci_strs` reverses this.
+    """
+    strs = np.asarray(strs).reshape(-1)
     if strs.dtype == object:
         return np.array([str(int(x)) for x in strs])
-    return strs
+    return strs.astype(np.int64, copy=False)
 
 
-def _decode_ci_strs(arr: np.ndarray, norb: int) -> np.ndarray:
+def decode_ci_strs(arr: np.ndarray, norb: int) -> np.ndarray:
+    """CI strings written by :func:`encode_ci_strs`: ``int64``, or Python ints from 64 orbitals."""
     if arr.dtype.kind == "U":
         values = [int(x) for x in arr]
         return np.array(values, dtype=np.int64 if norb < 64 else object)
@@ -180,8 +187,8 @@ def write_solver_input(
     work_dir.mkdir(parents=True, exist_ok=True)
     _write_npz(
         work_dir / INPUT_ARRAYS,
-        ci_strs_a=_encode_ci_strs(strs_a),
-        ci_strs_b=_encode_ci_strs(strs_b),
+        ci_strs_a=encode_ci_strs(strs_a),
+        ci_strs_b=encode_ci_strs(strs_b),
         one_body_tensor=h1,
         two_body_tensor=eri,
     )
@@ -214,8 +221,8 @@ def read_solver_input(work_dir: Path) -> dict:
     spec = _read_json(work_dir / INPUT_SPEC)
     norb = int(spec["norb"])
     with np.load(work_dir / INPUT_ARRAYS, allow_pickle=False) as data:
-        strs_a = _decode_ci_strs(data["ci_strs_a"], norb)
-        strs_b = _decode_ci_strs(data["ci_strs_b"], norb)
+        strs_a = decode_ci_strs(data["ci_strs_a"], norb)
+        strs_b = decode_ci_strs(data["ci_strs_b"], norb)
         h1 = data["one_body_tensor"]
         eri = data["two_body_tensor"]
     return {
@@ -234,13 +241,13 @@ def write_solver_output(work_dir: Path, solution: FulqrumSolution) -> None:
     arrays = {
         "occupancies_a": np.asarray(solution.orbital_occupancies[0]),
         "occupancies_b": np.asarray(solution.orbital_occupancies[1]),
-        "ci_strs_a": _encode_ci_strs(solution.ci_strs_a),
-        "ci_strs_b": _encode_ci_strs(solution.ci_strs_b),
+        "ci_strs_a": encode_ci_strs(solution.ci_strs_a),
+        "ci_strs_b": encode_ci_strs(solution.ci_strs_b),
     }
     has_carryover = len(solution.carryover_a) > 0 or len(solution.carryover_b) > 0
     if has_carryover:
-        arrays["carryover_a"] = _encode_ci_strs(np.asarray(solution.carryover_a))
-        arrays["carryover_b"] = _encode_ci_strs(np.asarray(solution.carryover_b))
+        arrays["carryover_a"] = encode_ci_strs(np.asarray(solution.carryover_a))
+        arrays["carryover_b"] = encode_ci_strs(np.asarray(solution.carryover_b))
     if solution.amplitudes is not None:
         arrays["amplitudes"] = solution.amplitudes
     _write_npz(work_dir / OUTPUT_ARRAYS, **arrays)
@@ -320,12 +327,12 @@ def read_solver_output(work_dir: Path, norb: int) -> FulqrumSolution:
     with np.load(work_dir / OUTPUT_ARRAYS, allow_pickle=False) as data:
         occ_a = data["occupancies_a"]
         occ_b = data["occupancies_b"]
-        strs_a = _decode_ci_strs(data["ci_strs_a"], norb)
-        strs_b = _decode_ci_strs(data["ci_strs_b"], norb)
+        strs_a = decode_ci_strs(data["ci_strs_a"], norb)
+        strs_b = decode_ci_strs(data["ci_strs_b"], norb)
         amplitudes = data["amplitudes"] if "amplitudes" in data.files else None
         empty = np.empty(0, dtype=np.int64)
         carryover = [
-            _decode_ci_strs(data[key], norb) if key in data.files else empty
+            decode_ci_strs(data[key], norb) if key in data.files else empty
             for key in ("carryover_a", "carryover_b")
         ]
     return FulqrumSolution(

@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+from qcsc_prefect_fulqrum.io_utils import decode_ci_strs, encode_ci_strs
 
 CKPT_NAME = "ckpt_t00_w0.npz"
 SOURCE_NAME = "source.json"
@@ -51,20 +52,6 @@ class RecoveryCheckpoint:
     next_step: int
     best_energy: float
     carryover: tuple[np.ndarray, np.ndarray] = field(default_factory=_no_carryover)
-
-
-def _encode_ci_strs(strs) -> np.ndarray:
-    """``int64`` CI strings as they are; Python ints (``object`` dtype) as decimal strings."""
-    strs = np.asarray(strs).reshape(-1)
-    if strs.dtype == object:
-        return np.array([str(int(x)) for x in strs], dtype=str)
-    return strs.astype(np.int64, copy=False)
-
-
-def _decode_ci_strs(arr: np.ndarray, norb: int) -> np.ndarray:
-    if arr.dtype.kind == "U":
-        return np.array([int(x) for x in arr], dtype=np.int64 if norb < 64 else object)
-    return arr.astype(np.int64, copy=False)
 
 
 def save_checkpoint(
@@ -90,8 +77,8 @@ def save_checkpoint(
                 occ_b=np.asarray(occupancies[1], dtype=np.float64),
                 next_step=np.int64(next_step),
                 best_energy=np.float64(best_energy),
-                carryover_a=_encode_ci_strs(carryover[0]),
-                carryover_b=_encode_ci_strs(carryover[1]),
+                carryover_a=encode_ci_strs(carryover[0]),
+                carryover_b=encode_ci_strs(carryover[1]),
             )
         os.replace(tmp, path)
         logger.info(
@@ -113,8 +100,8 @@ def load_checkpoint(path: Path) -> RecoveryCheckpoint:
         carryover = _no_carryover()
         if "carryover_a" in ck.files and "carryover_b" in ck.files:
             carryover = (
-                _decode_ci_strs(np.array(ck["carryover_a"]), norb),
-                _decode_ci_strs(np.array(ck["carryover_b"]), norb),
+                decode_ci_strs(np.array(ck["carryover_a"]), norb),
+                decode_ci_strs(np.array(ck["carryover_b"]), norb),
             )
         return RecoveryCheckpoint(
             occupancies=occupancies,
