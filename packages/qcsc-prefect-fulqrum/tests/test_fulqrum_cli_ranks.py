@@ -268,3 +268,20 @@ def test_unreadable_rank_error_is_reported(tmp_path):
     (tmp_path / "error.rank4.json").write_text("{", encoding="utf-8")
     error = io_utils.read_solver_error(tmp_path)
     assert "unreadable error.rank4.json" in error["message"]
+
+
+def test_an_mpi_that_cannot_start_falls_back_to_the_environment(monkeypatch, tmp_path):
+    """sbatch sets SLURM_NTASKS for --ntasks-per-node even for one process."""
+    _write_input(tmp_path, "cpu")
+    monkeypatch.setattr(cli, "solve_fulqrum", _fake_solve)
+
+    class BrokenComm:
+        def Get_size(self):
+            raise RuntimeError("PMI_Init failed")
+
+    mpi = types.SimpleNamespace(COMM_WORLD=BrokenComm())
+    monkeypatch.setitem(sys.modules, "mpi4py", types.SimpleNamespace(MPI=mpi))
+    monkeypatch.setitem(sys.modules, "mpi4py.MPI", mpi)
+    monkeypatch.setenv("SLURM_NTASKS", "4")
+    assert cli.main([str(tmp_path)]) == 0
+    assert io_utils.read_solver_output(tmp_path, norb=2).energy == -0.5

@@ -316,3 +316,32 @@ def test_the_loop_passes_the_fraction_to_subsampling():
     for a, _ in solver.calls[2:]:
         # The third string is not forced; it may still be drawn as a sample.
         assert a[:2].tolist() == co[0][:2].tolist() and len(np.unique(a)) == 4
+
+
+def test_a_cancelled_round_cancels_its_solver_jobs():
+    cancelled = []
+
+    async def solve(ci_strings):
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            cancelled.append(len(ci_strings[0]))
+            raise
+
+    async def main():
+        task = asyncio.ensure_future(
+            recovery._solve_round(solve, [(np.array([1]), np.array([1]))] * 3, 0)
+        )
+        await asyncio.sleep(0.01)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(main())
+    assert len(cancelled) == 3
+
+
+def test_sbd_rows_of_another_width_are_rejected():
+    with pytest.raises(ValueError, match=r"shape \(n, 6\)"):
+        recovery._bool_rows_to_ints(np.zeros((2, 5), dtype=bool), 6)
+    assert recovery._bool_rows_to_ints(np.zeros((0, 6), dtype=bool), 6).dtype == np.int64
