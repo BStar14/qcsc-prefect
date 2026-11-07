@@ -129,11 +129,18 @@ def _mpi_world():
         return None
     try:
         from mpi4py import MPI
+
+        comm = MPI.COMM_WORLD
+        size = comm.Get_size()
     except ImportError as exc:
         logger.debug("No mpi4py (%s); using the launcher's process index.", exc)
         return None
-    comm = MPI.COMM_WORLD
-    return comm if comm.Get_size() > 1 else None
+    except Exception as exc:
+        # sbatch exports SLURM_NTASKS for --ntasks-per-node even when one process runs
+        # the job; an MPI library that cannot start then must not stop the solve.
+        logger.warning("MPI did not start (%s); using the launcher's process index.", exc)
+        return None
+    return comm if size > 1 else None
 
 
 def _abort(comm) -> None:

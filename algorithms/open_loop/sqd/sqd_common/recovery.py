@@ -90,7 +90,10 @@ def _carryover_and_source(
 
 def _bool_rows_to_ints(rows: np.ndarray, norb: int) -> np.ndarray:
     """CI strings of ``(n, norb)`` bool rows whose first column is orbital ``norb - 1``."""
-    rows = rows.reshape(-1, norb)
+    if rows.size == 0:
+        return np.zeros(0, dtype=np.int64 if norb < 64 else object)
+    if rows.ndim != 2 or rows.shape[1] != norb:
+        raise ValueError(f"carryover rows must have shape (n, {norb}), got {rows.shape}")
     strings = bitstring_matrix_to_integers(rows)
     return strings.astype(np.int64) if norb < 64 else strings
 
@@ -329,13 +332,21 @@ async def _solve_round(
     """Solve the batches of a round concurrently; the first failure fails the round.
 
     The other batches are then cancelled, which cancels their scheduler jobs, so
-    no job of a failed round keeps running.
+    no job of a failed round keeps running. The same happens when the round itself
+    is cancelled, for example by a flow timeout: ``asyncio.wait`` leaves its tasks
+    running then, so they are cancelled here.
 
     Raises:
         RoundFailedError: If any batch fails. Its cause is the first failure.
     """
     jobs = [asyncio.ensure_future(solve(ci)) for ci in batches]
-    done, pending = await asyncio.wait(jobs, return_when=asyncio.FIRST_EXCEPTION)
+    try:
+        done, pending = await asyncio.wait(jobs, return_when=asyncio.FIRST_EXCEPTION)
+    except asyncio.CancelledError:
+        for job in jobs:
+            job.cancel()
+        await asyncio.gather(*jobs, return_exceptions=True)
+        raise
     failed = [i for i, job in enumerate(jobs) if job in done and job.exception() is not None]
     if not failed:
         return [job.result() for job in jobs]
