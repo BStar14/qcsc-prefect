@@ -19,7 +19,7 @@ from qiskit.primitives import PrimitiveResult, SamplerPubResult  # noqa: E402
 from qiskit.primitives.containers import BitArray, DataBin  # noqa: E402
 from qiskit_addon_sqd.fermion import SCIResult, solve_fermion  # noqa: E402
 from qiskit_ibm_runtime import RuntimeEncoder  # noqa: E402
-from sqd_common import flow_params, lucj, postprocess, sampling  # noqa: E402
+from sqd_common import flow_params, lucj, postprocess, sampling, topology  # noqa: E402
 
 LOGGER = logging.getLogger("sqd_common.test")
 LIH = "Li 0 0 0; H 0 0 1.6"
@@ -27,7 +27,7 @@ LIH = "Li 0 0 0; H 0 0 1.6"
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
-    for module in (chem, lucj, sampling, postprocess):
+    for module in (chem, lucj, sampling, postprocess, topology):
         monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
     artifacts = []
 
@@ -217,16 +217,20 @@ def test_interaction_pairs_heavy_hex():
     assert ab == [(0, 0), (4, 4), (8, 8)]
     # At most five alpha-beta pairs, from orbital 0.
     assert lucj.interaction_pairs(40)[1] == [(p, p) for p in range(0, 20, 4)]
+    assert lucj.MAX_AB_PAIRS == 5
 
 
-def test_get_lucj_params_matches_ffsim(lih):
+@pytest.mark.parametrize("qpu_topology", ["heavy-hex", "square"])
+def test_get_lucj_params_matches_ffsim(lih, qpu_topology):
     import ffsim
 
-    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(n_lucj_layers=2), lih)
+    circuit_params = flow_params.CircuitParameters(n_lucj_layers=2)
+    params = lucj.get_lucj_params.fn(circuit_params, lih, qpu_topology)
     ref = ffsim.UCJOpSpinBalanced.from_t_amplitudes(
-        lih.t2, n_reps=2, interaction_pairs=lucj.interaction_pairs(lih.num_orbitals)
+        lih.t2, n_reps=2, interaction_pairs=lucj.interaction_pairs(lih.num_orbitals, qpu_topology)
     )
     assert params.norb == lih.num_orbitals and params.nelec == lih.num_electrons
+    assert params.qpu_topology == qpu_topology
     np.testing.assert_allclose(params.diag_coulomb_mats, ref.diag_coulomb_mats)
     np.testing.assert_allclose(params.orbital_rotations, ref.orbital_rotations)
     assert params.diag_coulomb_mats.shape == (2, 2, lih.num_orbitals, lih.num_orbitals)
@@ -235,7 +239,7 @@ def test_get_lucj_params_matches_ffsim(lih):
 def test_get_lucj_params_compression_logs_iterations(lih, caplog):
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
         params = lucj.get_lucj_params.fn(
-            flow_params.CircuitParameters(compress=True, compress_maxiter=3), lih
+            flow_params.CircuitParameters(compress=True, compress_maxiter=3), lih, "heavy-hex"
         )
     assert "Compression iteration 1" in caplog.text
     assert params.orbital_rotations.dtype == np.complex128
@@ -244,14 +248,34 @@ def test_get_lucj_params_compression_logs_iterations(lih, caplog):
 def test_lucj_parameters_round_trip_through_pickle(lih):
     import pickle
 
-    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih)
+    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "square")
     restored = pickle.loads(pickle.dumps(params))
     np.testing.assert_array_equal(restored.diag_coulomb_mats, params.diag_coulomb_mats)
+    assert restored.qpu_topology == "square"
+
+
+def test_get_lucj_params_cache_key_depends_on_the_topology(lih):
+    """The persisted Optimize result of one topology is never reused for another."""
+    from prefect.cache_policies import DEFAULT
+    from prefect.utilities.callables import get_call_parameters
+
+    task = lucj.get_lucj_params
+    assert task.cache_policy == DEFAULT
+    # The default policy reads only the task and the flow run ID from the run context.
+    context = SimpleNamespace(task=task, task_run=SimpleNamespace(flow_run_id="run"))
+
+    def key(qpu_topology):
+        args = (flow_params.CircuitParameters(), lih, qpu_topology)
+        inputs = get_call_parameters(task.fn, args, {})
+        return task.cache_policy.compute_key(context, inputs, flow_parameters={})
+
+    assert key("heavy-hex") == key("heavy-hex")
+    assert key("heavy-hex") != key("square")
 
 
 @pytest.mark.parametrize("reset", [False, True])
 def test_build_lucj_circuit_registers(lih, reset):
-    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih)
+    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "heavy-hex")
     circuit = lucj.build_lucj_circuit.fn(
         params, flow_params.CircuitParameters(use_reset_mitigation=reset)
     )
@@ -363,7 +387,7 @@ def test_sampling_uses_the_qrmi_block_with_the_sqd_hooks(monkeypatch, lih, offli
         configure_transpiler=True,
         transpiler=flow_params.TranspilerParameters(sabre_layout_trials=7),
     )
-    params = lucj.get_lucj_params.fn(circuit_params, lih)
+    params = lucj.get_lucj_params.fn(circuit_params, lih, "square")
     sampling_params = flow_params.SamplingParameters(shots=4, runtime_block_name="my-qrmi")
     bool_array = asyncio.run(sampling.quantum_sampling.fn(params, circuit_params, sampling_params))
 
@@ -376,6 +400,7 @@ def test_sampling_uses_the_qrmi_block_with_the_sqd_hooks(monkeypatch, lih, offli
     assert bool_array.shape == (4, 4)
     row = offline[0]["table"][0]
     assert row["source"] == f"qrmi-{scheduler}" and row["resource"] == "test_heron"
+    assert row["qpu_topology"] == "square"
     if scheduler == "iqp":
         assert row["qiskit_runtime_job_id"] == "d7" and row["qrmi_result_dir"] is None
     else:
@@ -389,7 +414,7 @@ def test_missing_runtime_block_explains_random_fallback(monkeypatch, lih):
         raise ValueError(f"Unable to find block document named {name}")
 
     monkeypatch.setattr(QrmiRuntimeBlock, "aload_runtime", staticmethod(missing))
-    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih)
+    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "heavy-hex")
     with pytest.raises(RuntimeError, match="quantum_source='random'"):
         asyncio.run(
             sampling.quantum_sampling.fn(
@@ -426,6 +451,8 @@ def test_load_runtime_job_reads_the_job_result(monkeypatch, offline, reset):
     row = offline[0]["table"][0]
     assert row["qiskit_runtime_job_id"] == "d123" and row["shots"] == 4
     assert row["shots_kept"] == len(bool_array)
+    # A reload builds no circuit, so it records no topology.
+    assert row["qpu_topology"] is None
 
 
 def _qrmi_job_dir(tmp_path, reset, schema=2):

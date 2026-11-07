@@ -16,7 +16,7 @@ import pytest
 for _mod in ("ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
     pytest.importorskip(_mod)
 
-from sqd_common import flow, sampling, solvers  # noqa: E402
+from sqd_common import flow, sampling, solvers, topology  # noqa: E402
 from sqd_common.flow_params import FlowParameters  # noqa: E402
 
 LOGGER = logging.getLogger("sqd_common.flow.test")
@@ -64,8 +64,8 @@ def stages(monkeypatch):
     }
     for name, stub in stubs.items():
         monkeypatch.setattr(flow, name, stub)
-    monkeypatch.setattr(flow, "get_run_logger", lambda: LOGGER)
-    monkeypatch.setattr(sampling, "get_run_logger", lambda: LOGGER)
+    for module in (flow, sampling, topology):
+        monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
 
     solver = object()
     loaded = []
@@ -90,9 +90,10 @@ def stages(monkeypatch):
     return stages_state
 
 
-def _parameters(molecule=None, solver="fulqrum_solver_job/my-solver", **sampling):
+def _parameters(molecule=None, solver="fulqrum_solver_job/my-solver", circuit=None, **sampling):
     return FlowParameters(
         molecule=molecule or {"atom": "H 0 0 0; H 0 0 0.74", "basis": "sto-3g"},
+        circuit=circuit or {},
         sampling=sampling,
         sqd={"subspace_dim": 4, "num_batches": 1, "max_iterations": 1},
         solver_block_ref=solver,
@@ -122,6 +123,22 @@ def test_patterns_stages_hand_results_on_unchanged(stages):
     assert stages["stubs"]["compute_molecular_integrals_from_geometry"].options == [
         {"tags": ["map"]}
     ]
+
+
+@pytest.mark.parametrize(
+    "qpu_topology, expected",
+    [("auto", "heavy-hex"), ("heavy-hex", "heavy-hex"), ("square", "square")],
+)
+def test_optimize_gets_the_resolved_topology(stages, caplog, qpu_topology, expected):
+    with caplog.at_level(logging.INFO, logger=LOGGER.name):
+        _run(stages, _parameters(circuit={"qpu_topology": qpu_topology}))
+    assert dict(stages["log"])["optimize"]["qpu_topology"] == expected
+    # QRMI reads the backend only when it compiles, after Optimize, so auto warns.
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    if qpu_topology == "auto":
+        assert len(warnings) == 1 and "Using heavy-hex" in warnings[0]
+    else:
+        assert warnings == [] and f"QPU topology: {expected}, as set" in caplog.text
 
 
 def test_molecule_settings_reach_the_map_stage(stages):
