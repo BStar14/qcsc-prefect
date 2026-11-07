@@ -20,10 +20,13 @@ Layout of one job directory:
 CI strings are stored as ``int64`` for ``norb < 64`` and as decimal strings
 otherwise, so no file needs pickle.
 
-Files are written with :data:`FORMAT_VERSION` 2, which added the solver
-``backend`` and ``carryover_fraction`` and the carryover arrays. Version 1 files
-are still read; their carryover is empty. A compute node with an older package
-rejects version 2 input instead of ignoring the new options.
+Version 2 of the format added the solver ``backend`` and ``carryover_fraction``
+and the carryover arrays. A file is written as version 1 when it uses none of
+them (CPU backend, no carryover), so a workflow host and a compute node of
+different package versions keep working for such solves; otherwise it is
+version 2. Both versions are read, and a version 1 file has empty carryover. A
+compute node with an older package rejects version 2 input instead of ignoring
+the new options.
 """
 
 from __future__ import annotations
@@ -47,6 +50,8 @@ logger = logging.getLogger(__name__)
 FORMAT_VERSION = 2
 # Versions this module reads; a missing key of an older version takes its default.
 READABLE_FORMAT_VERSIONS = (1, 2)
+# Solver options that version 2 added, with the values a version 1 solve implies.
+_V2_OPTION_DEFAULTS = {"backend": "cpu", "carryover_fraction": 0.0}
 INPUT_ARRAYS = "input.npz"
 INPUT_SPEC = "solver.json"
 OUTPUT_ARRAYS = "output.npz"
@@ -130,8 +135,22 @@ def _read_json(path: Path) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
     version = payload.get("format_version")
     if version not in READABLE_FORMAT_VERSIONS:
-        raise ValueError(f"{path.name}: unsupported format_version {version!r}")
+        raise ValueError(
+            f"{path.name}: unsupported format_version {version!r}; this qcsc-prefect-fulqrum "
+            f"reads versions {', '.join(map(str, READABLE_FORMAT_VERSIONS))}. Install the "
+            "same qcsc-prefect-fulqrum version on the workflow host and the compute node."
+        )
     return payload
+
+
+def _options_payload(options: FulqrumSolverOptions) -> tuple[int, dict]:
+    """``(format_version, options)`` for ``solver.json``: version 1 without v2 options."""
+    payload = asdict(options)
+    if all(payload[key] == value for key, value in _V2_OPTION_DEFAULTS.items()):
+        for key in _V2_OPTION_DEFAULTS:
+            del payload[key]
+        return 1, payload
+    return FORMAT_VERSION, payload
 
 
 def write_solver_input(
@@ -166,13 +185,14 @@ def write_solver_input(
         one_body_tensor=h1,
         two_body_tensor=eri,
     )
+    version, options_payload = _options_payload(options)
     _write_json(
         work_dir / INPUT_SPEC,
         {
-            "format_version": FORMAT_VERSION,
+            "format_version": version,
             "norb": int(norb),
             "nelec": [int(nelec[0]), int(nelec[1])],
-            "options": asdict(options),
+            "options": options_payload,
         },
     )
     logger.debug("Wrote fulqrum input (%d x %d) to %s", len(strs_a), len(strs_b), work_dir)
@@ -216,16 +236,18 @@ def write_solver_output(work_dir: Path, solution: FulqrumSolution) -> None:
         "occupancies_b": np.asarray(solution.orbital_occupancies[1]),
         "ci_strs_a": _encode_ci_strs(solution.ci_strs_a),
         "ci_strs_b": _encode_ci_strs(solution.ci_strs_b),
-        "carryover_a": _encode_ci_strs(np.asarray(solution.carryover_a)),
-        "carryover_b": _encode_ci_strs(np.asarray(solution.carryover_b)),
     }
+    has_carryover = len(solution.carryover_a) > 0 or len(solution.carryover_b) > 0
+    if has_carryover:
+        arrays["carryover_a"] = _encode_ci_strs(np.asarray(solution.carryover_a))
+        arrays["carryover_b"] = _encode_ci_strs(np.asarray(solution.carryover_b))
     if solution.amplitudes is not None:
         arrays["amplitudes"] = solution.amplitudes
     _write_npz(work_dir / OUTPUT_ARRAYS, **arrays)
     _write_json(
         work_dir / OUTPUT_RESULT,
         {
-            "format_version": FORMAT_VERSION,
+            "format_version": FORMAT_VERSION if has_carryover else 1,
             "energy": float(solution.energy),
             "has_amplitudes": solution.amplitudes is not None,
             "metadata": solution.metadata,
@@ -239,7 +261,8 @@ def write_solver_error(work_dir: Path, exc: BaseException, rank: int = 0) -> Non
     _write_json(
         work_dir / error_file_name(rank),
         {
-            "format_version": FORMAT_VERSION,
+            # error.json keeps version 1 for older readers; only the rank files are new.
+            "format_version": FORMAT_VERSION if rank else 1,
             "rank": int(rank),
             "type": type(exc).__name__,
             "message": str(exc),
