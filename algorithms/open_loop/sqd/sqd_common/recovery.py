@@ -288,8 +288,8 @@ async def run_configuration_recovery(
         for subspace_idx, (ci_strings, result) in enumerate(zip(batches, results, strict=True)):
             outcome_records.append(
                 dict(
-                    round=int(round_idx),
-                    subspace=int(subspace_idx),
+                    round=int(round_idx + 1),
+                    batch=int(subspace_idx + 1),
                     energy=float(result.energy + nuclear_repulsion_energy),
                     dimension=int(len(ci_strings[0]) * len(ci_strings[1])),
                     num_ci_strs_a=int(len(ci_strings[0])),
