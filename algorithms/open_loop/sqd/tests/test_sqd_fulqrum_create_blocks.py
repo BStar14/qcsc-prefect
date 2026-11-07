@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -226,3 +227,156 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
     assert solver.return_sci_state is False
     assert qrmi_saved[0]["resource"] == "YOUR_QRMI_RESOURCE" and qrmi_saved[1] == "qrmi-runtime"
     assert "Saved blocks for SQD fulqrum workflow" in capsys.readouterr().out
+
+
+def _gpu_config(tmp_path, profile, *, qrmi=True, advanced=""):
+    """The example switched to a GPU profile, optionally without [qrmi] (Slurm only)."""
+    text = EXAMPLE.read_text()
+    text = text.replace('profile = "slurm" ', f'profile = "{profile}" ', 1)
+    text = text.replace('queue = "normal"', 'queue = "regular-g"', 1)
+    text = text.replace('# project = "YOUR_ACCOUNT"', 'project = "gz00"', 1)
+    if not qrmi:
+        start, end = text.index("\n[qrmi]\n"), text.index("# To sample from the workflow")
+        text = text[:start] + "\n" + text[end:]
+    if advanced:
+        text += f"\n[advanced]\n{advanced}\n"
+    path = tmp_path / "sqd_blocks.toml"
+    path.write_text(text)
+    return path
+
+
+def test_gpu_profiles_are_bundled():
+    from sqd_common.block_config import PROFILES_DIR, profile_names
+
+    assert {"slurm-gpu", "miyabi-gpu"} <= set(profile_names())
+    pyproject = tomllib.loads((EXAMPLE.parent / "pyproject.toml").read_text())
+    globs = pyproject["tool"]["setuptools"]["package-data"]["sqd_common"]
+    packaged = {path.stem for glob in globs for path in (PROFILES_DIR.parent).glob(glob)}
+    assert {"slurm-gpu", "miyabi-gpu"} <= packaged
+
+
+@pytest.mark.parametrize(
+    ("profile", "qrmi", "expected"),
+    [
+        (
+            "slurm-gpu",
+            True,
+            {
+                "hpc_target": "slurm",
+                "launcher": "srun",
+                "mpi_options": ["--mpi=pmix"],
+                "num_nodes": 1,
+                "gpus_per_node": 4,
+                "mpiprocs": 4,
+                "ompthreads": 8,
+            },
+        ),
+        (
+            "miyabi-gpu",
+            False,
+            {
+                "hpc_target": "miyabi",
+                "launcher": "mpirun",
+                "mpi_options": None,
+                "num_nodes": 1,
+                "gpus_per_node": 1,
+                "mpiprocs": 1,
+                "ompthreads": 72,
+            },
+        ),
+    ],
+)
+def test_gpu_profiles_resolve_to_gpu_mpi(tmp_path, profile, qrmi, expected):
+    kwargs = _resolve(config=load_block_config(_gpu_config(tmp_path, profile, qrmi=qrmi)))
+    assert {key: kwargs[key] for key in expected} == expected
+    assert kwargs["resource_class"] == "gpu"
+    assert kwargs["backend"] == "gpu-mpi"
+    assert kwargs["carryover_fraction"] == 0.0
+    assert kwargs["environments"] == {"FQ_DIST_BACKEND": "auto"}
+    inspect.signature(_create_fulqrum_blocks_signature()).bind(**kwargs)
+
+
+def _create_fulqrum_blocks_signature():
+    """``create_fulqrum_blocks``; skips when its Prefect dependencies are missing."""
+    try:
+        from qcsc_prefect_fulqrum.block_utils import create_fulqrum_blocks
+    except ModuleNotFoundError:
+        pytest.skip("qcsc_prefect_fulqrum.block_utils needs Prefect")
+    return create_fulqrum_blocks
+
+
+def test_user_file_and_advanced_override_the_gpu_profile(tmp_path):
+    path = _gpu_config(
+        tmp_path,
+        "slurm-gpu",
+        advanced='backend = "gpu"\ncarryover_fraction = 0.3\ngpus_per_node = 2',
+    )
+    config = load_block_config(path)
+    assert (config["backend"], config["gpus_per_node"]) == ("gpu", 2)
+    kwargs = _resolve(config=config)
+    # [advanced] overrides the profile; the profile's mpiprocs is kept.
+    assert (kwargs["backend"], kwargs["gpus_per_node"], kwargs["mpiprocs"]) == ("gpu", 2, 4)
+    assert kwargs["carryover_fraction"] == 0.3
+
+    # A top-level key of the user file overrides [advanced].
+    text = path.read_text().replace(
+        "# Keys after a table header", "gpus_per_node = 3\n# Keys after a table header", 1
+    )
+    path.write_text(text)
+    assert _resolve(config=load_block_config(path))["gpus_per_node"] == 3
+
+
+def test_gpu_mpi_defaults_mpiprocs_to_gpus_per_node():
+    config = {
+        "hpc_target": "slurm",
+        "queue": "gpu",
+        "work_dir": "/data/x",
+        "fulqrum_executable": "qcsc-fulqrum-solve",
+        "launcher": "srun",
+        "gpus_per_node": 8,
+        "backend": "gpu-mpi",
+    }
+    assert _resolve(config=config)["mpiprocs"] == 8
+    assert _resolve(config={**config, "mpiprocs": 2})["mpiprocs"] == 2
+    cpu = _resolve(config={**config, "backend": "cpu"})
+    assert (cpu["mpiprocs"], cpu["gpus_per_node"]) == (1, 8)
+
+
+def test_gpu_cli_flags_override_config():
+    argv = ["--backend", "gpu", "--gpus-per-node", "2", "--carryover-fraction", "0.5"]
+    kwargs = _resolve(argv, _example_config())
+    assert (kwargs["backend"], kwargs["gpus_per_node"]) == ("gpu", 2)
+    assert kwargs["carryover_fraction"] == 0.5
+    assert _resolve(config=_example_config())["gpus_per_node"] is None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"backend": "gpu-mpi"}, "MPI launcher"),
+        ({"backend": "tpu"}, "'backend' must be one of"),
+        ({"carryover_fraction": 1.5}, "carryover_fraction"),
+    ],
+)
+def test_invalid_gpu_settings(overrides, message):
+    with pytest.raises(RuntimeError, match=message):
+        _resolve(config={**_example_config(), **overrides})
+
+
+@pytest.mark.parametrize(("profile", "qrmi"), [("slurm-gpu", True), ("miyabi-gpu", False)])
+def test_dry_run_of_the_gpu_profiles(tmp_path, capsys, profile, qrmi):
+    path = _gpu_config(tmp_path, profile, qrmi=qrmi)
+    create_blocks.main(["--config", str(path), "--dry-run"])
+    printed = json.loads(capsys.readouterr().out)
+    blocks = printed["blocks"]
+    assert blocks["resource_class"] == "gpu" and blocks["backend"] == "gpu-mpi"
+    assert blocks["queue"] == "regular-g"
+    if profile == "slurm-gpu":
+        assert (blocks["gpus_per_node"], blocks["mpiprocs"], blocks["launcher"]) == (4, 4, "srun")
+        assert blocks["script_filename"] == "fulqrum_solver.slurm"
+        assert printed["qrmi_blocks"]["walltime"] == "00:30:00"
+    else:
+        assert (blocks["gpus_per_node"], blocks["mpiprocs"], blocks["launcher"]) == (1, 1, "mpirun")
+        assert blocks["script_filename"] == "fulqrum_solver.pbs"
+        assert blocks["project"] == "gz00"
+        assert "qrmi_blocks" not in printed
