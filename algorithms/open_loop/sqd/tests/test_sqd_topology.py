@@ -170,7 +170,7 @@ def test_qpu_topology_keeps_the_circuit_form_positions_contiguous():
     properties = CircuitParameters.model_json_schema()["properties"]
     positions = sorted(field["position"] for field in properties.values())
     assert positions == list(range(len(properties)))
-    assert properties["qpu_topology"]["position"] == 4
+    assert properties["qpu_topology"]["position"] == 3
     assert properties["qpu_topology"]["enum"] == list(topology.TOPOLOGIES)
     assert properties["qpu_topology"]["default"] == "heavy-hex"
 

@@ -32,10 +32,12 @@ def test_example_validates_and_finds_the_fcidump_from_any_directory(path, monkey
     monkeypatch.chdir(tmp_path)
     params = FlowParameters.model_validate(json.loads(path.read_text()))
     assert Path(params.molecule.fcidump_file) == N2_FCIDUMP
+    # The fulqrum examples take the solver from the Advanced SQD Settings block; the DICE
+    # and SBD ones name theirs as a Solver Block Override.
     expected_solver = {
         "n2_dice.json": "dice_shci_solver_job/sqd-solver",
         "n2_sbd.json": "sbd_solver_job/sqd-sbd-solver",
-    }.get(path.name, "fulqrum_solver_job/sqd-fulqrum-solver")
+    }.get(path.name)
     assert params.solver_block_ref == expected_solver
     assert params.molecule.spin_sq == (None if path.name == "n2_sbd.json" else 0.0)
 

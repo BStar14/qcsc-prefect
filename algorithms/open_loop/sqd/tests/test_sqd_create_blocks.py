@@ -119,13 +119,21 @@ def test_dice_runtime_table_saves_the_block_after_the_solver(monkeypatch, tmp_pa
             save=lambda name, overwrite: saved.append((name, settings))
         ),
     )
+    advanced = []
+    monkeypatch.setattr(
+        dice, "save_advanced_block", lambda settings, name: advanced.append((name, settings))
+    )
     monkeypatch.setattr(sys, "argv", ["sqd-create-blocks", "--config", str(_dice_config(tmp_path))])
     dice.main()
     ((name, settings),) = saved
     assert name == "qrmi-runtime" and settings["scheduler"] == "iqp"
     assert settings["resource_config"]["QRMI_IBM_QCS_IAM_APIKEY"] == "secret-key"
+    # The runs use the DICE block through the Advanced SQD Settings block.
+    ((name, settings),) = advanced
+    assert name == "sqd-advanced-settings"
+    assert settings.solver_block_ref == "dice_shci_solver_job/sqd-solver"
     out = capsys.readouterr().out
-    assert "solver_block_ref = 'dice_shci_solver_job/sqd-solver'" in out
+    assert "Solver Block dice_shci_solver_job/sqd-solver" in out
     assert "secret-key" not in out
 
 

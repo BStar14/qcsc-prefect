@@ -17,6 +17,7 @@ for _mod in ("ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf", "qiskit_addon
     pytest.importorskip(_mod)
 
 from sqd_common import flow, sampling, solvers, topology  # noqa: E402
+from sqd_common.advanced import AdvancedSettings  # noqa: E402
 from sqd_common.flow_params import FlowParameters  # noqa: E402
 
 LOGGER = logging.getLogger("sqd_common.flow.test")
@@ -64,6 +65,13 @@ def stages(monkeypatch):
     }
     for name, stub in stubs.items():
         monkeypatch.setattr(flow, name, stub)
+    advanced = {"settings": AdvancedSettings(), "loaded": []}
+
+    async def load_advanced(name, logger):
+        advanced["loaded"].append(name)
+        return advanced["settings"]
+
+    monkeypatch.setattr(flow, "load_advanced_settings", load_advanced)
     for module in (flow, sampling, topology):
         monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
 
@@ -83,7 +91,13 @@ def stages(monkeypatch):
         return stages_state["Solver"]
 
     stages_state = dict(
-        log=log, stubs=stubs, solver=solver, Solver=Solver, loaded=loaded, selected=selected
+        log=log,
+        stubs=stubs,
+        solver=solver,
+        Solver=Solver,
+        loaded=loaded,
+        selected=selected,
+        advanced=advanced,
     )
     monkeypatch.setattr(flow, "solver_class", solver_class)
     stages_state.update(sentinels)
@@ -137,7 +151,8 @@ def test_optimize_gets_the_qpu_topology(stages, caplog, qpu_topology):
 
 
 def test_molecule_settings_reach_the_map_stage(stages):
-    _run(stages, _parameters(molecule={"fcidump_file": "/data/n2.fcidump", "ccsd_maxiter": 2}))
+    stages["advanced"]["settings"] = AdvancedSettings(ccsd_maxiter=2)
+    _run(stages, _parameters(molecule={"fcidump_file": "/data/n2.fcidump"}))
     name, kwargs = stages["log"][0]
     assert name == "map-fcidump"
     assert kwargs == {"fcidump_file": "/data/n2.fcidump", "spin_sq": 0.0, "ccsd_maxiter": 2}
@@ -272,3 +287,28 @@ def test_a_bad_gpu_request_fails_when_the_solver_is_loaded(stages, monkeypatch):
     with pytest.raises(ValueError, match="takes no GPU request"):
         _run(stages, _parameters())
     assert stages["log"] == []
+
+
+def test_the_solver_comes_from_the_advanced_block(stages):
+    stages["advanced"]["settings"] = AdvancedSettings(
+        solver_block_ref="fulqrum_solver_job/from-block", use_reset_mitigation=True
+    )
+    _run(stages, _parameters(solver=None, qrmi_result_dir="/jobs/abc"))
+    assert stages["advanced"]["loaded"] == ["sqd-advanced-settings"]
+    assert stages["loaded"] == ["from-block"]
+    # A reload uses the block's reset mitigation.
+    assert dict(stages["log"])["load_qrmi_result"]["use_reset_mitigation"] is True
+
+
+def test_a_solver_block_override_replaces_the_blocks_solver(stages, caplog):
+    stages["advanced"]["settings"] = AdvancedSettings(solver_block_ref="fulqrum_solver_job/x")
+    with caplog.at_level(logging.INFO, logger=LOGGER.name):
+        _run(stages, _parameters(solver="fulqrum_solver_job/override"))
+    assert stages["loaded"] == ["override"]
+    assert "Solver Block Override" in caplog.text
+
+
+def test_the_advanced_transpiler_reaches_execute(stages):
+    stages["advanced"]["settings"] = AdvancedSettings(sabre_layout_trials=7)
+    _run(stages, _parameters())
+    assert dict(stages["log"])["execute"]["advanced"].sabre_layout_trials == 7

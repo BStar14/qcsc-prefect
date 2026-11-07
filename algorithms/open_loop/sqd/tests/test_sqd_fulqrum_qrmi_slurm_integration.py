@@ -59,11 +59,11 @@ from qcsc_prefect_executor.slurm import run as slurm_run  # noqa: E402
 from qcsc_prefect_fulqrum import block_utils  # noqa: E402
 from qiskit.primitives.containers import BitArray  # noqa: E402
 from sqd_common import lucj, sampling  # noqa: E402
+from sqd_common.advanced import AdvancedSettings  # noqa: E402
 from sqd_common.block_config import load_block_config  # noqa: E402
 from sqd_common.flow_params import (  # noqa: E402
     CircuitParameters,
     SamplingParameters,
-    TranspilerParameters,
 )
 from sqd_common.qrmi import TRANSPILER  # noqa: E402
 from sqd_fulqrum import create_blocks  # noqa: E402
@@ -237,17 +237,12 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_runtime, caplog):
     elec_props = chem.compute_molecular_integrals_from_geometry.fn(
         atom="H 0 0 0; H 0 0 0.74", basis="sto-3g"
     )
-    params = CircuitParameters(
-        configure_transpiler=True,
-        transpiler=TranspilerParameters(
-            sabre_layout_trials=20, sabre_swap_trials=4, sabre_max_iterations=2
-        ),
-    )
+    params = AdvancedSettings(sabre_layout_trials=20, sabre_swap_trials=4, sabre_max_iterations=2)
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
         bool_array = asyncio.run(
             sampling.quantum_sampling.fn(
-                lucj_params=lucj.get_lucj_params.fn(params, elec_props, "heavy-hex"),
-                circuit_params=params,
+                lucj_params=lucj.get_lucj_params.fn(CircuitParameters(), elec_props, "heavy-hex"),
+                advanced=params,
                 sampling_params=SamplingParameters(shots=SHOTS),
             )
         )

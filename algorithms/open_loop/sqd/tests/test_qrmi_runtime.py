@@ -32,11 +32,11 @@ from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
 from qiskit.quantum_info import Statevector  # noqa: E402
 from qiskit_ibm_runtime import RuntimeEncoder  # noqa: E402
 from sqd_common import flow, lucj, postprocess, sampling, topology  # noqa: E402
+from sqd_common.advanced import AdvancedSettings  # noqa: E402
 from sqd_common.flow_params import (  # noqa: E402
     CircuitParameters,
     FlowParameters,
     SamplingParameters,
-    TranspilerParameters,
 )
 from sqd_common.main import ARTIFACT_KEY, sqd  # noqa: E402
 from sqd_common.qrmi import TRANSPILER, make_qrmi_runtime, prepare_sampler_circuit  # noqa: E402
@@ -64,23 +64,25 @@ def h2():
 
 
 def circuit_parameters(reset=False):
-    return CircuitParameters(
+    """Advanced SQD Settings with reset mitigation and a small SABRE search."""
+    return AdvancedSettings(
         use_reset_mitigation=reset,
-        configure_transpiler=True,
-        transpiler=TranspilerParameters(
-            sabre_layout_trials=4, sabre_swap_trials=2, sabre_max_iterations=2
-        ),
+        sabre_layout_trials=4,
+        sabre_swap_trials=2,
+        sabre_max_iterations=2,
     )
 
 
 def lucj_parameters(params, h2):
     with patch.object(lucj, "get_run_logger", return_value=LOGGER):
-        return lucj.get_lucj_params.fn(params, h2, "heavy-hex")
+        return lucj.get_lucj_params.fn(CircuitParameters(), h2, "heavy-hex")
 
 
 def make_circuit(params, h2):
     with patch.object(lucj, "get_run_logger", return_value=LOGGER):
-        return lucj.build_lucj_circuit.fn(lucj_parameters(params, h2), params)
+        return lucj.build_lucj_circuit.fn(
+            lucj_parameters(params, h2), use_reset_mitigation=params.use_reset_mitigation
+        )
 
 
 def target(with_rzz=False):
@@ -165,7 +167,7 @@ def test_node_hook_matches_host_transpile(h2, reset, with_rzz):
         host = lucj.transpile_lucj_circuit.fn(
             circuit=original.copy(),
             target=actual_target,
-            circuit_params=params,
+            advanced=params,
             seed=np.random.default_rng(24),
         )
     config = lucj.circuit_transpile_options(params, np.random.default_rng(24))
@@ -284,7 +286,9 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     assert (row["shots"], row["shots_kept"]) == (4, len(result))
 
     # The saved job directory reloads to the same samples, without a new job.
-    reloaded = asyncio.run(sampling.load_qrmi_result.fn(row["qrmi_result_dir"], params))
+    reloaded = asyncio.run(
+        sampling.load_qrmi_result.fn(row["qrmi_result_dir"], params.use_reset_mitigation)
+    )
     np.testing.assert_array_equal(reloaded, result)
     assert len(calls) == 1
 
@@ -321,10 +325,14 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     monkeypatch.setattr(
         flow, "solver_class", lambda slug: SimpleNamespace(load=load_solver, __name__=slug)
     )
+
+    async def advanced_block(name, logger):
+        return params
+
+    monkeypatch.setattr(flow, "load_advanced_settings", advanced_block)
     artifacts.clear()
     parameters = FlowParameters(
         molecule={"atom": "H 0 0 0; H 0 0 0.74", "basis": "sto-3g"},
-        circuit=params,
         sampling=sampling_params,
         sqd={"subspace_dim": 1, "num_batches": 1, "max_iterations": 1},
     )

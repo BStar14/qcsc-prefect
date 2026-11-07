@@ -203,6 +203,7 @@ def test_main_saves_separate_qrmi_blocks(tmp_path, monkeypatch, capsys):
             save=lambda name, overwrite: runtime_blocks.append((name, settings))
         ),
     )
+    monkeypatch.setattr(create_blocks, "save_advanced_block", lambda settings, name: None)
     path = tmp_path / "blocks.json"
     path.write_text(json.dumps(_config(**QRMI)))
 

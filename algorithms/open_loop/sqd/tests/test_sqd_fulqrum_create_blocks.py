@@ -166,7 +166,10 @@ def test_dry_run_prints_settings_without_prefect(capsys):
     create_blocks.main(["--config", str(EXAMPLE), "--dry-run"])
     printed = json.loads(capsys.readouterr().out)
     # The example keeps [qrmi] active, so the QRMI job and its runtime block resolve too.
-    assert set(printed) == {"blocks", "qrmi_blocks", "runtime_block"}
+    assert set(printed) == {"blocks", "qrmi_blocks", "runtime_block", "advanced_block"}
+    assert printed["advanced_block"]["name"] == "sqd-advanced-settings"
+    assert printed["advanced_block"]["solver_block_ref"] == "fulqrum_solver_job/sqd-fulqrum-solver"
+    assert printed["advanced_block"]["ccsd_maxiter"] == 10
     assert printed["blocks"]["solver_block_name"] == "sqd-fulqrum-solver"
     assert printed["qrmi_blocks"]["resource"] == "YOUR_QRMI_RESOURCE"
     assert printed["runtime_block"]["name"] == "qrmi-runtime"
@@ -206,8 +209,13 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
         lambda settings: SimpleNamespace(save=lambda name, overwrite: qrmi_saved.append(name)),
     )
 
+    advanced_saved = []
+    monkeypatch.setattr(
+        create_blocks, "save_advanced_block", lambda settings, name: advanced_saved.append(name)
+    )
     create_blocks.main(["--config", str(EXAMPLE)])
 
+    assert advanced_saved == ["sqd-advanced-settings"]
     assert set(saved) == {
         "cmd-sqd-fulqrum-solver",
         "exec-sqd-fulqrum-slurm",

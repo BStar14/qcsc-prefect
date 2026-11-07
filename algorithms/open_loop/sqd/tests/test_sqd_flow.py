@@ -22,6 +22,7 @@ for _mod in ("prefect", "ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf", "q
 import qcsc_workflow_utility.chem as chem  # noqa: E402
 from qiskit_addon_sqd.fermion import SCIResult, solve_fermion  # noqa: E402
 from sqd_common import flow, main, postprocess, sampling  # noqa: E402
+from sqd_common.advanced import AdvancedSettings  # noqa: E402
 from sqd_common.flow_params import FlowParameters  # noqa: E402
 
 LIH = "Li 0 0 0; H 0 0 1.6"
@@ -86,6 +87,11 @@ def offline(monkeypatch, tmp_path):
     for name in ("compute_molecular_integrals_from_geometry", "sqd_loop"):
         monkeypatch.setattr(flow, name, _TaskStub(getattr(flow, name).fn))
 
+    async def no_advanced_block(name, logger):
+        return AdvancedSettings(ccsd_maxiter=1)
+
+    monkeypatch.setattr(flow, "load_advanced_settings", no_advanced_block)
+
     calls, loaded = [], []
 
     def solver_class(slug):
@@ -99,7 +105,7 @@ def offline(monkeypatch, tmp_path):
 
 def _parameters(solver_block_ref=None, spin_sq=0.0, **sqd):
     params = dict(
-        molecule={"atom": LIH, "basis": "sto-3g", "spin_sq": spin_sq, "ccsd_maxiter": 1},
+        molecule={"atom": LIH, "basis": "sto-3g", "spin_sq": spin_sq},
         sqd={"subspace_dim": 64, "num_batches": 2, "max_iterations": 2, **sqd},
         sampling={"quantum_source": "random", "shots": 3000},
     )
@@ -171,9 +177,9 @@ def test_flow_parameter_schema_builds_offline():
     schema = parameter_schema(main.sqd.fn).model_dump()
     assert set(schema["properties"]) == {"parameters"}
     definitions = schema["definitions"]
-    assert definitions["FlowParameters"]["properties"]["solver_block_ref"]["default"] == (
-        "fulqrum_solver_job/sqd-fulqrum-solver"
-    )
+    properties = definitions["FlowParameters"]["properties"]
+    assert properties["advanced_block_name"]["default"] == "sqd-advanced-settings"
+    assert properties["solver_block_ref"]["default"] is None
     assert {"MoleculeGeometry", "FCIDumpFile", "SamplingParameters"} <= set(definitions)
     assert main.sqd.name == "sqd"
 
