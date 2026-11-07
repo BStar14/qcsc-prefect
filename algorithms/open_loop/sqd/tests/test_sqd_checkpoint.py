@@ -40,8 +40,15 @@ def test_round_trip_writes_the_uhf_fields_atomically(tmp_path):
 
     assert sorted(p.name for p in tmp_path.iterdir()) == [checkpoint.CKPT_NAME]
     with np.load(path) as raw:
-        assert set(raw.files) == {"occ_a", "occ_b", "next_step", "best_energy", "carryover"}
-        assert raw["carryover"].shape == (0, 0) and raw["carryover"].dtype == bool
+        assert set(raw.files) == {
+            "occ_a",
+            "occ_b",
+            "next_step",
+            "best_energy",
+            "carryover_a",
+            "carryover_b",
+        }
+        assert raw["carryover_a"].shape == (0,) and raw["carryover_a"].dtype == np.int64
     state = checkpoint.load_checkpoint(path)
     assert state.next_step == 32 and state.best_energy == -108.9
     np.testing.assert_array_equal(state.occupancies[0], occ[0])

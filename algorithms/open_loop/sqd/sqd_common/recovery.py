@@ -91,6 +91,26 @@ def _bool_rows_to_ints(rows: np.ndarray, norb: int) -> np.ndarray:
     return strings
 
 
+def with_carryover_fraction(solver, fraction: float):
+    """A copy of a solver block that returns the run's share of carryover strings.
+
+    The fulqrum block gets ``carryover_fraction``. The SBD block gets
+    ``carryover_ratio``, which must be above 0, so a fraction of 0 leaves it as it
+    is; the recovery loop then ignores the strings it returns. A block with neither
+    field (DICE) is returned unchanged, and its carryover comes from its SCI state.
+    """
+    fields = getattr(type(solver), "model_fields", {})
+    if "carryover_fraction" in fields:
+        name = "carryover_fraction"
+    elif "carryover_ratio" in fields and fraction > 0:
+        name = "carryover_ratio"
+    else:
+        return solver
+    if getattr(solver, name) == fraction:
+        return solver
+    return solver.model_copy(update={name: fraction})
+
+
 @dataclass
 class RecoveryOutcome:
     """Result of :func:`run_configuration_recovery`.
