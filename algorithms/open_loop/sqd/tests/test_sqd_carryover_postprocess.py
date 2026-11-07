@@ -143,10 +143,11 @@ def test_sqd_loop_sets_the_fraction_on_a_copy_of_the_block(run_loop):
         (2, 2),
         (2, 2),
     ]
-    # Round 1 starts with the carryover of call 2, the best (lowest) of round 0.
-    heavy = np.sort(block.calls[1][1][0])[::-1][:2]
+    # Round 1 starts with the carryover of call 2, the best (lowest) of round 0, cut
+    # to int(0.4 * 4) = 1 string of each batch of 4.
+    heavy = np.sort(block.calls[1][1][0])[::-1][:1]
     for _, (a, _) in block.calls[2:]:
-        np.testing.assert_array_equal(a[:2], heavy)
+        np.testing.assert_array_equal(a[:1], heavy)
     assert all(r["dimension"] == 16 for r in rows)
 
 

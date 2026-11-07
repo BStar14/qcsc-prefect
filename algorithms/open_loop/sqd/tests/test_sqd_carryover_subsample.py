@@ -8,7 +8,7 @@ import pytest
 pytest.importorskip("qiskit_addon_sqd")
 
 from sqd_common.subsample import (  # noqa: E402
-    _draw_with_forced,
+    _Draw,
     _unique_and_accumulate_probs,
     bitstrings_to_ci_strs,
     subsample,
@@ -184,7 +184,7 @@ def test_pool_smaller_than_the_remainder_is_taken_whole():
     probs = np.array([0.2, 0.3, 0.5])
     rng = np.random.default_rng(0)
     before = rng.bit_generator.state
-    got = _draw_with_forced(pool, probs, np.array([12, 5]), size=6, rng=rng)
+    got = _Draw(pool, probs, np.array([12, 5]), size=6, carryover_fraction=1.0)(rng)
     assert got.tolist() == [12, 5, 3, 6]
     assert rng.bit_generator.state == before
 
@@ -194,7 +194,8 @@ def test_remainder_is_drawn_with_renormalized_probabilities():
     # All weight left outside the forced string is on 9 and 6.
     probs = np.array([0.0, 0.7, 0.1, 0.2])
     for seed in range(20):
-        got = _draw_with_forced(pool, probs, np.array([5]), size=3, rng=np.random.default_rng(seed))
+        draw = _Draw(pool, probs, np.array([5]), size=3, carryover_fraction=1.0)
+        got = draw(np.random.default_rng(seed))
         assert got[0] == 5 and sorted(got[1:].tolist()) == [6, 9]
 
 
@@ -243,3 +244,62 @@ def test_large_norb_carryover_keeps_python_ints():
     for a, _ in batches:
         assert a.dtype == object and a[0] == big and len(a) == 4
         assert all(isinstance(x, int) for x in a)
+
+
+def test_carryover_takes_at_most_its_fraction_of_a_batch():
+    """With fraction 0.5, half a batch is carryover even when alpha and beta differ."""
+    bs, probs = _samples()
+    ci_a, ci_b = bitstrings_to_ci_strs(bs)
+    pool = np.union1d(ci_a, ci_b)
+    # Different alpha and beta carryover: their union is 8 strings, more than half of 5.
+    carry_a, carry_b = pool[::-1][:4], pool[:4]
+    batches = list(
+        subsample(
+            bs,
+            probs,
+            25,
+            3,
+            np.random.default_rng(5),
+            carryover=(carry_a, carry_b),
+            carryover_fraction=0.5,
+        )
+    )
+    for a, _ in batches:
+        assert len(a) == 5 and len(np.unique(a)) == 5
+        # int(0.5 * 5) = 2 carryover strings, heaviest (alpha) first, then 3 drawn
+        # from the samples. A dropped carryover string may still be drawn as a sample.
+        np.testing.assert_array_equal(a[:2], carry_a[:2])
+        assert not set(a[2:].tolist()) & set(carry_a[:2].tolist())
+
+
+def test_open_shell_carryover_is_capped_per_spin():
+    bs, probs = _samples(num=40, norb=10, nelec=(4, 2))
+    ci_a, ci_b = bitstrings_to_ci_strs(bs)
+    carry = (np.unique(ci_a)[:10], np.unique(ci_b)[:10])
+    plain = list(subsample(bs, probs, 60, 2, np.random.default_rng(1), True))
+    batches = list(
+        subsample(
+            bs,
+            probs,
+            60,
+            2,
+            np.random.default_rng(1),
+            True,
+            carryover=carry,
+            carryover_fraction=0.5,
+        )
+    )
+    for (a, b), (pa, pb) in zip(batches, plain, strict=True):
+        # Each spin's batch starts with int(0.5 * size) carryover strings, heaviest first.
+        for got, strings in ((a, carry[0]), (b, carry[1])):
+            kept = len(got) // 2
+            np.testing.assert_array_equal(got[:kept], strings[:kept])
+            assert not set(got[kept:].tolist()) & set(strings[:kept].tolist())
+
+
+def test_object_strings_use_the_same_pool_without_the_forced_ones():
+    pool = np.array([3, 5, 6, 9], dtype=object)
+    probs = np.array([0.1, 0.4, 0.2, 0.3])
+    for seed in range(10):
+        got = _Draw(pool, probs, np.array([5], dtype=object), 3, 1.0)(np.random.default_rng(seed))
+        assert got[0] == 5 and len(set(got.tolist())) == 3 and 5 not in got[1:].tolist()

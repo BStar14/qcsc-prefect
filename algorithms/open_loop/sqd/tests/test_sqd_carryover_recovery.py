@@ -158,7 +158,14 @@ def test_fulqrum_style_open_shell_carryover_is_per_spin():
     nelec = (3, 1)
     carry = (np.array([_ci(0, 1, 2), _ci(0, 1, 5)]), np.array([_ci(4)]))
     solver = _FakeSolver([-1.0, -2.0, -1.5, -1.0], [carry] * 4)
-    _run(solver, nelec=nelec, open_shell=True, subspace_dim=12, max_iterations=2)
+    _run(
+        solver,
+        nelec=nelec,
+        open_shell=True,
+        subspace_dim=12,
+        max_iterations=2,
+        carryover_fraction=1.0,
+    )
     for a, b in solver.calls[2:]:
         assert a[:2].tolist() == carry[0].tolist()
         assert b[0] == _ci(4)
@@ -292,3 +299,20 @@ def test_with_carryover_fraction_leaves_other_blocks_alone():
     assert recovery.with_carryover_fraction(block, 0.5) is block
     plain = object()
     assert recovery.with_carryover_fraction(plain, 0.5) is plain
+
+
+def test_fraction_one_warns_that_no_sample_may_enter(caplog):
+    solver = _FakeSolver([-1.0, -2.0], [None, None])
+    with caplog.at_level(logging.WARNING):
+        _run(solver, max_iterations=1, carryover_fraction=1.0)
+    assert "carryover_fraction=1" in caplog.text
+
+
+def test_the_loop_passes_the_fraction_to_subsampling():
+    """A batch of 4 with fraction 0.5 keeps 2 of the 3 carryover strings."""
+    co = _carry((0, 1), (0, 5), (1, 5))
+    solver = _FakeSolver([-1.0, -2.0, -3.0, -2.5], [co, co, None, None])
+    _run(solver, max_iterations=2)
+    for a, _ in solver.calls[2:]:
+        # The third string is not forced; it may still be drawn as a sample.
+        assert a[:2].tolist() == co[0][:2].tolist() and len(np.unique(a)) == 4
