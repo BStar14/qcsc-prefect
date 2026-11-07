@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from qcsc_prefect_core.models.gpu_request import validate_gpu_request
 from sqd_common.block_config import load_block_config
 from sqd_common.runtime_block import (
     build_runtime_block,
@@ -231,8 +232,16 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
             "backend = 'gpu-mpi' runs one MPI rank per GPU; set launcher to an MPI launcher "
             "such as 'srun' or 'mpirun'."
         )
-    # gpu-mpi runs one rank per GPU, so mpiprocs follows gpus_per_node unless it is set.
-    mpiprocs = pick("mpiprocs", (gpus_per_node or 1) if backend == "gpu-mpi" else 1)
+    mpiprocs = pick("mpiprocs", 1)
+    if backend == "gpu-mpi" and gpus_per_node is not None:
+        # One rank per GPU. A profile's mpiprocs (1 for the CPU profiles) gives way to
+        # gpus_per_node; only an explicit --mpiprocs that differs is an error.
+        if args.mpiprocs is not None and int(args.mpiprocs) != gpus_per_node:
+            raise RuntimeError(
+                f"backend = 'gpu-mpi' runs one MPI rank per GPU, but --mpiprocs "
+                f"{args.mpiprocs} differs from gpus_per_node = {gpus_per_node}."
+            )
+        mpiprocs = gpus_per_node
     block_kwargs: dict[str, Any] = dict(
         hpc_target=hpc_target,
         project=str(project or "").strip(),
@@ -287,6 +296,14 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
             _pick_value(args.fugaku_pjm_resources, config.get("fugaku_pjm_resources"))
         ),
     )
+    try:
+        validate_gpu_request(
+            hpc_target=hpc_target,
+            resource_class=block_kwargs["resource_class"],
+            gpus_per_node=gpus_per_node,
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     return block_kwargs
 
 

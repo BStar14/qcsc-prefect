@@ -44,13 +44,26 @@ from sqd_common.topology import resolve_topology
 
 
 async def load_solver_block(solver_cls: type, name: str) -> SolverBlock:
-    """Load the solver block before any expensive stage, so a bad name fails fast."""
+    """Load the solver block before any expensive stage, so a bad name fails fast.
+
+    The GPU request of its execution profile is checked against its HPC profile
+    here too, so a ``gpus_per_node`` the target cannot schedule fails before any
+    quantum job, not when the first solver job is built.
+    """
     logger = get_run_logger()
     try:
         solver = await solver_cls.load(name)
     except Exception:
         logger.exception("Failed to load %s block '%s'.", solver_cls.__name__, name)
         raise
+    hpc_name = getattr(solver, "hpc_profile_block_name", None)
+    exec_name = getattr(solver, "execution_profile_block_name", None)
+    if hpc_name and exec_name:
+        from qcsc_prefect_executor.from_blocks import check_gpu_request
+
+        await check_gpu_request(
+            hpc_profile_block_name=hpc_name, execution_profile_block_name=exec_name
+        )
     logger.info("Solver OK: %s '%s'.", solver_cls.__name__, name)
     return solver
 

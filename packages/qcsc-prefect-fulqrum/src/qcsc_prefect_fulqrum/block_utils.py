@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from qcsc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
+from qcsc_prefect_core.models.gpu_request import validate_gpu_request
 
 from .solver_job import FulqrumSolverJob
 
@@ -76,12 +77,14 @@ def create_fulqrum_blocks(
     - ``"cpu"`` and ``"gpu"`` run one process, so the defaults are
       ``launcher="single"``, ``num_nodes=1`` and ``mpiprocs=1``.
     - ``"gpu-mpi"`` runs one MPI rank per GPU. It needs an MPI ``launcher``
-      (``"srun"``, ``"mpirun"``, ...), and ``mpiprocs`` defaults to
-      ``gpus_per_node`` (or 1 when that is unset).
+      (``"srun"``, ``"mpirun"``, ...). With ``gpus_per_node`` set, ``mpiprocs``
+      is ``gpus_per_node``, one rank per GPU, and another value raises; without
+      it, ``mpiprocs`` defaults to 1.
 
-    ``gpus_per_node`` is the scheduler GPU request on the execution profile; use
-    it with ``resource_class="gpu"`` so the GPU queue is selected. Fugaku and
-    local execution reject it, and Miyabi-G accepts only 1. The solver block's
+    ``gpus_per_node`` is the scheduler GPU request on the execution profile. It
+    needs ``resource_class="gpu"``, which selects the GPU queue; Fugaku and local
+    execution reject it, and Miyabi-G accepts only 1. These are checked here, before
+    any block is saved. The solver block's
     ``carryover_fraction`` is left at 0; the SQD flow sets it for each run.
 
     When ``ompthreads`` is set and ``environments`` has no ``OMP_NUM_THREADS``,
@@ -105,8 +108,19 @@ def create_fulqrum_blocks(
             "backend='gpu-mpi' runs one MPI rank per GPU; set launcher to an MPI launcher "
             "such as 'srun' or 'mpirun'."
         )
+    validate_gpu_request(
+        hpc_target=hpc_target, resource_class=resource_class, gpus_per_node=gpus_per_node
+    )
+    if backend == "gpu-mpi" and gpus_per_node is not None:
+        # One rank per GPU: a different count would leave GPUs idle or share them.
+        if mpiprocs is not None and mpiprocs != gpus_per_node:
+            raise ValueError(
+                f"backend='gpu-mpi' runs one MPI rank per GPU, but mpiprocs={mpiprocs} and "
+                f"gpus_per_node={gpus_per_node}; set them to the same value."
+            )
+        mpiprocs = gpus_per_node
     if mpiprocs is None:
-        mpiprocs = (gpus_per_node or 1) if backend == "gpu-mpi" else 1
+        mpiprocs = 1
 
     register_fulqrum_block_types()
 

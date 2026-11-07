@@ -22,6 +22,7 @@ from qcsc_prefect_adapters.slurm.builder import SlurmJobRequest
 from qcsc_prefect_adapters.slurm.runtime import SlurmRuntime
 from qcsc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
+from qcsc_prefect_core.models.gpu_request import validate_gpu_request
 from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueProbe
 
 from qcsc_prefect_executor.bulk.exceptions import (
@@ -165,6 +166,30 @@ async def resolve_submission_target(
     execution_profile_block = await _load_block(ExecutionProfileBlock, execution_profile_block_name)
     return _resolve_submission_target_from_loaded_blocks(
         hpc_block, execution_profile_block.resource_class
+    )
+
+
+async def check_gpu_request(
+    *,
+    hpc_profile_block_name: str,
+    execution_profile_block_name: str,
+) -> None:
+    """Check the GPU request of saved blocks without submitting a job.
+
+    A workflow calls this before it starts expensive stages, so a bad
+    ``gpus_per_node`` fails at once, not when its first job is built. The rules are
+    those of :func:`qcsc_prefect_core.models.gpu_request.validate_gpu_request`.
+
+    Raises:
+        ValueError: If the execution profile's GPU request does not fit the target.
+    """
+
+    hpc_block = await _load_block(HPCProfileBlock, hpc_profile_block_name)
+    execution_profile_block = await _load_block(ExecutionProfileBlock, execution_profile_block_name)
+    validate_gpu_request(
+        hpc_target=hpc_block.hpc_target,
+        resource_class=execution_profile_block.resource_class,
+        gpus_per_node=getattr(execution_profile_block, "gpus_per_node", None),
     )
 
 
@@ -560,6 +585,11 @@ async def _prepare_job_from_blocks(
         execution_profile_block=execution_profile_block,
         user_args=user_args,
         execution_profile_overrides=execution_profile_overrides,
+    )
+    validate_gpu_request(
+        hpc_target=submission_target.hpc_target,
+        resource_class=execution_profile_block.resource_class,
+        gpus_per_node=exec_profile.gpus_per_node,
     )
     resolved_work_dir = Path(work_dir).expanduser().resolve()
 
