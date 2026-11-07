@@ -1,6 +1,6 @@
 # Fulqrum Integration
 
-`qcsc-prefect-fulqrum` runs the [fulqrum](https://github.com/qiskit-community/fulqrum)
+`qcsc-prefect-fulqrum` runs the [fulqrum](https://github.com/Qiskit/fulqrum)
 subspace eigensolver as a qcsc-prefect job. It is a drop-in alternative to the DICE SHCI
 solver for SQD:
 
@@ -10,8 +10,11 @@ solver for SQD:
   return type as `DiceSHCISolverJob`
 - block creation helpers for `local`, `slurm`, `miyabi` and `fugaku`
 
-Like the DICE integration, it does not install the solver itself. fulqrum 0.5 is not on PyPI
-and must be built on each target system.
+Like the DICE integration, it does not install the solver itself. fulqrum must be built on
+each target system; `native/build_fulqrum.sh` pins the fulqrum 1.0.0 release candidate (branch `v1.0.0-rc`). The `backend` of the
+solver block runs it on CPUs (`cpu`), on the GPUs of one node (`gpu`), or on one MPI rank per
+GPU across nodes (`gpu-mpi`). The GPU backends need a GPU build of fulqrum; see
+`packages/qcsc-prefect-fulqrum/native/README.md`.
 
 ## Installation
 
@@ -89,7 +92,8 @@ result = await solver.run(ci_strings, one_body_tensor, two_body_tensor, norb, ne
 
 The result is a `qiskit_addon_sqd.fermion.SCIResult`. Its energy is electronic only, as with
 the DICE solver, so add the nuclear repulsion energy yourself. fulqrum applies no spin
-penalty, so `spin_sq` is accepted and ignored.
+penalty, so `spin_sq` is accepted and ignored. With the block's `carryover_fraction` above 0,
+`result.carryover` holds each spin's heaviest CI strings for the next recovery round.
 
 Each call creates a `job_<timestamp>_<id>` directory under `root_dir` with the rendered
 scheduler script, `input.npz`, `solver.json`, the scheduler output, and either `output.npz`

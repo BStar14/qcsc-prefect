@@ -36,8 +36,9 @@ sqd_loop [post-process] ◄─────────────────�
   FCIDUMP file, CCSD amplitudes and the initial orbital occupancies. The CCSD kernel
   restarts `ccsd_maxiter` times from its previous amplitudes.
 - **Optimize** (`get_lucj_params`): LUCJ parameters from the CCSD t2 amplitudes,
-  restricted to the interactions a heavy-hex lattice implements without SWAP gates
-  (alpha-beta pairs every 4th orbital, at most 5).
+  restricted to the interactions the QPU implements without SWAP gates. With
+  `circuit.qpu_topology` `heavy-hex` (IBM Heron, the default), alpha-beta pairs sit
+  on every 4th orbital, at most 5; with `square` (IBM Nighthawk), on every orbital.
   `compress` (on by default, `compress_maxiter` 20) optimizes the truncated
   factorization.
 - **Execute** (`quantum_sampling`): builds the LUCJ circuit and samples it through the
@@ -47,6 +48,8 @@ sqd_loop [post-process] ◄─────────────────�
 - **Post-process** (`sqd_loop`): self-consistent configuration recovery. Every round
   diagonalizes `num_batches` subspaces concurrently, one solver job each, and then
   saves a checkpoint, so the recovery can continue after the last completed round.
+  The heaviest `carryover_fraction` of each spin's CI strings in the round's best
+  ground state is kept in every subspace of the next round, within `subspace_dim`.
 
 Prefect draws an arrow between two tasks when one task's result is passed unchanged
 into the other. The run graph therefore shows Map → Optimize → Execute →
@@ -67,15 +70,24 @@ and fields in this order, following the Qiskit Patterns stages:
 | Group | Fields |
 | --- | --- |
 | `molecule` | `{atom, basis, symmetry}` or `{fcidump_file}`, plus `spin_sq` (number or `null`) and `ccsd_maxiter` (default 4) |
-| `circuit` | `n_lucj_layers` (1), `compress` (on), `compress_maxiter` (20), `use_reset_mitigation`, `configure_transpiler` (off) and `transpiler` |
+| `circuit` | `n_lucj_layers` (1), `compress` (on), `compress_maxiter` (20), `use_reset_mitigation`, `qpu_topology` (`heavy-hex`), `configure_transpiler` (off) and `transpiler` |
 | `sampling` | `quantum_source`, `shots` (10000), `runtime_block_name`, `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (reload only) |
-| `sqd` | `subspace_dim` (90000), `num_batches` (4), `max_iterations` (5), `checkpoint` (on), `resume_checkpoint` |
+| `sqd` | `subspace_dim` (90000), `num_batches` (4), `max_iterations` (5), `carryover_fraction` (0.5), `checkpoint` (on), `resume_checkpoint` |
 | `solver_block_ref` | `<block type slug>/<block name>`, default `fulqrum_solver_job/sqd-fulqrum-solver` |
 
 Only `molecule` must be set. The form still marks the three `sqd` fields as required,
 so that they stand out. `circuit.transpiler` holds the optimization level and the SABRE
 layout search (layout trials 10000, SWAP trials 10, max iterations 8). It applies only
-when `configure_transpiler` is on; otherwise these defaults are used.
+when `configure_transpiler` is on; otherwise these defaults are used. Set
+`circuit.qpu_topology` to `square` for an IBM Nighthawk QPU.
+
+`sqd.carryover_fraction` sets how many CI strings carry over: of the best ground
+state of a round, each spin's `int(fraction × n)` strings with the largest marginal
+weight are kept in every subspace of the next round. They count toward
+`subspace_dim`, and the rest of a subspace is sampled as before. `0` turns carryover
+off. fulqrum and SBD select the strings on the compute node; for DICE they come from
+its ground state, so keep the DICE block's `return_sci_state` on. The carryover is
+saved in the checkpoint, and a run can resume with another fraction.
 
 `default_params/` holds complete examples for N2 (6-31G, 1s cores frozen, 16 orbitals,
 32 qubits), whose integrals are in `data/n2_631g_fc.fcidump`
@@ -124,7 +136,7 @@ with the `pip install` command to run.
   artifact gives the path. To continue that recovery in a new run, copy the path
   into `sqd.resume_checkpoint` and raise `sqd.max_iterations`. A checkpoint with
   32 of 100 rounds done, resumed with `max_iterations = 200`, continues at round
-  33/200 from the stored occupancies and best energy.
+  33/200 from the stored occupancies, carryover strings and best energy.
 
   `source.json` holds the resume key. The new run must use the same samples (the
   same `qrmi_result_dir`, `qiskit_runtime_job_id` or random seed and shots), the
@@ -250,13 +262,25 @@ Then start a run of the `sqd` deployment with `default_params/n2_dice.json`, who
 | Tier | Where | Settings |
 | --- | --- | --- |
 | Your settings | top of the file | `solver`, `profile`, `queue`, `project`, `work_dir`, `fulqrum_executable`, `eigensolver`, `[dice] dice_executable`, `[qrmi] resource` and `python_executable` |
-| System profile | `sqd_common/profiles/<profile>.toml`, or your own file given by path | `hpc_target`, `launcher`, `num_nodes`, `mpiprocs`, `ompthreads`, `walltime`, `modules`, `pre_commands`, the `fugaku_*` keys, the DICE MPI settings (`[dice]`), the QRMI job's `walltime`, `ompthreads` and `timeout_seconds` (`[qrmi]`) |
-| Advanced | the commented `[advanced]` table | block names, `runtime_block_name`, `script_filename`, `metrics_artifact_key`, `timeout_seconds`, solver tuning |
+| System profile | `sqd_common/profiles/<profile>.toml`, or your own file given by path | `hpc_target`, `resource_class`, `launcher`, `num_nodes`, `mpiprocs`, `ompthreads`, `gpus_per_node`, `walltime`, `modules`, `pre_commands`, `environments`, the fulqrum `backend`, the `fugaku_*` keys, the DICE MPI settings (`[dice]`), the QRMI job's `walltime`, `ompthreads` and `timeout_seconds` (`[qrmi]`) |
+| Advanced | the commented `[advanced]` table | block names, `runtime_block_name`, `script_filename`, `metrics_artifact_key`, `timeout_seconds`, solver tuning, the block default of `carryover_fraction` |
 
 Later layers override earlier ones: the profile, then `[advanced]`, then the top
 level of your file, then its `[<solver>]` table. Any profile key can be set in your
 file to override it, and any setting can also be given as a CLI flag. A config
 without `profile` or `solver` is read as before, as one flat table.
+
+The bundled profiles are `slurm`, `miyabi` and `fugaku` (CPU), plus two for the GPU
+build of fulqrum, which run one MPI rank per GPU (`backend = "gpu-mpi"`):
+
+- `slurm-gpu`: `srun --mpi=pmix`, 4 GPUs and 4 ranks per node
+  (`#SBATCH --gpus-per-node`). Set `queue` to a GPU partition. The QRMI sampler job
+  uses the same queue unless your `[qrmi]` table sets its own.
+- `miyabi-gpu`: Miyabi-G, `mpirun`, 1 GPU and 1 rank per node, 72 threads. The job
+  goes to the HPC profile's GPU queue.
+
+`num_nodes` adds nodes, and with them ranks and GPUs, to each solver job. See
+`packages/qcsc-prefect-fulqrum/native/README.md` for the GPU build.
 
 ### SQD with the SBD eigensolver
 
@@ -332,7 +356,7 @@ Without either table, an existing block is kept.
 | `default_params/fulqrum_n2*.json`, `dice_n2.json` | `default_params/n2*.json` |
 | `sqd_fulqrum_blocks.slurm.example.toml`, `sqd_blocks.fugaku.example.toml` | One `sqd_blocks.example.toml` with `solver`, `profile` and `[advanced]`; flat configs still work |
 | `circuit.optimization_level`, `circuit.sabre_*` | `circuit.transpiler.*`, with `circuit.configure_transpiler: true` |
-| `circuit.max_ab_pairs` | Removed; the heavy-hex pattern keeps at most 5 alpha-beta pairs |
+| `circuit.max_ab_pairs` | Removed; `circuit.qpu_topology` sets the alpha-beta pairs (at most 5 for `heavy-hex`) |
 
 Old parameter files that set these fields fail validation with a message that
 names the replacement. A removed field left empty or at its old default is ignored.
