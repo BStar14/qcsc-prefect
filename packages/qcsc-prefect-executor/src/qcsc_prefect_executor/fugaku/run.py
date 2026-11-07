@@ -116,10 +116,18 @@ async def run_fugaku_job(
     err_file = work_dir / f"{script_basename}.{req.job_name}.err"
     stats_file = work_dir / f"{script_basename}.{req.job_name}.stats"
 
+    exit_code_text = str(final_status.get("EC", "")).strip()
+    if exit_code_text.isdigit():
+        exit_status = int(exit_code_text)
+    else:
+        exit_status = 0 if final_status.get("ST") == "EXT" else -1
+
     if logs := _read_text_if_exists(out_file):
         logger.info(truncate_log(logs))
     if logs := _read_text_if_exists(err_file):
-        logger.error(truncate_log(logs))
+        # Programs also write progress and warnings to stderr; only a failed job's is an error.
+        log_stderr = logger.warning if exit_status == 0 else logger.error
+        log_stderr(truncate_log(logs))
 
     artifact: dict[str, Any] = {
         "job_id": submit.job_id,
@@ -135,12 +143,6 @@ async def run_fugaku_job(
         table=[list(artifact.keys()), list(artifact.values())],
         key=metrics_artifact_key,
     )
-
-    exit_code_text = str(final_status.get("EC", "")).strip()
-    if exit_code_text.isdigit():
-        exit_status = int(exit_code_text)
-    else:
-        exit_status = 0 if final_status.get("ST") == "EXT" else -1
 
     return FugakuRunResult(
         job_id=submit.job_id,

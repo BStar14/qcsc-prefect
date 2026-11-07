@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # QRMI reads SPANK's environment; import only inside the allocation.
     from qrmi import QRMIService
-    from qrmi.primitives.ibm import get_target
+    from qrmi.primitives.ibm import get_backend
 
     resource = next((r for r in QRMIService().resources() if r.resource_id() == resource_id), None)
     if resource is None:
@@ -89,7 +89,7 @@ def main(argv: list[str] | None = None) -> None:
         )
     if [circuit_registers(circuit) for circuit in circuits] != registers:
         raise ValueError("QPY registers do not match sampler request")
-    target = get_target(resource)
+    target = get_backend(resource).target
     isa_circuits, pub_reports = compile_pubs(
         circuits, configs, registers, target, request["transpiler"]
     )

@@ -334,7 +334,9 @@ Without either table, an existing block is kept.
 | `circuit.optimization_level`, `circuit.sabre_*` | `circuit.transpiler.*`, with `circuit.configure_transpiler: true` |
 | `circuit.max_ab_pairs` | Removed; the heavy-hex pattern keeps at most 5 alpha-beta pairs |
 
-Old parameter files fail validation with a message that names the replacement.
+Old parameter files that set these fields fail validation with a message that
+names the replacement. A removed field left empty or at its old default is ignored.
+That happens, for example, when a run form filled before 2.0 still holds hidden values.
 The resume key of a checkpoint now includes the solver type, so a checkpoint
 written before 2.0 is not resumed: a Retry moves it aside and starts at round 1,
 and `resume_checkpoint` refuses it.

@@ -23,6 +23,16 @@ def _at(position: int) -> dict[str, int]:
     return {"position": position}
 
 
+def _drop_empty(data: dict[str, Any], *names: str) -> dict[str, Any]:
+    """Drop removed keys left empty, e.g. by a run form filled before they were removed.
+
+    The Prefect UI keeps such keys hidden in the parameters it submits.
+    """
+    return {
+        key: value for key, value in data.items() if key not in names or value not in (None, {})
+    }
+
+
 def _shown_as_required(*names: str):
     """Mark defaulted key fields as required in the run form, so that it highlights them."""
 
@@ -224,11 +234,22 @@ class CircuitParameters(BaseModel):
     @classmethod
     def _reject_moved_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            data = _drop_empty(data, "max_ab_pairs")
             if "max_ab_pairs" in data:
                 raise ValueError(
                     "circuit.max_ab_pairs was removed: the heavy-hex pattern keeps at most 5 "
                     "alpha-beta pairs."
                 )
+            # A key left at its old default, or at the value it moved to, changes nothing.
+            transpiler = data.get("transpiler")
+            configured = transpiler if isinstance(transpiler, dict) else {}
+            defaults = TranspilerParameters()
+            data = {
+                key: value
+                for key, value in data.items()
+                if key not in TranspilerParameters.model_fields
+                or value not in (getattr(defaults, key), configured.get(key))
+            }
             moved = sorted(set(data) & set(TranspilerParameters.model_fields))
             if moved:
                 raise ValueError(
@@ -321,6 +342,7 @@ class SamplingParameters(BaseModel):
     @classmethod
     def _reject_removed_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            data = _drop_empty(data, "qrmi_runtime_config", "sampler_options")
             removed = {
                 "qrmi_runtime_config": "save a QrmiRuntimeBlock and set runtime_block_name",
                 "sampler_options": "QRMI takes only the Shots parameter",

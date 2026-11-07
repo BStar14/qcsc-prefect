@@ -112,10 +112,15 @@ async def run_slurm_job(
     stdout_file = work_dir / "output.out"
     stderr_file = work_dir / "output.err"
 
+    exit_code_text = str(final_status.get("ExitCode", "-1:0")).split(":", 1)[0]
+    exit_status = int(exit_code_text) if exit_code_text.isdigit() else -1
+
     if logs := _read_text_if_exists(stdout_file):
         logger.info(truncate_log(logs))
     if logs := _read_text_if_exists(stderr_file):
-        logger.error(truncate_log(logs))
+        # Programs also write progress and warnings to stderr; only a failed job's is an error.
+        log_stderr = logger.warning if exit_status == 0 else logger.error
+        log_stderr(truncate_log(logs))
 
     if final_status:
         artifact = _create_job_artifact(
@@ -128,9 +133,6 @@ async def run_slurm_job(
             table=[list(artifact.keys()), list(artifact.values())],
             key=metrics_artifact_key,
         )
-
-    exit_code_text = str(final_status.get("ExitCode", "-1:0")).split(":", 1)[0]
-    exit_status = int(exit_code_text) if exit_code_text.isdigit() else -1
 
     return SlurmRunResult(
         job_id=submit.job_id,

@@ -56,7 +56,9 @@ async def run_local_job(
     if process_result.stdout:
         logger.info(_truncate_log(process_result.stdout))
     if process_result.stderr:
-        logger.error(_truncate_log(process_result.stderr))
+        # Programs also write progress and warnings to stderr; only a failed job's is an error.
+        log_stderr = logger.warning if process_result.exit_status == 0 else logger.error
+        log_stderr(_truncate_log(process_result.stderr))
 
     job_id = f"local-{process_result.pid}"
     artifact = {

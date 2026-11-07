@@ -151,6 +151,25 @@ def test_circuit_parameters_reject_moved_fields(circuit, match):
         flow_params.CircuitParameters(**circuit)
 
 
+def test_stale_run_form_keys_left_at_their_defaults_are_ignored():
+    """The Prefect UI keeps removed fields hidden in a form filled before an upgrade."""
+    circuit = flow_params.CircuitParameters.model_validate(
+        {
+            "compress": True,
+            "transpiler": {"sabre_layout_trials": 10000, "optimization_level": 3},
+            "max_ab_pairs": None,
+            "optimization_level": 3,
+            "sabre_layout_trials": 10000,
+            "sabre_swap_trials": 10,
+            "sabre_max_iterations": 8,
+            "configure_transpiler": False,
+        }
+    )
+    assert circuit.transpile_options == flow_params.TranspilerParameters()
+    sampling = flow_params.SamplingParameters(qrmi_runtime_config=None, sampler_options={})
+    assert sampling.quantum_source == "real-device"
+
+
 def _form_order(schema, model):
     properties = schema["definitions"][model]["properties"]
     return sorted(properties, key=lambda name: properties[name]["position"])
