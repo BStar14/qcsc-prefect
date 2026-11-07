@@ -24,6 +24,7 @@ class _ExecutionProfileBlockStub:
         mpiprocs: int = 5,
         ompthreads: int | None = None,
         walltime: str = "00:10:00",
+        gpus_per_node: int | None = None,
         launcher: str = "mpiexec.hydra",
         mpi_options: list[str] | None = None,
         modules: list[str] | None = None,
@@ -37,6 +38,7 @@ class _ExecutionProfileBlockStub:
         self.mpiprocs = mpiprocs
         self.ompthreads = ompthreads
         self.walltime = walltime
+        self.gpus_per_node = gpus_per_node
         self.launcher = launcher
         self.mpi_options = mpi_options or []
         self.modules = modules or []
@@ -410,6 +412,73 @@ def test_run_job_from_blocks_dispatches_to_slurm(monkeypatch, tmp_path: Path):
     assert captured["exec_profile"].mpi_options == ["--cpu-bind=cores"]
     assert captured["exec_profile"].pre_commands == ["echo before-run"]
     assert captured["exec_profile"].arguments == ["--base", "--override"]
+
+
+def _capture_slurm_run(monkeypatch) -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    class _SlurmResult:
+        job_id = "12345"
+        exit_status = 0
+        state = "COMPLETED"
+
+    async def fake_run_slurm_job(**kwargs):
+        captured.update(kwargs)
+        return _SlurmResult()
+
+    monkeypatch.setattr(mod, "run_slurm_job", fake_run_slurm_job)
+    return captured
+
+
+def _run_gpu_slurm_job(monkeypatch, tmp_path: Path, **kwargs) -> dict[str, object]:
+    command = _CommandBlockStub("fulqrum", "fulqrum_solver", [])
+    profile = _ExecutionProfileBlockStub(
+        profile_name="fulqrum-gpu",
+        command_name="fulqrum",
+        resource_class="gpu",
+        num_nodes=1,
+        mpiprocs=4,
+        gpus_per_node=4,
+        launcher="srun",
+    )
+    hpc = _HPCProfileBlockStub(
+        hpc_target="slurm",
+        executable_map={"fulqrum_solver": "/opt/bin/qcsc-fulqrum-solve"},
+        queue_cpu="cpu",
+        queue_gpu="gpu",
+    )
+    _patch_block_loading(monkeypatch, command, profile, hpc)
+    captured = _capture_slurm_run(monkeypatch)
+    asyncio.run(
+        mod.run_job_from_blocks(
+            command_block_name="cmd",
+            execution_profile_block_name="exec",
+            hpc_profile_block_name="hpc",
+            work_dir=tmp_path,
+            script_filename="job.slurm",
+            **kwargs,
+        )
+    )
+    return captured
+
+
+def test_run_job_from_blocks_passes_gpus_per_node(monkeypatch, tmp_path: Path):
+    captured = _run_gpu_slurm_job(monkeypatch, tmp_path)
+
+    assert captured["req"].partition == "gpu"
+    assert captured["exec_profile"].gpus_per_node == 4
+    assert captured["exec_profile"].mpiprocs == 4
+
+
+def test_run_job_from_blocks_overrides_gpus_per_node(monkeypatch, tmp_path: Path):
+    captured = _run_gpu_slurm_job(
+        monkeypatch,
+        tmp_path,
+        execution_profile_overrides={"gpus_per_node": 2, "mpiprocs": 2},
+    )
+
+    assert captured["exec_profile"].gpus_per_node == 2
+    assert captured["exec_profile"].mpiprocs == 2
 
 
 def test_run_job_from_blocks_rejects_unknown_execution_profile_override(
