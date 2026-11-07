@@ -1,9 +1,10 @@
 """Load the ``sqd-create-blocks`` config: your settings, a system profile, and ``[advanced]``.
 
 ``sqd_blocks.example.toml`` holds the settings each user edits. Its ``profile`` names
-a bundled system profile (``slurm``, ``miyabi`` or ``fugaku``, under
-``sqd_common/profiles/``) with the scheduler and resource settings of that system, or
-gives a path to your own profile file. Rarely changed settings (block names, timeouts,
+a bundled system profile (``slurm``, ``miyabi``, ``fugaku``, or the GPU profiles
+``slurm-gpu`` and ``miyabi-gpu`` for fulqrum, under ``sqd_common/profiles/``) with the
+scheduler and resource settings of that system, or gives a path to your own profile
+file. Rarely changed settings (block names, timeouts,
 solver tuning) go in an optional ``[advanced]`` table.
 
 ``load_block_config`` merges these into the flat settings the solver scripts read.
