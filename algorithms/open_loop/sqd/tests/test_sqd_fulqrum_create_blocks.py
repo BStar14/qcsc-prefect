@@ -28,7 +28,7 @@ def test_example_toml_resolves_to_expected_settings():
     assert kwargs["hpc_target"] == "slurm"
     assert kwargs["queue"] == "normal"
     assert kwargs["project"] == ""
-    assert kwargs["root_dir"] == "/data/sqd-fulqrum"
+    assert kwargs["root_dir"] == "/data/sqd"
     assert kwargs["fulqrum_executable"] == "/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve"
     assert kwargs["launcher"] == "single"
     assert (kwargs["num_nodes"], kwargs["mpiprocs"], kwargs["ompthreads"]) == (1, 1, 4)
@@ -231,7 +231,7 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
     assert exec_profile.environments == {"OMP_NUM_THREADS": "4"}
     assert hpc.hpc_target == "slurm" and hpc.queue_cpu == "normal"
     assert hpc.executable_map == {"sqd_fulqrum_solver": "/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve"}
-    assert solver.root_dir == str(Path("/data/sqd-fulqrum").resolve())
+    assert solver.root_dir == str(Path("/data/sqd").resolve())
     assert solver.execution_profile_block_name == "exec-sqd-fulqrum-slurm"
     assert solver.hpc_profile_block_name == "hpc-slurm-sqd-fulqrum"
     assert solver.return_sci_state is False
@@ -329,7 +329,7 @@ def test_user_file_and_advanced_override_the_gpu_profile(tmp_path):
 
     # A top-level key of the user file overrides [advanced].
     text = path.read_text().replace(
-        "# Keys after a table header", "gpus_per_node = 3\n# Keys after a table header", 1
+        "# Keys after a [table] header", "gpus_per_node = 3\n# Keys after a [table] header", 1
     )
     path.write_text(text)
     assert _resolve(config=load_block_config(path))["gpus_per_node"] == 3

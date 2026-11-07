@@ -58,7 +58,11 @@ from qcsc_prefect_executor import from_blocks  # noqa: E402
 from qcsc_prefect_executor.slurm import run as slurm_run  # noqa: E402
 from qcsc_prefect_fulqrum import block_utils  # noqa: E402
 from qiskit.primitives.containers import BitArray  # noqa: E402
-from sqd_common import lucj, sampling  # noqa: E402
+from sqd_common import (  # noqa: E402
+    lucj,
+    qrmi_blocks,  # noqa: E402
+    sampling,
+)
 from sqd_common.advanced import AdvancedSettings  # noqa: E402
 from sqd_common.block_config import load_block_config  # noqa: E402
 from sqd_common.flow_params import (  # noqa: E402
@@ -215,15 +219,15 @@ def qrmi_runtime(monkeypatch):
     }
     args = create_blocks._parse_args([])
     block_kwargs = create_blocks.resolve_settings(args, config)
-    qrmi = create_blocks.resolve_qrmi_settings(args, config, block_kwargs)
-    create_blocks.create_qrmi_blocks(qrmi)
+    qrmi = qrmi_blocks.resolve_qrmi_settings(args, config, block_kwargs)
+    qrmi_blocks.create_qrmi_blocks(qrmi)
 
     # The fakes stand in for the QPU: request no QPU and run the fake task_runner.
     assert blocks[qrmi["hpc_profile_block_name"]].slurm_qpu == RESOURCE
     blocks[qrmi["hpc_profile_block_name"]].slurm_qpu = None
     blocks[qrmi["command_block_name"]].default_args += ["--task-runner", str(runner)]
     # The QrmiRuntimeBlock that create_blocks saves for [qrmi], loaded as the flow does.
-    block_runtime = runtime_mod.QrmiRuntime(**create_blocks.qrmi_runtime_settings(qrmi))
+    block_runtime = runtime_mod.QrmiRuntime(**qrmi_blocks.qrmi_runtime_settings(qrmi))
 
     async def load(name):
         assert name == "qrmi-runtime"

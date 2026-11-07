@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -30,12 +31,34 @@ def test_solver_flag_selects_dice(monkeypatch):
     assert seen == [["--config", "x.toml", "--hpc-target", "miyabi"]]
 
 
-@pytest.mark.parametrize(
-    "argv, message", [(["--solver", "sbd"], "closed_loop/sqd_de"), (["--solver"], "needs one")]
-)
-def test_sbd_and_bad_solver_flags_exit_with_a_hint(argv, message):
+@pytest.mark.parametrize("argv, message", [(["--solver"], "needs one"), (["--solver", "x"], "x")])
+def test_bad_solver_flags_exit_with_a_hint(argv, message):
     with pytest.raises(SystemExit, match=message):
         create_blocks.main(argv)
+
+
+def test_sbd_records_its_solver_block_without_creating_it(monkeypatch, tmp_path, capsys):
+    from sqd_common import advanced_blocks
+
+    saved = []
+    monkeypatch.setattr(
+        advanced_blocks,
+        "save_advanced_block",
+        lambda settings, name: saved.append((name, settings)),
+    )
+    path = tmp_path / "sqd_blocks.toml"
+    path.write_text('solver = "sbd"\n[sqd_advanced]\nccsd_maxiter = 6\n')
+    create_blocks.main(["--config", str(path)])
+    ((name, settings),) = saved
+    assert name == "sqd-advanced-settings"
+    assert settings.solver_block_ref == "sbd_solver_job/davidson-solver"
+    assert settings.ccsd_maxiter == 6
+    assert "closed_loop/sqd_de/create_blocks.py" in capsys.readouterr().out
+
+    path.write_text('solver = "sbd"\n[sbd]\nsolver_block_name = "my-sbd"\n')
+    create_blocks.main(["--config", str(path), "--dry-run"])
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["advanced_block"]["solver_block_ref"] == "sbd_solver_job/my-sbd"
 
 
 EXAMPLE = SQD / "sqd_blocks.example.toml"
@@ -93,7 +116,8 @@ def test_dice_profiles_merge_their_mpi_settings(tmp_path, profile, expected):
     config = load_block_config(_dice_config(tmp_path, profile))
     assert {key: config[key] for key in expected} == expected
     assert config["dice_executable"].endswith("/Dice")
-    assert "fulqrum_executable" in config  # unused by DICE, harmless
+    # Only the selected solver's table is read.
+    assert "fulqrum_executable" not in config
 
 
 def test_dice_runtime_table_saves_the_block_after_the_solver(monkeypatch, tmp_path, capsys):
@@ -131,9 +155,9 @@ def test_dice_runtime_table_saves_the_block_after_the_solver(monkeypatch, tmp_pa
     # The runs use the DICE block through the Advanced SQD Settings block.
     ((name, settings),) = advanced
     assert name == "sqd-advanced-settings"
-    assert settings.solver_block_ref == "dice_shci_solver_job/sqd-solver"
+    assert settings.solver_block_ref == "dice_shci_solver_job/sqd-dice-solver"
     out = capsys.readouterr().out
-    assert "Solver Block dice_shci_solver_job/sqd-solver" in out
+    assert "Solver Block dice_shci_solver_job/sqd-dice-solver" in out
     assert "secret-key" not in out
 
 

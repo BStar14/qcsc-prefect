@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from sqd_common import qrmi_blocks  # noqa: E402
 from sqd_common.block_config import load_block_config
 from sqd_fulqrum import create_blocks
 
@@ -45,7 +46,7 @@ def _resolve(argv=(), config=None):
     args = create_blocks._parse_args(list(argv))
     config = _config() if config is None else config
     block_kwargs = create_blocks.resolve_settings(args, config)
-    return create_blocks.resolve_qrmi_settings(args, config, block_kwargs)
+    return qrmi_blocks.resolve_qrmi_settings(args, config, block_kwargs)
 
 
 def test_config_without_qrmi_table_creates_no_qrmi_blocks():
@@ -56,18 +57,18 @@ def test_qrmi_table_inherits_solver_settings():
     qrmi = _resolve(config=_config(**QRMI))
     assert qrmi["resource"] == "test_heron"
     assert qrmi["python_executable"] == "/opt/venvs/qrmi/bin/python"
-    assert qrmi["root_dir"] == "/data/sqd-fulqrum/qrmi"
+    assert qrmi["root_dir"] == "/data/sqd/qrmi"
     assert (qrmi["queue"], qrmi["project"]) == ("normal", "")
     assert qrmi["ompthreads"] == 4 and qrmi["walltime"] == "00:30:00"
-    assert qrmi["command_block_name"] == "cmd-sqd-fulqrum-qrmi"
-    assert qrmi["execution_profile_block_name"] == "exec-sqd-fulqrum-qrmi"
-    assert qrmi["hpc_profile_block_name"] == "hpc-slurm-sqd-fulqrum-qrmi"
-    assert create_blocks.qrmi_runtime_settings(qrmi) == {
+    assert qrmi["command_block_name"] == "cmd-sqd-qrmi"
+    assert qrmi["execution_profile_block_name"] == "exec-sqd-qrmi"
+    assert qrmi["hpc_profile_block_name"] == "hpc-slurm-sqd-qrmi"
+    assert qrmi_blocks.qrmi_runtime_settings(qrmi) == {
         "scheduler": "slurm",
-        "root_dir": "/data/sqd-fulqrum/qrmi",
-        "command_block_name": "cmd-sqd-fulqrum-qrmi",
-        "execution_profile_block_name": "exec-sqd-fulqrum-qrmi",
-        "hpc_profile_block_name": "hpc-slurm-sqd-fulqrum-qrmi",
+        "root_dir": "/data/sqd/qrmi",
+        "command_block_name": "cmd-sqd-qrmi",
+        "execution_profile_block_name": "exec-sqd-qrmi",
+        "hpc_profile_block_name": "hpc-slurm-sqd-qrmi",
         "resource": "test_heron",
     }
 
@@ -89,7 +90,7 @@ def test_qrmi_table_overrides_and_cli():
     assert (qrmi["root_dir"], qrmi["queue"], qrmi["ompthreads"]) == ("/shared/qrmi", "qpu", 8)
     assert qrmi["extra_directives"] == ["--exclusive"]
     assert qrmi["environments"] == {"RAYON_NUM_THREADS": "8"}
-    runtime = create_blocks.qrmi_runtime_settings(qrmi)
+    runtime = qrmi_blocks.qrmi_runtime_settings(qrmi)
     assert runtime["resource"] == "ibm_kingston" and runtime["timeout_seconds"] == 600.0
     assert "watch_poll_interval" not in runtime
 
@@ -127,7 +128,7 @@ def test_dry_run_prints_the_runtime_block(tmp_path, capsys):
     assert printed["qrmi_blocks"]["resource"] == "test_heron"
     runtime = printed["runtime_block"]
     assert runtime["name"] == "qrmi-runtime" and runtime["scheduler"] == "slurm"
-    assert runtime["hpc_profile_block_name"] == "hpc-slurm-sqd-fulqrum-qrmi"
+    assert runtime["hpc_profile_block_name"] == "hpc-slurm-sqd-qrmi"
 
 
 IQP_RUNTIME = {
@@ -209,10 +210,10 @@ def test_main_saves_separate_qrmi_blocks(tmp_path, monkeypatch, capsys):
 
     create_blocks.main(["--config", str(path)])
 
-    cmd = saved["cmd-sqd-fulqrum-qrmi"]
-    exec_profile = saved["exec-sqd-fulqrum-qrmi"]
-    hpc = saved["hpc-slurm-sqd-fulqrum-qrmi"]
-    assert cmd.command_name == exec_profile.command_name == "sqd-fulqrum-qrmi"
+    cmd = saved["cmd-sqd-qrmi"]
+    exec_profile = saved["exec-sqd-qrmi"]
+    hpc = saved["hpc-slurm-sqd-qrmi"]
+    assert cmd.command_name == exec_profile.command_name == "sqd-qrmi"
     assert cmd.default_args == ["-m", "qcsc_prefect.integrations.qiskit.qrmi.worker"]
     assert exec_profile.launcher == "single" and exec_profile.ompthreads == 4
     assert exec_profile.environments == {"OMP_NUM_THREADS": "4"}
@@ -224,8 +225,8 @@ def test_main_saves_separate_qrmi_blocks(tmp_path, monkeypatch, capsys):
     ((name, settings),) = runtime_blocks
     assert name == "qrmi-runtime" and settings["scheduler"] == "slurm"
     assert settings["resource"] == "test_heron"
-    assert settings["root_dir"] == "/data/sqd-fulqrum/qrmi"
-    assert settings["hpc_profile_block_name"] == "hpc-slurm-sqd-fulqrum-qrmi"
+    assert settings["root_dir"] == "/data/sqd/qrmi"
+    assert settings["hpc_profile_block_name"] == "hpc-slurm-sqd-qrmi"
     assert "QRMI runtime block: qrmi-runtime (scheduler=slurm)" in capsys.readouterr().out
 
 
