@@ -1,4 +1,10 @@
-"""Post-process stage: configuration recovery and subspace diagonalization."""
+"""Post-process stage: configuration recovery and subspace diagonalization.
+
+The carryover CI strings of each round's best ground state are kept in every
+subspace of the next round. The run's ``carryover_fraction`` is set on the
+solver block (fulqrum ``carryover_fraction``, SBD ``carryover_ratio``), and the
+carryover is saved in the checkpoint with the occupancies.
+"""
 
 import time
 from pathlib import Path
@@ -25,7 +31,13 @@ from sqd_common.checkpoint import (
     write_source,
 )
 from sqd_common.flow_params import SQDParameters
-from sqd_common.recovery import BatchTransformFn, SolveFn, run_configuration_recovery
+from sqd_common.recovery import (
+    BatchTransformFn,
+    SolveFn,
+    run_configuration_recovery,
+    with_carryover_fraction,
+)
+from sqd_common.recovery import carryover_of as carryover_of
 
 # Seed of the configuration recovery and subsampling RNG.
 RECOVERY_SEED = 24
@@ -37,7 +49,8 @@ CHECKPOINT_SUBDIR = "sqd_checkpoints"
 class SolverBlock(Protocol):
     """A solver block (fulqrum, DICE, SBD) that diagonalizes one CI subspace per call.
 
-    The recovery loop reads only ``energy`` and ``orbital_occupancies`` of the result.
+    The recovery loop reads ``energy`` and ``orbital_occupancies`` of the result, and
+    its carryover strings when carryover is on (see :func:`carryover_of`).
     """
 
     async def run(
@@ -143,16 +156,25 @@ async def sqd_loop(
     diagonalizes them concurrently with the solver block, which runs each one
     as an HPC job.
 
+    With ``sqd_params.carryover_fraction`` above 0, the heaviest share of each
+    spin's CI strings in the best ground state of a round is kept in every subspace
+    of the next round, within ``subspace_dim``. The fraction is set on the solver
+    block with :func:`with_carryover_fraction`, and the strings are read from its
+    results with :func:`carryover_of`. SBD then puts Hartree-Fock first. A
+    fraction of 0 uses no carryover, even if the solver returns some.
+
     The task is never cached: a retried flow run reuses the persisted samples
     and integrals and repeats only this stage. With ``sqd_params.checkpoint``,
-    the state after every round is saved under the solver's ``root_dir``, and a
-    retry continues from the last completed round. ``sqd_params.resume_checkpoint``
-    continues the recovery of another run with the same samples and settings.
+    the state after every round, including the carryover, is saved under the
+    solver's ``root_dir``, and a retry continues from the last completed round.
+    ``sqd_params.resume_checkpoint`` continues the recovery of another run with
+    the same samples and settings.
 
     Args:
         bool_array: Sampled bitstrings as a 2D bool array (one row per shot).
         elec_props: Electronic properties of the molecule.
-        sqd_params: Subspace dimension, batches, recovery rounds and checkpointing.
+        sqd_params: Subspace dimension, batches, recovery rounds, carryover and
+            checkpointing.
         solver: Solver block that diagonalizes one subspace per call.
         artifact_key: Key of the table artifact with one row per solved subspace.
         batch_transform: Rewrites each round's subspaces for the solver (SBD).
@@ -164,6 +186,7 @@ async def sqd_loop(
         ValueError: If ``resume_checkpoint`` belongs to other samples or settings.
     """
     logger = get_run_logger()
+    solver = with_carryover_fraction(solver, sqd_params.carryover_fraction)
     key = resume_key(bool_array, elec_props, sqd_params, solver=solver_kind(solver))
     run_dir = checkpoint_run_dir(solver)
 
@@ -179,16 +202,18 @@ async def sqd_loop(
         resumed_from = str(loaded_from)
     if state is None:
         occupancies, start_round, best_energy = elec_props.initial_occupancy, 0, None
+        carryover = None
         rng = np.random.default_rng(RECOVERY_SEED)
     else:
         logger.info(
             f"[ckpt] RESUME from {loaded_from}: completed {state.next_step} step(s), "
             f"best_energy so far={state.best_energy:.8f}"
         )
-        occupancies, start_round, best_energy = (
+        occupancies, start_round, best_energy, carryover = (
             state.occupancies,
             state.next_step,
             state.best_energy,
+            state.carryover,
         )
         rng = np.random.default_rng([RECOVERY_SEED, start_round])
 
@@ -201,12 +226,19 @@ async def sqd_loop(
             logger.warning(f"[ckpt] checkpointing off: cannot write {run_dir} ({exc})")
         else:
 
-            def on_round_end(next_round, round_occupancies, best):
-                save_checkpoint(run_dir / CKPT_NAME, round_occupancies, next_round, best, logger)
+            def on_round_end(next_round, round_occupancies, best, round_carryover):
+                save_checkpoint(
+                    run_dir / CKPT_NAME,
+                    round_occupancies,
+                    next_round,
+                    best,
+                    logger,
+                    carryover=round_carryover,
+                )
 
             if state is not None and loaded_from != run_dir / CKPT_NAME:
                 # Copy the resumed state, so a retry of this run finds it before round k+1 ends.
-                on_round_end(start_round, occupancies, best_energy)
+                on_round_end(start_round, occupancies, best_energy, carryover)
 
     raw_bitstrings, raw_probs = bit_array_to_arrays(BitArray.from_bool_array(bool_array))
     outcome = await run_configuration_recovery(
@@ -226,6 +258,8 @@ async def sqd_loop(
         best_energy=best_energy,
         on_round_end=on_round_end,
         batch_transform=batch_transform,
+        initial_carryover=carryover,
+        carryover_fraction=sqd_params.carryover_fraction,
     )
     await create_table_artifact(table=outcome.records, key=artifact_key)
     if on_round_end is not None:
