@@ -80,8 +80,8 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _load_config_file(path: Path | None) -> dict[str, Any]:
-    """The config file with its profile and ``[advanced]`` merged in."""
-    return load_block_config(path)
+    """The config file with its profile, ``[advanced]`` and ``[dice]`` merged in."""
+    return load_block_config(path, "dice")
 
 
 def _pick_value(*values: Any) -> Any:
@@ -119,11 +119,7 @@ def _require(name: str, value: Any) -> Any:
 
 
 def _default_names(*, hpc_target: str) -> dict[str, str]:
-    names = solver_block_names("dice", hpc_target)
-    if hpc_target == "miyabi":
-        # Miyabi runs DICE with mpiexec.hydra; keep the profile name of that launcher.
-        names["execution_profile_block_name"] = "exec-sqd-dice-miyabi"
-    return names
+    return solver_block_names("dice", hpc_target)
 
 
 def _default_mpi_options(*, hpc_target: str, mpiprocs: int) -> list[str]:

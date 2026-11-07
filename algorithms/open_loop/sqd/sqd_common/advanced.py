@@ -122,10 +122,20 @@ class SQDAdvancedSettingsBlock(Block, AdvancedSettings):
 
 
 async def load_advanced_settings(name: str, logger: Any) -> AdvancedSettings:
-    """The settings of block ``name``, or the defaults if there is no such block."""
+    """The settings of block ``name``; the defaults if the default block does not exist.
+
+    Raises:
+        ValueError: If a block named other than the default does not exist, which is
+            likely a misspelled name; the defaults could run another solver.
+    """
     try:
         block = await SQDAdvancedSettingsBlock.aload(name)
-    except ValueError:
+    except ValueError as exc:
+        if name != DEFAULT_ADVANCED_BLOCK_NAME:
+            raise ValueError(
+                f"No Advanced SQD Settings block '{name}' (Advanced Settings Block). Check the "
+                f"name, or leave it at {DEFAULT_ADVANCED_BLOCK_NAME!r}."
+            ) from exc
         logger.info(
             f"No Advanced SQD Settings block '{name}'; using the defaults. sqd-create-blocks "
             "saves one."

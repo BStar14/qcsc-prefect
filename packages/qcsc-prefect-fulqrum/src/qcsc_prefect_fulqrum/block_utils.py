@@ -136,6 +136,15 @@ def create_fulqrum_blocks(
         mpiprocs = gpus_per_node
     if mpiprocs is None:
         mpiprocs = 1
+    if backend == "gpu-mpi" and process_grid is not None:
+        ranks = num_nodes * mpiprocs
+        grid = tuple(int(p) for p in process_grid)
+        if len(grid) == 2 and grid[0] * grid[1] != ranks:
+            # The job would fail on every rank only after waiting in the queue.
+            raise ValueError(
+                f"process_grid {list(grid)} needs {grid[0] * grid[1]} MPI ranks, but "
+                f"num_nodes={num_nodes} x mpiprocs={mpiprocs} gives {ranks}."
+            )
 
     # Raises for tuning the eigensolver or backend would ignore, before any block is saved.
     FulqrumSolverOptions(

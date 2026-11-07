@@ -123,8 +123,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _load_config_file(path: Path | None) -> dict[str, Any]:
-    """The config file with its profile and ``[advanced]`` merged in."""
-    return load_block_config(path)
+    """The config file with its profile, ``[advanced]`` and ``[fulqrum]`` merged in."""
+    return load_block_config(path, "fulqrum")
 
 
 def _pick_value(*values: Any) -> Any:
@@ -190,8 +190,14 @@ def _optional_int(value: Any) -> int | None:
     return None if value is None else int(value)
 
 
-def _tuning_settings(pick) -> dict[str, Any]:
-    """The eigensolver tuning keys; unset ones keep the solver block defaults."""
+def _tuning_settings(pick, backend: str, cli_energy_tol: float | None) -> dict[str, Any]:
+    """The eigensolver tuning keys; unset ones keep the solver block defaults.
+
+    ``energy_tol`` is a DICE setting too, and configs from before the ``[dice]``
+    table keep it in ``[advanced]``, which every solver reads. So a config value
+    applies only to ``backend = "gpu-mpi"``, the one fulqrum backend that uses it;
+    ``--energy-tol`` always applies, and fails for other backends.
+    """
     grid = pick("process_grid")
     if grid is not None:
         grid = tuple(int(p) for p in grid)
@@ -204,7 +210,9 @@ def _tuning_settings(pick) -> dict[str, Any]:
         min_restart_size=_optional_int(pick("min_restart_size")),
         primme_method=None if method is None else str(method).strip(),
         convergence=str(pick("convergence", "abs")).strip(),
-        energy_tol=float(pick("energy_tol", 1e-6)),
+        energy_tol=float(
+            pick("energy_tol", 1e-6) if backend == "gpu-mpi" or cli_energy_tol is not None else 1e-6
+        ),
         process_grid=grid,
         comm_backend=str(pick("comm_backend", "auto")).strip(),
     )
@@ -304,7 +312,7 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         max_iter=None if max_iter is None else int(max_iter),
         dense_max_dim=int(pick("dense_max_dim", 64)),
         return_sci_state=bool(pick("return_sci_state", False)),
-        **_tuning_settings(pick),
+        **_tuning_settings(pick, backend, args.energy_tol),
         backend=backend,
         slurm_memory=_optional_str(pick("slurm_memory")),
         gfscache=_optional_str(_pick_value(args.fugaku_gfscache, config.get("fugaku_gfscache"))),

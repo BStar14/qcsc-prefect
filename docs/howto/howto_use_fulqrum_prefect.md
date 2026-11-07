@@ -105,6 +105,7 @@ package [README](https://github.com/qiskit-community/qcsc-prefect/tree/main/pack
 ## SQD Workflow
 
 The `sqd` workflow in `algorithms/open_loop/sqd` runs the SQD experiment of
-arXiv:2405.05068 with this solver by default (`solver_block_ref =
-"fulqrum_solver_job/<name>"`). Its README covers block creation from a TOML file
+arXiv:2405.05068 with this solver by default: `sqd-create-blocks` saves the
+`sqd-fulqrum-solver` block and records `fulqrum_solver_job/sqd-fulqrum-solver` as
+Solver Block of the Advanced SQD Settings block. Its README covers block creation from a TOML file
 (`sqd-create-blocks`), deployment (`sqd-deploy`) and QRMI sampling.

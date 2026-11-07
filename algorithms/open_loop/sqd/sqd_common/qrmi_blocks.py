@@ -1,9 +1,10 @@
-"""The QRMI sampler blocks of the SQD workflow, shared by every solver.
+"""The QRMI sampler blocks of the SQD workflow, shared by the solvers.
 
-``sqd-create-blocks`` saves them from the ``[qrmi]`` table for any solver: a
-command, an execution profile and an HPC profile for the QRMI job in Slurm, and the
-``qrmi-runtime`` ``QrmiRuntimeBlock`` that uses them. ``[runtime]`` saves another
-``QrmiRuntimeBlock`` instead, for example for IBM Quantum (IQP).
+``sqd-create-blocks`` saves them from the ``[qrmi]`` table for a solver on Slurm
+(fulqrum and SBD): a command, an execution profile and an HPC profile for the QRMI
+job in Slurm, and the ``qrmi-runtime`` ``QrmiRuntimeBlock`` that uses them. The DICE
+blocks target Miyabi or Fugaku, so DICE takes ``[runtime]`` only. ``[runtime]``
+saves another ``QrmiRuntimeBlock`` instead, for example for IBM Quantum (IQP).
 """
 
 from __future__ import annotations

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -91,9 +92,6 @@ class QrmiRuntime:
     # Slurm only: QRMI settings without the "<resource>_" prefix (never the API key), passed
     # to sbatch's environment so that SPANK reads them over qrmi_config.json.
     job_settings: Mapping[str, str] | None = field(default=None, kw_only=True)
-    # Slurm only: a --qpu resource for this run instead of the HPC profile's, set when a run
-    # selects another backend than the block's.
-    slurm_qpu: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         self._validate_scheduler()
@@ -177,6 +175,20 @@ class QrmiRuntime:
         return await _sample_on_slurm(prepared_circuits, shots, registers, configs, self)
 
 
+def _job_environment(runtime: QrmiRuntime) -> dict[str, str | None]:
+    """sbatch's environment changes: the job settings, and no API key of this process.
+
+    sbatch passes its environment to the job, and Slurm stores it with the job, so an
+    API key that this process holds (for example for IQP) is removed.
+    """
+    env: dict[str, str | None] = {
+        name: None for name in os.environ if name.endswith("QRMI_IBM_QCS_IAM_APIKEY")
+    }
+    for key, value in (runtime.job_settings or {}).items():
+        env[f"{runtime.resource}_{key}"] = value
+    return env
+
+
 @task(name="quantum-sampling-qrmi-slurm", retries=0, cache_policy=NO_CACHE, persist_result=False)
 async def _sample_on_slurm(circuits, shots, registers, configs, runtime) -> PrimitiveResult:
     work_dir = Path(runtime.root_dir).expanduser().resolve() / uuid4().hex
@@ -199,12 +211,10 @@ async def _sample_on_slurm(circuits, shots, registers, configs, runtime) -> Prim
         work_dir=work_dir,
         script_filename="sampler.slurm",
         user_args=["--request", "sampler_request.json"],
-        # A run that selects another backend also requests it as --qpu.
-        slurm_qpu=runtime.slurm_qpu,
-        submit_env={
-            f"{runtime.resource}_{key}": value
-            for key, value in (runtime.job_settings or {}).items()
-        },
+        # The job requests the runtime's resource, which the worker checks, whenever the
+        # HPC profile requests a QPU.
+        slurm_qpu=runtime.resource,
+        submit_env=_job_environment(runtime),
         watch_poll_interval=runtime.watch_poll_interval,
         timeout_seconds=runtime.timeout_seconds,
         metrics_artifact_key="qrmi-slurm-job",

@@ -67,7 +67,8 @@ dice_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/D
 
 # ============================================================ 4. Quantum sampling
 
-# QRMI sampler job in Slurm, the default. Creates its three blocks (cmd-sqd-qrmi,
+# QRMI sampler job in Slurm, the default (fulqrum or SBD on Slurm; DICE on Miyabi or
+# Fugaku takes [runtime] instead). Creates its three blocks (cmd-sqd-qrmi,
 # exec-sqd-qrmi, hpc-slurm-sqd-qrmi) and the qrmi-runtime block that real-device runs
 # use. The API key stays in the cluster's qrmi_config.json, so nothing secret goes in this
 # file. The job's walltime, threads and timeout come from the profile.

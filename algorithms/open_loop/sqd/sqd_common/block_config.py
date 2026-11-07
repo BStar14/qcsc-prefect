@@ -93,11 +93,13 @@ def is_layered(config: dict[str, Any]) -> bool:
     return any(key in config for key in (*_SELECTORS, *_LAYER_TABLES))
 
 
-def merge_layers(config: dict[str, Any], base: Path | None = None) -> dict[str, Any]:
-    """Flatten a layered config into the settings of its solver."""
+def merge_layers(
+    config: dict[str, Any], base: Path | None = None, solver: str | None = None
+) -> dict[str, Any]:
+    """Flatten a layered config into the settings of ``solver`` (default: its ``solver``)."""
     if not is_layered(config):
         return dict(config)
-    solver = solver_of(config)
+    solver = solver or solver_of(config)
     profile: dict[str, Any] = {}
     if "profile" in config:
         profile = read_config_file(profile_path(str(config["profile"]), base))
@@ -125,13 +127,17 @@ def merge_layers(config: dict[str, Any], base: Path | None = None) -> dict[str, 
     return merged
 
 
-def load_block_config(path: Path | None) -> dict[str, Any]:
-    """Read and flatten the config file of ``sqd-create-blocks``."""
+def load_block_config(path: Path | None, solver: str | None = None) -> dict[str, Any]:
+    """Read and flatten the config file of ``sqd-create-blocks`` for ``solver``.
+
+    ``solver`` is the solver whose blocks are created, which ``--solver`` may set
+    to another than the file's ``solver``; its ``[<solver>]`` table applies.
+    """
     if path is None:
         return {}
     config = read_config_file(path)
     check_qrmi_keys(config, path)
-    return merge_layers(config, path.parent)
+    return merge_layers(config, path.parent, solver)
 
 
 def check_qrmi_keys(config: dict[str, Any], path: Path | None = None) -> None:

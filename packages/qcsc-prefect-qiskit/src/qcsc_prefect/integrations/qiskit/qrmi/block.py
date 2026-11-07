@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from prefect.blocks.core import Block
 from prefect.types import SecretDict
-from pydantic import Field, SecretStr, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from qiskit import QuantumCircuit
 
@@ -45,6 +52,9 @@ class QrmiRuntimeBlock(Block):
     ``await QrmiRuntimeBlock.aload_runtime(name)`` (or ``load_runtime`` from
     synchronous code) returns the ``QrmiRuntime``.
     """
+
+    # Validation errors would otherwise echo the input, API key included.
+    model_config = ConfigDict(hide_input_in_errors=True)
 
     _block_type_name = "QRMI Runtime"
     _block_type_slug = "qrmi_runtime"
@@ -130,12 +140,40 @@ class QrmiRuntimeBlock(Block):
         ),
     )
 
+    @field_validator("resource", "service_crn", "endpoint", "iam_endpoint", mode="before")
+    @classmethod
+    def _strip(cls, value: Any, info: ValidationInfo) -> Any:
+        """Strip pasted whitespace; an empty field means unset (cluster or IQP default)."""
+        if isinstance(value, str):
+            value = value.strip()
+            if any(char.isspace() for char in value):
+                raise ValueError("must be one value without spaces")
+            # resource is required; the model check names it.
+            return value if value or info.field_name == "resource" else None
+        return value
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def _empty_key_is_unset(cls, value: Any) -> Any:
+        text = value.get_secret_value() if isinstance(value, SecretStr) else value
+        if isinstance(text, str):
+            text = text.strip()
+            return SecretStr(text) if text else None
+        return value
+
     @model_validator(mode="after")
-    def _no_api_key_for_slurm(self) -> "QrmiRuntimeBlock":
+    def _check_scheduler_settings(self) -> "QrmiRuntimeBlock":
+        if not self.resource:
+            raise ValueError("QRMI Resource is required")
         if self.scheduler == "slurm" and self.api_key is not None:
             raise ValueError(
                 "Slurm reads the API key from qrmi_config.json on the compute nodes; leave "
                 "IBM Cloud API Key empty for scheduler 'slurm'."
+            )
+        if self.scheduler == "slurm" and self.resource_config:
+            raise ValueError(
+                "QRMI Resource Config is only used by scheduler 'iqp'; for Slurm set the CRN "
+                "and endpoints in their fields, and the API key in qrmi_config.json."
             )
         return self
 
@@ -161,10 +199,11 @@ class QrmiRuntimeBlock(Block):
                 config[API_KEY_SETTING] = self.api_key.get_secret_value()
             # QRMI's IQP path submits jobs without a session.
             config.pop("QRMI_IBM_QCS_SESSION_MODE", None)
-            if config:
-                # A block from before these fields keeps its resource_config endpoints.
-                config.setdefault("QRMI_IBM_QCS_ENDPOINT", DEFAULT_ENDPOINT)
-                config.setdefault("QRMI_IBM_QCS_IAM_ENDPOINT", DEFAULT_IAM_ENDPOINT)
+            if not config.get(API_KEY_SETTING):
+                raise ValueError("scheduler 'iqp' needs IBM Cloud API Key")
+            # A block from before these fields keeps its resource_config endpoints.
+            config.setdefault("QRMI_IBM_QCS_ENDPOINT", DEFAULT_ENDPOINT)
+            config.setdefault("QRMI_IBM_QCS_IAM_ENDPOINT", DEFAULT_IAM_ENDPOINT)
         else:
             submit_settings = self.qrmi_settings()
         return QrmiRuntime(

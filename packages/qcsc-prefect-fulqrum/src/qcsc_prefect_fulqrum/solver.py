@@ -130,6 +130,17 @@ class FulqrumSolverOptions:
             value = getattr(self, name)
             if value is not None and value < 1:
                 raise ValueError(f"{name} must be >= 1, got {value}")
+        if self.max_basis_size is not None:
+            # One eigenpair needs a search subspace of at least 2 vectors (ARPACK: k < ncv).
+            if self.max_basis_size < 2:
+                raise ValueError(f"max_basis_size must be >= 2, got {self.max_basis_size}")
+            for name in ("block_size", "min_restart_size"):
+                value = getattr(self, name)
+                if value is not None and value >= self.max_basis_size:
+                    raise ValueError(
+                        f"{name} ({value}) must be smaller than max_basis_size "
+                        f"({self.max_basis_size})"
+                    )
         if self.convergence not in CONVERGENCE_TESTS:
             raise ValueError(f"Unknown convergence: {self.convergence!r}")
         if self.energy_tol <= 0:
@@ -270,7 +281,7 @@ def _eigsh_lowest(op, dim: int, v0: np.ndarray, options: FulqrumSolverOptions):
         extra = {}
         if options.max_basis_size is not None:
             # ARPACK needs k < ncv <= dim.
-            extra["ncv"] = min(max(options.max_basis_size, 2), dim)
+            extra["ncv"] = min(options.max_basis_size, dim)
         evals, evecs = spla.eigsh(
             op, k=1, which="SA", v0=v0, tol=options.tol, maxiter=options.max_iter, **extra
         )

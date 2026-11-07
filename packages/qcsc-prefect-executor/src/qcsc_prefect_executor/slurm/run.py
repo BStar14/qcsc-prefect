@@ -76,7 +76,7 @@ async def run_slurm_job(
     watch_poll_interval: float = 10.0,
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "slurm-job-metrics",
-    submit_env: Mapping[str, str] | None = None,
+    submit_env: Mapping[str, str | None] | None = None,
 ) -> SlurmRunResult:
     """Execute a Slurm job end-to-end from runtime models.
 

@@ -55,14 +55,20 @@ def runtime_block_settings(runtime: dict[str, Any]) -> dict[str, Any]:
         )
     if not str(settings.get("resource") or "").strip():
         raise RuntimeError("Missing required setting: runtime.resource")
-    secrets = sorted(qrmi.keys() & set(SECRET_RESOURCE_KEYS))
+    secrets = sorted(
+        key for key in {*qrmi, *settings} if any(s in key for s in SECRET_RESOURCE_KEYS)
+    )
     if secrets:
         raise RuntimeError(
             f"Do not write {', '.join(secrets)} in the config file; set it in the environment"
         )
     for key, name in PLAIN_QRMI_FIELDS.items():
-        if key in qrmi:
-            settings.setdefault(name, qrmi.pop(key))
+        if key not in qrmi:
+            continue
+        value = qrmi.pop(key)
+        if settings.get(name) not in (None, value):
+            raise RuntimeError(f"[runtime] {name} and [runtime.qrmi] {key} differ; set only {name}")
+        settings[name] = value
     if settings["scheduler"] == "iqp":
         value = os.environ.get(SECRET_RESOURCE_KEYS[0])
         if not value:
@@ -84,6 +90,10 @@ def build_runtime_block(settings: dict[str, Any]):
     """A validated ``QrmiRuntimeBlock`` (not saved)."""
     from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
 
+    # The block keeps unknown keys without using them, so a misspelled field would be lost.
+    unknown = sorted(set(settings) - set(QrmiRuntimeBlock.model_fields))
+    if unknown:
+        raise RuntimeError(f"Unknown [runtime] settings: {', '.join(unknown)}")
     block = QrmiRuntimeBlock(**settings)
     block.get_runtime()  # Validate the settings before saving.
     return block

@@ -5,6 +5,7 @@ deployment's run form in the Prefect UI shows every setting of a run in one
 place, grouped by the Qiskit Patterns stage it controls.
 """
 
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -28,6 +29,8 @@ MOVED_TO_ADVANCED = {
 }
 # Repository root of a source checkout (algorithms/open_loop/sqd/sqd_common/ is four levels down).
 REPO_ROOT = Path(__file__).resolve().parents[4]
+# One QRMI resource ID, as Slurm's --qpu and the "<resource>_" setting prefix take it.
+_RESOURCE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def _at(position: int) -> dict[str, int]:
@@ -309,8 +312,16 @@ class SamplingParameters(BaseModel):
             raise ValueError(f"Quantum Source 'random' cannot be combined with {reloads[0]}.")
         if self.qpu_resource is not None:
             self.qpu_resource = self.qpu_resource.strip() or None
-        if self.qpu_resource and any(char.isspace() for char in self.qpu_resource):
-            raise ValueError("QPU Backend must be one backend name without spaces.")
+        if self.qpu_resource:
+            if not _RESOURCE_NAME.fullmatch(self.qpu_resource):
+                raise ValueError(
+                    "QPU Backend must be one backend name (letters, digits, '_', '.', '-')."
+                )
+            if self.quantum_source == "random" or reloads:
+                raise ValueError(
+                    "QPU Backend selects the backend to sample on; leave it empty with "
+                    f"{reloads[0] if reloads else 'Quantum Source random'}."
+                )
         return self
 
     @model_validator(mode="before")
@@ -414,7 +425,7 @@ class FlowParameters(BaseModel):
     )
     circuit: CircuitParameters = Field(
         default_factory=CircuitParameters,
-        description="LUCJ ansatz and transpiler settings.",
+        description="LUCJ ansatz settings.",
         title="Circuit",
         json_schema_extra=_at(1),
     )
@@ -434,8 +445,8 @@ class FlowParameters(BaseModel):
         default=DEFAULT_ADVANCED_BLOCK_NAME,
         description=(
             "Advanced SQD Settings block with the solver block, CCSD restarts, reset "
-            "mitigation and the transpiler. sqd-create-blocks saves it; without it the "
-            "defaults apply."
+            "mitigation and the transpiler. sqd-create-blocks saves it. Without the default "
+            "block the defaults apply; another name must exist."
         ),
         title="Advanced Settings Block",
         json_schema_extra=_at(4),
@@ -444,7 +455,9 @@ class FlowParameters(BaseModel):
         default=None,
         description=(
             "Leave empty to use the Solver Block of the Advanced Settings Block. Set it, as "
-            "'<block type slug>/<block name>', only to run with another solver block."
+            "'<block type slug>/<block name>', only to run with another solver block. "
+            "fulqrum_solver_job/sqd-fulqrum-solver, the run form default before sqd 2.2, is "
+            "ignored here."
         ),
         title="Solver Block Override",
         json_schema_extra=_at(5),

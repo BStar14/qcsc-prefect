@@ -22,7 +22,7 @@ class CancelError(RuntimeError):
 
 
 async def run_command(
-    *args: str, cwd: Path | None = None, env: Mapping[str, str] | None = None
+    *args: str, cwd: Path | None = None, env: Mapping[str, str | None] | None = None
 ) -> str:
     """Run a Slurm command asynchronously and return decoded stdout.
 
@@ -31,7 +31,8 @@ async def run_command(
             `asyncio.create_subprocess_exec`.
         cwd: Optional working directory for the subprocess.
         env: Extra environment variables for the subprocess only, added to this
-            process's environment. They never appear in the command line.
+            process's environment; a value of None removes the variable. They never
+            appear in the command line.
 
     Returns:
         Standard output decoded with replacement for invalid bytes.
@@ -44,7 +45,7 @@ async def run_command(
     proc = await asyncio.create_subprocess_exec(
         *args,
         cwd=str(cwd) if cwd else None,
-        env={**os.environ, **env} if env else None,
+        env=_merged_environment(env) if env else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -56,6 +57,16 @@ async def run_command(
             f"Command failed: {' '.join(args)} rc={proc.returncode}\nstdout:\n{out}\nstderr:\n{err}"
         )
     return out
+
+
+def _merged_environment(env: Mapping[str, str | None]) -> dict[str, str]:
+    merged = dict(os.environ)
+    for key, value in env.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged
 
 
 @dataclass(frozen=True)
@@ -104,16 +115,16 @@ class SlurmRuntime:
         script_path: Path,
         *,
         cwd: Path | None = None,
-        env: Mapping[str, str] | None = None,
+        env: Mapping[str, str | None] | None = None,
     ) -> SubmitResult:
         """Submit a Slurm batch script with ``sbatch --parsable``.
 
         Args:
             script_path: Path to the generated Slurm script.
             cwd: Optional working directory for ``sbatch``.
-            env: Extra environment variables for ``sbatch`` only. sbatch passes its
-                environment to the job, so SPANK plugins and the job script see them
-                too, while the script file does not contain them.
+            env: Extra environment variables for ``sbatch`` only; None removes one.
+                sbatch passes its environment to the job, so SPANK plugins and the job
+                script see them too, while the script file does not contain them.
 
         Returns:
             Parsed submission payload containing the Slurm job id.

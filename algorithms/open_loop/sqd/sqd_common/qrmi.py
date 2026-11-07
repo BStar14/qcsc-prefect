@@ -46,13 +46,9 @@ def make_qrmi_runtime(
     settings). The preparation, the compilation hook and its configuration come
     from the workflow's settings, so the block's ``transpiler`` and
     ``transpile_config`` are replaced. ``resource``, when given, replaces the
-    block's backend for this run (and, for Slurm, its ``--qpu``).
+    block's backend for this run (for Slurm also the job's ``--qpu``).
     """
-    changes = {}
-    if resource and resource != block_runtime.resource:
-        changes["resource"] = resource
-        if block_runtime.scheduler == "slurm":
-            changes["slurm_qpu"] = resource
+    changes = {"resource": resource} if resource else {}
     return dataclasses.replace(
         block_runtime,
         prepare=partial(prepare_sampler_circuit, transpile_config=transpile_config),

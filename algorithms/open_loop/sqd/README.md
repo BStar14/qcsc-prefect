@@ -177,8 +177,9 @@ with the `pip install` command to run.
     IBM `QuantumRuntime` block named by `sampling.runner_name` (default `ibm-runner`).
 
   The new run then loads those samples instead of sampling, so you can change
-  `sqd` (for example `subspace_dim`) or the solver without QPU time. Keep
-  `circuit.use_reset_mitigation` the same as in the sampling run.
+  `sqd` (for example `subspace_dim`) or the solver without QPU time. The reload
+  uses Reset Mitigation of the Advanced SQD Settings block, so keep it as it was in
+  the sampling run.
 
 ## 🚀 Getting Started
 
@@ -335,7 +336,7 @@ With `quantum_source = "real-device"`, the flow loads the `QrmiRuntimeBlock` nam
 runtime's `prepare` hook), and the remaining ffsim gates are expanded for QPY. The
 SQD compilation hook `sqd_common.transpile:transpile_for_target` then compiles the
 circuit against the actual Target: the preset stages plus the SABRE layout search of
-`parameters.circuit`, with a fixed transpiler seed. The flow sets these hooks and
+the Advanced SQD Settings block, with a fixed transpiler seed. The flow sets these hooks and
 their configuration, so the block's `transpiler` and `transpile_config` are not used.
 The `meas`/`test` registers and reset postselection are preserved. Where the hook
 runs depends on the block's scheduler:
@@ -419,6 +420,7 @@ and `resume_checkpoint` refuses it.
 | `molecule.ccsd_maxiter` (default 4) | CCSD Restarts of the Advanced SQD Settings block (default 10) |
 | `circuit.use_reset_mitigation`, `circuit.configure_transpiler`, `circuit.transpiler.*` | Reset Mitigation, Optimization Level and the SABRE fields of the Advanced SQD Settings block |
 | `solver_block_ref` in the run form, default `fulqrum_solver_job/sqd-fulqrum-solver` | Solver Block of the Advanced SQD Settings block, set by `sqd-create-blocks`; `solver_block_ref` overrides it for one run |
+| DICE execution profile on Miyabi `exec-sqd-dice-mpi` | `exec-sqd-dice-miyabi` |
 | DICE solver block `sqd-solver`; QRMI blocks `cmd-sqd-fulqrum-qrmi`, `exec-sqd-fulqrum-qrmi`, `hpc-slurm-sqd-fulqrum-qrmi` | `sqd-dice-solver`; `cmd-sqd-qrmi`, `exec-sqd-qrmi`, `hpc-slurm-sqd-qrmi` |
 | Top-level `fulqrum_executable`, `eigensolver` in `sqd_blocks.toml` | `[fulqrum]` (top-level keys still work) |
 | `carryover_fraction` in `sqd_blocks.toml` | `sqd.carryover_fraction` of each run |
@@ -430,6 +432,9 @@ the Advanced SQD Settings block, and the blocks under the old names can then be
 deleted in Prefect Cloud. To keep using the old blocks instead, name them in
 `[advanced]`. A run form filled before 2.2 keeps the moved fields hidden at their old
 values; those are ignored, and a changed value fails with a pointer to the block.
+For the same reason, a `solver_block_ref` of `fulqrum_solver_job/sqd-fulqrum-solver`,
+the old run form default, is ignored; to run with that block while the Advanced SQD
+Settings block names another, set Solver Block in the Advanced SQD Settings block.
 
 ## Tests
 

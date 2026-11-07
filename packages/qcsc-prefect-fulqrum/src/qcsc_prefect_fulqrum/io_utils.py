@@ -36,7 +36,7 @@ import logging
 import os
 import re
 import traceback
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -242,8 +242,20 @@ def read_solver_input(work_dir: Path) -> dict:
         "two_body_tensor": eri,
         "norb": norb,
         "nelec": (int(spec["nelec"][0]), int(spec["nelec"][1])),
-        "options": FulqrumSolverOptions(**spec["options"]),
+        "options": _solver_options(spec["options"]),
     }
+
+
+def _solver_options(payload: dict) -> FulqrumSolverOptions:
+    """Options of ``solver.json``; an unknown one means a newer workflow host."""
+    known = {item.name for item in fields(FulqrumSolverOptions)}
+    unknown = sorted(set(payload) - known)
+    if unknown:
+        raise ValueError(
+            f"{INPUT_SPEC}: unknown solver options {', '.join(unknown)}. Install the same "
+            "qcsc-prefect-fulqrum version on the workflow host and the compute node."
+        )
+    return FulqrumSolverOptions(**payload)
 
 
 def write_solver_output(work_dir: Path, solution: FulqrumSolution) -> None:
