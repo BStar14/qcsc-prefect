@@ -14,6 +14,8 @@ Layout of one job directory:
 - ``result.json``: energy and solver metadata. Written last, so its presence
   means the outputs are complete.
 - ``error.json``: written instead of the outputs when the solve fails.
+- ``error.rank<k>.json``: written by process ``k > 0`` of a multi-process run
+  when it fails. ``error.json`` is from process 0.
 
 CI strings are stored as ``int64`` for ``norb < 64`` and as decimal strings
 otherwise, so no file needs pickle.
@@ -29,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import traceback
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -49,10 +52,17 @@ INPUT_SPEC = "solver.json"
 OUTPUT_ARRAYS = "output.npz"
 OUTPUT_RESULT = "result.json"
 OUTPUT_ERROR = "error.json"
+_RANK_ERROR = re.compile(r"error\.rank(\d+)\.json")
+
+
+def error_file_name(rank: int = 0) -> str:
+    """The error file of process ``rank``: ``error.json`` for 0, else ``error.rank<k>.json``."""
+
+    return OUTPUT_ERROR if rank == 0 else f"error.rank{int(rank)}.json"
 
 
 class FulqrumSolverError(RuntimeError):
-    """Raised when a job directory holds ``error.json`` from a failed solve."""
+    """Raised when a job directory holds an error file from a failed solve."""
 
     def __init__(self, message: str, *, error: dict | None = None):
         super().__init__(message)
@@ -223,13 +233,14 @@ def write_solver_output(work_dir: Path, solution: FulqrumSolution) -> None:
     )
 
 
-def write_solver_error(work_dir: Path, exc: BaseException) -> None:
-    """Record a failed solve in ``error.json``."""
+def write_solver_error(work_dir: Path, exc: BaseException, rank: int = 0) -> None:
+    """Record a failed solve of process ``rank`` in :func:`error_file_name`."""
 
     _write_json(
-        work_dir / OUTPUT_ERROR,
+        work_dir / error_file_name(rank),
         {
             "format_version": FORMAT_VERSION,
+            "rank": int(rank),
             "type": type(exc).__name__,
             "message": str(exc),
             "traceback": "".join(traceback.format_exception(exc)),
@@ -237,31 +248,50 @@ def write_solver_error(work_dir: Path, exc: BaseException) -> None:
     )
 
 
-def read_solver_error(work_dir: Path) -> dict | None:
-    """Return the contents of ``error.json``, or ``None`` if there is none."""
+def solver_error_files(work_dir: Path) -> list[Path]:
+    """``error.json`` (present or not), then any ``error.rank<k>.json`` in rank order."""
 
-    path = work_dir / OUTPUT_ERROR
-    if not path.exists():
-        return None
-    try:
-        return _read_json(path)
-    except (OSError, ValueError) as exc:
-        return {"type": type(exc).__name__, "message": f"unreadable {OUTPUT_ERROR}: {exc}"}
+    ranked = []
+    for path in work_dir.glob("error.rank*.json"):
+        match = _RANK_ERROR.fullmatch(path.name)
+        if match:
+            ranked.append((int(match[1]), path))
+    return [work_dir / OUTPUT_ERROR] + [path for _, path in sorted(ranked)]
+
+
+def read_solver_error(work_dir: Path) -> dict | None:
+    """Return the first error file of a failed solve, or ``None`` if there is none.
+
+    ``error.json`` is read first, then ``error.rank<k>.json`` in rank order, so
+    a failure of any process is seen even when process 0 was aborted before it
+    could write its own file.
+    """
+
+    for path in solver_error_files(work_dir):
+        if not path.exists():
+            continue
+        try:
+            return _read_json(path)
+        except (OSError, ValueError) as exc:
+            return {"type": type(exc).__name__, "message": f"unreadable {path.name}: {exc}"}
+    return None
 
 
 def read_solver_output(work_dir: Path, norb: int) -> FulqrumSolution:
     """Read a solution written by ``qcsc-fulqrum-solve``.
 
     Raises:
-        FulqrumSolverError: If the solve failed and left ``error.json``.
+        FulqrumSolverError: If the solve failed and left an error file.
         FileNotFoundError: If the outputs are missing.
         ValueError: If ``result.json`` has an unsupported format.
     """
 
     error = read_solver_error(work_dir)
     if error is not None:
+        where = f" on rank {error['rank']}" if error.get("rank") else ""
         raise FulqrumSolverError(
-            f"fulqrum solve failed: {error.get('type')}: {error.get('message')}", error=error
+            f"fulqrum solve failed{where}: {error.get('type')}: {error.get('message')}",
+            error=error,
         )
     result = _read_json(work_dir / OUTPUT_RESULT)
     with np.load(work_dir / OUTPUT_ARRAYS, allow_pickle=False) as data:

@@ -7,26 +7,31 @@ the files described in :mod:`qcsc_prefect_fulqrum.io_utils`.
 Under a multi-process launcher (``srun``, ``mpirun``) every process runs this
 program. Every process reads the input and calls :func:`solve_fulqrum`, because a
 distributed solve is collective: all of them have to enter it. Only the control
-process (:func:`is_control_process`) touches the job directory or writes to
-stdout, so the processes cannot race on the result files. The process index
-comes from the launcher's environment, so no MPI library is needed to read it
-and the single-process path is unchanged.
+process (index 0) writes the results or to stdout, so the processes cannot race
+on the result files.
 
-The ``process_index`` / ``is_control_process`` names follow
+The process index depends on the solver backend in ``solver.json``. Under
+``gpu-mpi`` it is ``MPI.COMM_WORLD`` rank from mpi4py, the communicator the
+solve runs on. Otherwise it comes from the launcher's environment
+(:func:`process_index`), so no MPI library is needed and the single-process path
+is unchanged. The ``process_index`` / ``is_control_process`` names follow
 ``qiskit_addon_sqd.processes`` (qiskit-addon-sqd 0.13 and later), but the
 detection does not: see :func:`process_index`.
 
-Exit codes: ``0`` success, ``1`` the solve failed (details in ``error.json``),
-``2`` usage error. A failing process returns ``1`` whether or not it is the
-control process, because the scheduler reports the job as failed only if the
-process it samples exited non-zero. A failure that only some processes hit is
-not handled here: one process failing inside a collective leaves the others
-waiting in it, which needs ``MPI_Abort`` or a communicator-wide check.
+Exit codes: ``0`` success, ``1`` the solve failed, ``2`` usage error. A failing
+process writes its own error file, ``error.json`` for index 0 and
+``error.rank<k>.json`` otherwise (:func:`io_utils.read_solver_error` reads them
+all), and returns ``1`` whether or not it is the control process, because the
+scheduler reports the job as failed only if the process it samples exited
+non-zero. Under ``gpu-mpi`` a failing process then calls
+``MPI.COMM_WORLD.Abort(1)``: its peers may be waiting for it inside a collective
+and would otherwise hang until the job's walltime.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -89,6 +94,43 @@ def is_control_process() -> bool:
     return process_index() == 0
 
 
+def _requested_backend(work_dir: Path) -> str | None:
+    """The solver backend in ``solver.json``, or ``None`` if it cannot be read.
+
+    An unreadable spec is reported by :func:`io_utils.read_solver_input` inside
+    the solve, where every process records its failure.
+    """
+
+    try:
+        spec = json.loads((work_dir / io_utils.INPUT_SPEC).read_text(encoding="utf-8"))
+        return spec["options"].get("backend")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _mpi_world():
+    """``MPI.COMM_WORLD``, or ``None`` if mpi4py is missing.
+
+    Without mpi4py the ``gpu-mpi`` solve fails with an ImportError on every
+    process, so the index from the environment is good enough for the error files.
+    """
+
+    try:
+        from mpi4py import MPI
+    except ImportError as exc:
+        logger.warning("Backend gpu-mpi without mpi4py (%s); using the launcher's rank.", exc)
+        return None
+    return MPI.COMM_WORLD
+
+
+def _abort(comm) -> None:
+    # Peers blocked in a collective never return, so end the whole MPI job.
+    logger.error("Aborting MPI.COMM_WORLD so that the other processes do not hang.")
+    for stream in (sys.stdout, sys.stderr):
+        stream.flush()
+    comm.Abort(1)
+
+
 def _default_omp_threads() -> None:
     # Slurm does not export OMP_NUM_THREADS for --cpus-per-task. Set it before
     # fulqrum (and its OpenMP runtime) is imported inside solve_fulqrum.
@@ -125,13 +167,24 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     # Resolved once: every branch below must agree on who is in control.
-    control = is_control_process()
+    comm = _mpi_world() if _requested_backend(work_dir) == "gpu-mpi" else None
+    index = comm.Get_rank() if comm is not None else process_index()
+    control = index == 0
 
-    # A stale result must never be read as the outcome of this run. Only the
-    # control process deletes, and only output files, which nothing reads.
+    # A stale result must never be read as the outcome of this run. Each
+    # process deletes its own error file, and the control process the outputs,
+    # which nothing reads yet. With a communicator the control process also
+    # deletes every stale error file, and the barrier keeps it from deleting a
+    # file that a peer writes in this run.
+    (work_dir / io_utils.error_file_name(index)).unlink(missing_ok=True)
     if control:
-        for name in (io_utils.OUTPUT_RESULT, io_utils.OUTPUT_ARRAYS, io_utils.OUTPUT_ERROR):
+        stale = [io_utils.OUTPUT_RESULT, io_utils.OUTPUT_ARRAYS]
+        if comm is not None:
+            stale += [path.name for path in io_utils.solver_error_files(work_dir)]
+        for name in stale:
             (work_dir / name).unlink(missing_ok=True)
+    if comm is not None:
+        comm.Barrier()
 
     _default_omp_threads()
     try:
@@ -140,9 +193,13 @@ def main(argv: list[str] | None = None) -> int:
         if control:
             io_utils.write_solver_output(work_dir, solution)
     except Exception as exc:
-        logger.exception("fulqrum solve failed in %s", work_dir)
-        if control:
-            io_utils.write_solver_error(work_dir, exc)
+        logger.exception("fulqrum solve failed in %s (process %d)", work_dir, index)
+        try:
+            io_utils.write_solver_error(work_dir, exc, rank=index)
+        except OSError:
+            logger.exception("could not write the error file in %s", work_dir)
+        if comm is not None and comm.Get_size() > 1:
+            _abort(comm)
         # Every process fails the job: the scheduler may sample any one of them.
         return 1
 
