@@ -185,3 +185,16 @@ def test_run_command_merges_the_extra_environment(tmp_path: Path):
         )
     )
     assert out.split() == ["here", "True"]
+
+
+def test_run_command_removes_a_variable_set_to_none(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("QCSC_TEST_SECRET", "hidden")
+    out = asyncio.run(
+        runtime_mod.run_command(
+            sys.executable,
+            "-c",
+            "import os; print(os.environ.get('QCSC_TEST_SECRET', 'unset'))",
+            env={"QCSC_TEST_SECRET": None},
+        )
+    )
+    assert out.strip() == "unset"

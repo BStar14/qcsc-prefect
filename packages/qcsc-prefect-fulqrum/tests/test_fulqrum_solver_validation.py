@@ -118,3 +118,13 @@ def test_scipy_and_primme_get_their_tuning(monkeypatch):
         4,
         "PRIMME_DYNAMIC",
     )
+
+
+def test_the_restart_sizes_must_fit_the_basis():
+    with pytest.raises(ValueError, match="max_basis_size must be >= 2"):
+        FulqrumSolverOptions(max_basis_size=1)
+    with pytest.raises(ValueError, match="block_size \\(8\\) must be smaller"):
+        FulqrumSolverOptions(eigensolver="primme", max_basis_size=8, block_size=8)
+    with pytest.raises(ValueError, match="min_restart_size \\(9\\) must be smaller"):
+        FulqrumSolverOptions(eigensolver="primme", max_basis_size=8, min_restart_size=9)
+    FulqrumSolverOptions(eigensolver="primme", max_basis_size=8, block_size=2, min_restart_size=4)

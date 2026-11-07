@@ -369,11 +369,40 @@ def test_pre_init_cannot_run_after_qpy_so_prepare_runs_it_first(h2):
     ]
 
 
-def test_a_per_run_backend_replaces_the_resource_and_the_qpu(tmp_path):
+def test_a_per_run_backend_replaces_the_resource(tmp_path):
     block_runtime = slurm_runtime(tmp_path)
-    same = make_qrmi_runtime(block_runtime, transpile_config={}, resource="test_heron")
-    assert (same.resource, same.slurm_qpu) == ("test_heron", None)
     other = make_qrmi_runtime(block_runtime, transpile_config={}, resource="ibm_kingston")
-    assert (other.resource, other.slurm_qpu) == ("ibm_kingston", "ibm_kingston")
+    assert other.resource == "ibm_kingston"
     unset = make_qrmi_runtime(block_runtime, transpile_config={})
-    assert (unset.resource, unset.slurm_qpu) == ("test_heron", None)
+    assert unset.resource == "test_heron"
+
+
+@pytest.mark.parametrize("value", ["a,b", "a b", "ibm/x"])
+def test_the_qpu_backend_is_one_resource_name(value):
+    with pytest.raises(ValueError, match="one backend name"):
+        SamplingParameters(qpu_resource=value)
+    assert SamplingParameters(qpu_resource=" ibm_kingston ").qpu_resource == "ibm_kingston"
+    assert SamplingParameters(qpu_resource="  ").qpu_resource is None
+
+
+@pytest.mark.parametrize(
+    "other", [dict(quantum_source="random"), dict(qrmi_result_dir="/data/sqd/qrmi/x")]
+)
+def test_the_qpu_backend_needs_a_sampling_run(other):
+    with pytest.raises(ValueError, match="leave it empty"):
+        SamplingParameters(qpu_resource="ibm_kingston", **other)
+
+
+def test_runtime_table_rejects_a_secret_conflicts_and_typos(monkeypatch):
+    from sqd_common import runtime_block
+
+    monkeypatch.setenv("QRMI_IBM_QCS_IAM_APIKEY", "k")
+    base = {"scheduler": "iqp", "resource": "ibm_test"}
+    with pytest.raises(RuntimeError, match="Do not write QRMI_IBM_QCS_IAM_APIKEY"):
+        runtime_block.runtime_block_settings({**base, "QRMI_IBM_QCS_IAM_APIKEY": "x"})
+    with pytest.raises(RuntimeError, match="differ; set only service_crn"):
+        runtime_block.runtime_block_settings(
+            {**base, "service_crn": "a", "qrmi": {"QRMI_IBM_QCS_SERVICE_CRN": "b"}}
+        )
+    with pytest.raises(RuntimeError, match="Unknown \\[runtime\\] settings: service_cr"):
+        runtime_block.build_runtime_block({**base, "service_cr": "a"})

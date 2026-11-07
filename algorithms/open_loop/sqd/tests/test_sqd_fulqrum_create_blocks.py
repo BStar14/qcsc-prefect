@@ -453,3 +453,14 @@ def test_tuning_the_eigensolver_ignores_fails_in_dry_run():
         _resolve(config={**_example_config(), "block_size": 2})
     with pytest.raises(RuntimeError, match="apply to backend='gpu-mpi' only"):
         _resolve(config={**_example_config(), "process_grid": [1, 2]})
+
+
+def test_a_dice_energy_tol_in_advanced_is_ignored_on_cpu(tmp_path):
+    """Configs from before [dice] keep DICE's energy_tol in [advanced]."""
+    path = _gpu_config(tmp_path, "slurm", advanced="energy_tol = 1e-10")
+    assert _resolve(config=load_block_config(path))["energy_tol"] == 1e-6
+    (tmp_path / "gpu").mkdir()
+    gpu = _gpu_config(tmp_path / "gpu", "slurm-gpu", advanced="energy_tol = 1e-9")
+    assert _resolve(config=load_block_config(gpu))["energy_tol"] == 1e-9
+    with pytest.raises(RuntimeError, match="energy_tol apply to backend='gpu-mpi' only"):
+        _resolve(["--energy-tol", "1e-9"], config=load_block_config(path))

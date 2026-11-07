@@ -172,3 +172,22 @@ def test_dice_runtime_table_needs_the_api_key_before_any_block(monkeypatch, tmp_
     monkeypatch.setattr(sys, "argv", ["sqd-create-blocks", "--config", str(_dice_config(tmp_path))])
     with pytest.raises(RuntimeError, match="QRMI_IBM_QCS_IAM_APIKEY"):
         dice.main()
+
+
+def test_the_solver_option_selects_its_table(monkeypatch, tmp_path, capsys):
+    path = tmp_path / "sqd_blocks.toml"
+    path.write_text('solver = "fulqrum"\n[sbd]\nsolver_block_name = "my-sbd"\n')
+    create_blocks.main(["--config", str(path), "--solver", "sbd", "--dry-run"])
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["advanced_block"]["solver_block_ref"] == "sbd_solver_job/my-sbd"
+
+
+def test_sbd_saves_the_shared_qrmi_blocks(tmp_path, capsys):
+    config = tmp_path / "sqd_blocks.toml"
+    config.write_text(EXAMPLE.read_text().replace('solver = "fulqrum"', 'solver = "sbd"'))
+    create_blocks.main(["--config", str(config), "--dry-run"])
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["advanced_block"]["solver_block_ref"] == "sbd_solver_job/davidson-solver"
+    assert printed["qrmi_blocks"]["command_block_name"] == "cmd-sqd-qrmi"
+    assert printed["qrmi_blocks"]["queue"] == "normal"
+    assert printed["runtime_block"]["scheduler"] == "slurm"

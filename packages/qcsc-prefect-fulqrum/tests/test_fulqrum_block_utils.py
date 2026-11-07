@@ -292,3 +292,20 @@ def test_tuning_the_eigensolver_ignores_fails_before_any_block_is_saved(saved, t
             hpc_target="slurm", root_dir=str(tmp_path), fulqrum_executable=EXE, block_size=2
         )
     assert saved == []
+
+
+def test_a_process_grid_must_match_the_rank_count(saved, tmp_path):
+    gpu = dict(
+        hpc_target="slurm",
+        root_dir=str(tmp_path),
+        fulqrum_executable=EXE,
+        backend="gpu-mpi",
+        launcher="srun",
+        resource_class="gpu",
+        gpus_per_node=4,
+        num_nodes=2,
+    )
+    with pytest.raises(ValueError, match=r"process_grid \[2, 2\] needs 4 MPI ranks.*gives 8"):
+        mod.create_fulqrum_blocks(**gpu, process_grid=(2, 2))
+    assert saved == []
+    mod.create_fulqrum_blocks(**gpu, process_grid=(2, 4))

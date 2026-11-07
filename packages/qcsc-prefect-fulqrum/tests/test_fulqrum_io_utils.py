@@ -249,3 +249,11 @@ def test_an_unsupported_version_names_the_fix(tmp_path: Path):
     (tmp_path / "solver.json").write_text(json.dumps(spec))
     with pytest.raises(ValueError, match="same qcsc-prefect-fulqrum version"):
         io_utils.read_solver_input(tmp_path)
+
+
+def test_an_unknown_option_asks_for_the_same_version(tmp_path: Path):
+    spec = _problem_files(tmp_path, FulqrumSolverOptions(max_basis_size=40))
+    spec["options"]["from_a_newer_host"] = 1
+    (tmp_path / "solver.json").write_text(json.dumps(spec))
+    with pytest.raises(ValueError, match="unknown solver options from_a_newer_host.*same"):
+        io_utils.read_solver_input(tmp_path)

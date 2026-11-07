@@ -312,3 +312,17 @@ def test_the_advanced_transpiler_reaches_execute(stages):
     stages["advanced"]["settings"] = AdvancedSettings(sabre_layout_trials=7)
     _run(stages, _parameters())
     assert dict(stages["log"])["execute"]["advanced"].sabre_layout_trials == 7
+
+
+def test_a_missing_advanced_block_falls_back_only_for_the_default_name(monkeypatch):
+    from sqd_common import advanced
+
+    async def missing(name):
+        raise ValueError(f"Unable to find block document named {name}")
+
+    monkeypatch.setattr(advanced.SQDAdvancedSettingsBlock, "aload", missing)
+    logger = logging.getLogger(__name__)
+    settings = asyncio.run(advanced.load_advanced_settings("sqd-advanced-settings", logger))
+    assert settings == AdvancedSettings()
+    with pytest.raises(ValueError, match="No Advanced SQD Settings block 'sqd-advanced-setings'"):
+        asyncio.run(advanced.load_advanced_settings("sqd-advanced-setings", logger))

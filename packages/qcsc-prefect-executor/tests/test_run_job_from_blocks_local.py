@@ -413,6 +413,31 @@ def test_run_job_from_blocks_dispatches_to_slurm(monkeypatch, tmp_path: Path):
     assert captured["exec_profile"].pre_commands == ["echo before-run"]
     assert captured["exec_profile"].arguments == ["--base", "--override"]
 
+    asyncio.run(
+        mod.run_job_from_blocks(
+            command_block_name="cmd",
+            execution_profile_block_name="exec",
+            hpc_profile_block_name="hpc",
+            work_dir=tmp_path,
+            script_filename="job.slurm",
+            slurm_qpu="h100",
+        )
+    )
+    assert captured["req"].qpu == "h100"
+    hpc.slurm_qpu = None
+    asyncio.run(
+        mod.run_job_from_blocks(
+            command_block_name="cmd",
+            execution_profile_block_name="exec",
+            hpc_profile_block_name="hpc",
+            work_dir=tmp_path,
+            script_filename="job.slurm",
+            slurm_qpu="h100",
+        )
+    )
+    # A profile without a QPU requests none, whatever the runtime's resource.
+    assert captured["req"].qpu is None
+
 
 def _capture_slurm_run(monkeypatch) -> dict[str, object]:
     captured: dict[str, object] = {}

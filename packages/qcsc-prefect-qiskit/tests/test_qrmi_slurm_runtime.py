@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import socket
 import sys
@@ -847,7 +848,6 @@ def test_job_settings_go_to_the_sbatch_environment_not_the_files(runtime, submit
     run = replace(
         runtime,
         resource="ibm_kingston",
-        slurm_qpu="ibm_kingston",
         job_settings={"QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:x", "QRMI_IBM_QCS_SESSION_MODE": "batch"},
     )
     asyncio.run(run.sampler([(measured_circuit(),)], shots=4))
@@ -863,8 +863,23 @@ def test_job_settings_go_to_the_sbatch_environment_not_the_files(runtime, submit
         assert "crn:v1:x" not in (job_dir / name).read_text()
 
 
-def test_without_job_settings_the_submit_env_is_empty(runtime, submitted):
+def test_without_job_settings_the_submit_env_is_empty(runtime, submitted, monkeypatch):
+    for name in list(os.environ):
+        if name.endswith("QRMI_IBM_QCS_IAM_APIKEY"):
+            monkeypatch.delenv(name)
     asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
     assert submitted[0]["submit_env"] == {}
-    # Without a per-run backend, --qpu stays the HPC profile's.
-    assert submitted[0]["slurm_qpu"] is None
+    # --qpu is the resource that the request, the env prefix and the worker use.
+    assert submitted[0]["slurm_qpu"] == runtime.resource
+
+
+def test_the_workflow_api_key_is_removed_from_the_sbatch_environment(
+    runtime, submitted, monkeypatch
+):
+    monkeypatch.setenv("QRMI_IBM_QCS_IAM_APIKEY", "workflow-key")
+    monkeypatch.setenv("custom_resource_QRMI_IBM_QCS_IAM_APIKEY", "prefixed-key")
+    asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    env = submitted[0]["submit_env"]
+    assert env["QRMI_IBM_QCS_IAM_APIKEY"] is None
+    assert env["custom_resource_QRMI_IBM_QCS_IAM_APIKEY"] is None
+    assert "workflow-key" not in json.dumps(env)

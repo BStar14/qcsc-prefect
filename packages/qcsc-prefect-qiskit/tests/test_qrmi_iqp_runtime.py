@@ -759,9 +759,65 @@ def test_runtime_block_builds_slurm_runtime_and_passes_prepare(tmp_path):
 
 
 def test_runtime_block_rejects_invalid_settings_when_building_runtime():
-    block = QrmiRuntimeBlock(scheduler="iqp", resource="ibm_test")
-    with pytest.raises(ValueError, match="requires a nonempty resource_config"):
+    block = QrmiRuntimeBlock(scheduler="iqp", resource="ibm_test", service_crn="crn:v1:x")
+    with pytest.raises(ValueError, match="needs IBM Cloud API Key"):
         block.get_runtime()
+
+
+API_KEY = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-QWERT"
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        dict(scheduler="slurm", resource="r", root_dir="/x", api_key=API_KEY),
+        dict(scheduler="iqp", service_crn="c", api_key=API_KEY),
+        dict(api_key=API_KEY, scheduler="nope", resource="r"),
+    ],
+)
+def test_a_validation_error_never_shows_the_api_key(settings):
+    with pytest.raises(ValueError) as error:
+        QrmiRuntimeBlock(**settings)
+    for part in (API_KEY, API_KEY[:6], API_KEY[-6:]):
+        assert part not in str(error.value)
+
+
+def test_block_fields_are_stripped_and_blank_means_unset():
+    block = QrmiRuntimeBlock(
+        scheduler="iqp",
+        resource=" ibm_test ",
+        service_crn=" crn:v1:x\n",
+        endpoint="",
+        api_key="  ",
+    )
+    assert (block.resource, block.service_crn, block.endpoint, block.api_key) == (
+        "ibm_test",
+        "crn:v1:x",
+        None,
+        None,
+    )
+    with pytest.raises(ValueError, match="without spaces"):
+        QrmiRuntimeBlock(scheduler="iqp", resource="ibm_test", service_crn="crn v1")
+    with pytest.raises(ValueError, match="QRMI Resource is required"):
+        QrmiRuntimeBlock(scheduler="iqp", resource=" ", api_key="k")
+    # A blank key does not replace an older block's key in resource_config.
+    old = QrmiRuntimeBlock(
+        scheduler="iqp",
+        resource="ibm_test",
+        resource_config={"QRMI_IBM_QCS_IAM_APIKEY": "old-key"},
+        api_key="",
+    )
+    assert old.get_runtime().resource_config["QRMI_IBM_QCS_IAM_APIKEY"] == "old-key"
+
+
+def test_a_slurm_block_rejects_the_resource_config(tmp_path):
+    with pytest.raises(ValueError, match="only used by scheduler 'iqp'"):
+        QrmiRuntimeBlock(
+            scheduler="slurm",
+            resource="test_heron",
+            root_dir=str(tmp_path),
+            resource_config={"QRMI_IBM_QCS_SERVICE_CRN": "crn"},
+        )
 
 
 def uuid():
