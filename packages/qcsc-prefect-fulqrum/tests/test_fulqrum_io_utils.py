@@ -187,3 +187,59 @@ def test_missing_outputs_raise_file_not_found(tmp_path: Path):
     assert io_utils.read_solver_error(tmp_path) is None
     with pytest.raises(FileNotFoundError):
         io_utils.read_solver_output(tmp_path, norb=4)
+
+
+def _problem_files(tmp_path: Path, options: FulqrumSolverOptions) -> dict:
+    ci_strings, h1, eri = _problem()
+    io_utils.write_solver_input(
+        work_dir=tmp_path,
+        ci_strings=ci_strings,
+        one_body_tensor=h1,
+        two_body_tensor=eri,
+        norb=4,
+        nelec=(2, 2),
+        options=options,
+    )
+    return json.loads((tmp_path / "solver.json").read_text())
+
+
+def test_default_options_are_written_as_version_1(tmp_path: Path):
+    """A host and a node of different package versions keep working for CPU solves."""
+    spec = _problem_files(tmp_path, FulqrumSolverOptions(eigensolver="primme"))
+    assert spec["format_version"] == 1
+    assert "backend" not in spec["options"] and "carryover_fraction" not in spec["options"]
+    assert io_utils.read_solver_input(tmp_path)["options"] == FulqrumSolverOptions(
+        eigensolver="primme"
+    )
+
+
+@pytest.mark.parametrize(
+    "options", [FulqrumSolverOptions(backend="gpu"), FulqrumSolverOptions(carryover_fraction=0.5)]
+)
+def test_new_options_are_written_as_version_2(tmp_path: Path, options):
+    spec = _problem_files(tmp_path, options)
+    assert spec["format_version"] == 2
+    assert io_utils.read_solver_input(tmp_path)["options"] == options
+
+
+def test_output_without_carryover_is_version_1(tmp_path: Path):
+    solution = FulqrumSolution(
+        energy=-1.0,
+        orbital_occupancies=(np.zeros(4), np.zeros(4)),
+        ci_strs_a=np.array([3], dtype=np.int64),
+        ci_strs_b=np.array([3], dtype=np.int64),
+        amplitudes=None,
+    )
+    io_utils.write_solver_output(tmp_path, solution)
+    assert json.loads((tmp_path / "result.json").read_text())["format_version"] == 1
+    with np.load(tmp_path / "output.npz") as data:
+        assert "carryover_a" not in data.files
+
+
+def test_an_unsupported_version_names_the_fix(tmp_path: Path):
+    _problem_files(tmp_path, FulqrumSolverOptions())
+    spec = json.loads((tmp_path / "solver.json").read_text())
+    spec["format_version"] = 3
+    (tmp_path / "solver.json").write_text(json.dumps(spec))
+    with pytest.raises(ValueError, match="same qcsc-prefect-fulqrum version"):
+        io_utils.read_solver_input(tmp_path)
