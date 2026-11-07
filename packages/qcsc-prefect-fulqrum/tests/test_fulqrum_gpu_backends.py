@@ -168,7 +168,9 @@ class FakeGPU:
         return self.primme_mpi
 
     def DistributedMPIGPUHamiltonian(self, hsub, layout="tile_resident", **kwargs):
-        return FakeTileHamiltonian(hsub, kwargs["comm"], kwargs["gpu_ids"], self.process_grid)
+        self.operator_kwargs = kwargs
+        grid = kwargs.get("process_grid", self.process_grid)
+        return FakeTileHamiltonian(hsub, kwargs["comm"], kwargs["gpu_ids"], grid)
 
     def distributed_primme_eigsh(self, H, k, **kwargs):
         energy, vec = H.hsub.ground_state()
@@ -584,3 +586,43 @@ def test_fold_tile_weights_is_beta_outer_alpha_inner():
     ref_a, ref_b = marginal_weights(probs, na, nb)
     np.testing.assert_allclose(total_a, ref_a)
     np.testing.assert_allclose(total_b, ref_b)
+
+
+def test_gpu_mpi_passes_the_tuning_to_fulqrum(fake_gpu, fake_mpi):
+    comm = fake_mpi(2)
+    strs_a, strs_b, hsub = _problem()
+    options = FulqrumSolverOptions(
+        backend="gpu-mpi",
+        max_basis_size=24,
+        block_size=2,
+        min_restart_size=6,
+        convergence="energy",
+        energy_tol=1e-7,
+        process_grid=(2, 1),
+        comm_backend="host_mpi",
+    )
+    _run_ranks(comm, lambda: solver._solve_gpu_mpi(hsub, None, strs_a, strs_b, options, {}))
+    call = fake_gpu.calls[0]
+    assert (call["ncv"], call["maxBlockSize"], call["minRestartSize"]) == (24, 2, 6)
+    assert (call["conv"], call["energy_tol"]) == ("energy", 1e-7)
+    assert call["method"] == solver.GPU_MPI_DEFAULT_METHOD
+    assert fake_gpu.operator_kwargs["process_grid"] == (2, 1)
+    assert fake_gpu.operator_kwargs["comm_backend"] == "host_mpi"
+
+
+def test_gpu_mpi_defaults_leave_primme_and_the_grid_to_fulqrum(fake_gpu, fake_mpi):
+    fake_mpi(1)
+    strs_a, strs_b, hsub = _problem()
+    solver._solve_gpu_mpi(hsub, None, strs_a, strs_b, FulqrumSolverOptions(backend="gpu-mpi"), {})
+    call = fake_gpu.calls[0]
+    assert not {"ncv", "maxBlockSize", "minRestartSize"} & set(call)
+    assert (call["conv"], call["method"]) == ("abs", solver.GPU_MPI_DEFAULT_METHOD)
+    assert "process_grid" not in fake_gpu.operator_kwargs
+
+
+def test_gpu_mpi_rejects_a_grid_that_does_not_match_the_ranks(fake_gpu, fake_mpi):
+    comm = fake_mpi(2)
+    strs_a, strs_b, hsub = _problem()
+    options = FulqrumSolverOptions(backend="gpu-mpi", process_grid=(2, 2))
+    with pytest.raises(ValueError, match=r"needs 4 ranks; the job runs 2"):
+        _run_ranks(comm, lambda: solver._solve_gpu_mpi(hsub, None, strs_a, strs_b, options, {}))

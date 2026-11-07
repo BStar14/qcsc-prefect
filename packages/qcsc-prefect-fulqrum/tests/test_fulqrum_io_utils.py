@@ -214,7 +214,13 @@ def test_default_options_are_written_as_version_1(tmp_path: Path):
 
 
 @pytest.mark.parametrize(
-    "options", [FulqrumSolverOptions(backend="gpu"), FulqrumSolverOptions(carryover_fraction=0.5)]
+    "options",
+    [
+        FulqrumSolverOptions(backend="gpu"),
+        FulqrumSolverOptions(carryover_fraction=0.5),
+        FulqrumSolverOptions(max_basis_size=40),
+        FulqrumSolverOptions(backend="gpu-mpi", process_grid=(2, 1), convergence="energy"),
+    ],
 )
 def test_new_options_are_written_as_version_2(tmp_path: Path, options):
     spec = _problem_files(tmp_path, options)

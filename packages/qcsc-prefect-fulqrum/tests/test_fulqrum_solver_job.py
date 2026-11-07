@@ -200,3 +200,35 @@ def test_requested_carryover_that_selected_nothing_is_empty_not_none(monkeypatch
     result = _run(solver)
     assert result.carryover is not None
     assert [len(c) for c in result.carryover] == [0, 0]
+
+
+def test_block_tuning_reaches_the_solver_options(tmp_path: Path):
+    options = FulqrumSolverJob(
+        root_dir=str(tmp_path),
+        backend="gpu-mpi",
+        max_basis_size=32,
+        block_size=2,
+        min_restart_size=8,
+        primme_method="PRIMME_DYNAMIC",
+        convergence="energy",
+        energy_tol=1e-7,
+        process_grid=(2, 2),
+        comm_backend="nccl",
+    ).solver_options()
+    assert (options.max_basis_size, options.block_size, options.min_restart_size) == (32, 2, 8)
+    assert (options.primme_method, options.convergence, options.energy_tol) == (
+        "PRIMME_DYNAMIC",
+        "energy",
+        1e-7,
+    )
+    assert (options.process_grid, options.comm_backend) == ((2, 2), "nccl")
+
+
+def test_the_tuning_fields_are_editable_in_the_block_form():
+    properties = FulqrumSolverJob.model_json_schema()["properties"]
+    titles = {name: properties[name]["title"] for name in properties}
+    assert titles["max_basis_size"] == "Max Basis Size"
+    assert titles["block_size"] == "Block Size"
+    assert titles["process_grid"] == "Process Grid"
+    assert titles["comm_backend"] == "Communication Backend"
+    assert properties["convergence"]["enum"] == ["abs", "rel", "norm", "energy"]

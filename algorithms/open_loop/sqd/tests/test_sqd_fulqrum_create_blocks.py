@@ -414,3 +414,34 @@ def test_dry_run_of_the_gpu_profiles(tmp_path, capsys, profile, qrmi):
         assert blocks["script_filename"] == "fulqrum_solver.pbs"
         assert blocks["project"] == "gz00"
         assert "qrmi_blocks" not in printed
+
+
+def test_tuning_keys_and_flags_reach_the_solver_block():
+    config = {**_example_config(), "eigensolver": "primme", "max_basis_size": 32, "block_size": 2}
+    kwargs = _resolve(config=config)
+    assert (kwargs["max_basis_size"], kwargs["block_size"]) == (32, 2)
+    assert kwargs["process_grid"] is None and kwargs["comm_backend"] == "auto"
+    argv = ["--min-restart-size", "6", "--primme-method", "PRIMME_DYNAMIC"]
+    kwargs = _resolve(argv, config)
+    assert (kwargs["min_restart_size"], kwargs["primme_method"]) == (6, "PRIMME_DYNAMIC")
+
+
+def test_gpu_mpi_tuning_resolves_from_the_gpu_profile(tmp_path):
+    path = _gpu_config(
+        tmp_path,
+        "slurm-gpu",
+        advanced='process_grid = [2, 2]\nconvergence = "energy"\ncomm_backend = "nccl"',
+    )
+    kwargs = _resolve(config=load_block_config(path))
+    assert (kwargs["process_grid"], kwargs["convergence"], kwargs["comm_backend"]) == (
+        (2, 2),
+        "energy",
+        "nccl",
+    )
+
+
+def test_tuning_the_eigensolver_ignores_fails_in_dry_run():
+    with pytest.raises(RuntimeError, match="apply to PRIMME only"):
+        _resolve(config={**_example_config(), "block_size": 2})
+    with pytest.raises(RuntimeError, match="apply to backend='gpu-mpi' only"):
+        _resolve(config={**_example_config(), "process_grid": [1, 2]})

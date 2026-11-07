@@ -271,3 +271,24 @@ def test_gpu_mpi_rejects_the_single_launcher(tmp_path):
             gpus_per_node=4,
             backend="gpu-mpi",
         )
+
+
+def test_tuning_reaches_the_solver_block(saved, tmp_path):
+    mod.create_fulqrum_blocks(
+        hpc_target="slurm",
+        root_dir=str(tmp_path),
+        fulqrum_executable=EXE,
+        eigensolver="primme",
+        max_basis_size=32,
+        block_size=2,
+    )
+    solver = _block(saved, "solver")
+    assert (solver.max_basis_size, solver.block_size) == (32, 2)
+
+
+def test_tuning_the_eigensolver_ignores_fails_before_any_block_is_saved(saved, tmp_path):
+    with pytest.raises(ValueError, match="apply to PRIMME only"):
+        mod.create_fulqrum_blocks(
+            hpc_target="slurm", root_dir=str(tmp_path), fulqrum_executable=EXE, block_size=2
+        )
+    assert saved == []
