@@ -166,3 +166,81 @@ def test_local_rejects_shell_setup(tmp_path):
             modules=["gcc"],
             pre_commands=["source env.sh"],
         )
+
+
+def test_gpu_mpi_runs_one_rank_per_gpu(saved, tmp_path):
+    mod.create_fulqrum_blocks(
+        hpc_target="slurm",
+        queue="gpu",
+        root_dir=str(tmp_path),
+        fulqrum_executable=EXE,
+        launcher="srun",
+        resource_class="gpu",
+        gpus_per_node=4,
+        ompthreads=8,
+        backend="gpu-mpi",
+        carryover_fraction=0.25,
+    )
+    execution = _block(saved, "execution")
+    solver = _block(saved, "solver")
+    assert execution.resource_class == "gpu"
+    assert (execution.gpus_per_node, execution.mpiprocs, execution.ompthreads) == (4, 4, 8)
+    assert execution.launcher == "srun"
+    assert (solver.backend, solver.carryover_fraction) == ("gpu-mpi", 0.25)
+
+
+def test_gpu_mpi_keeps_an_explicit_mpiprocs(saved, tmp_path):
+    mod.create_fulqrum_blocks(
+        hpc_target="slurm",
+        root_dir=str(tmp_path),
+        fulqrum_executable=EXE,
+        launcher="srun",
+        gpus_per_node=4,
+        mpiprocs=2,
+        backend="gpu-mpi",
+    )
+    assert _block(saved, "execution").mpiprocs == 2
+
+
+def test_gpu_mpi_without_gpus_per_node_runs_one_rank(saved, tmp_path):
+    mod.create_fulqrum_blocks(
+        hpc_target="slurm",
+        root_dir=str(tmp_path),
+        fulqrum_executable=EXE,
+        launcher="mpirun",
+        backend="gpu-mpi",
+    )
+    execution = _block(saved, "execution")
+    assert (execution.gpus_per_node, execution.mpiprocs) == (None, 1)
+
+
+def test_cpu_defaults_are_unchanged(saved, tmp_path):
+    mod.create_fulqrum_blocks(hpc_target="slurm", root_dir=str(tmp_path), fulqrum_executable=EXE)
+    execution = _block(saved, "execution")
+    solver = _block(saved, "solver")
+    assert (execution.launcher, execution.mpiprocs, execution.gpus_per_node) == ("single", 1, None)
+    assert (solver.backend, solver.carryover_fraction) == ("cpu", 0.0)
+
+
+def test_single_gpu_backend_keeps_one_process(saved, tmp_path):
+    mod.create_fulqrum_blocks(
+        hpc_target="slurm",
+        root_dir=str(tmp_path),
+        fulqrum_executable=EXE,
+        gpus_per_node=1,
+        backend="gpu",
+    )
+    execution = _block(saved, "execution")
+    assert (execution.launcher, execution.mpiprocs, execution.gpus_per_node) == ("single", 1, 1)
+    assert _block(saved, "solver").backend == "gpu"
+
+
+def test_gpu_mpi_rejects_the_single_launcher(tmp_path):
+    with pytest.raises(ValueError, match="MPI launcher"):
+        mod.create_fulqrum_blocks(
+            hpc_target="slurm",
+            root_dir=str(tmp_path),
+            fulqrum_executable=EXE,
+            gpus_per_node=4,
+            backend="gpu-mpi",
+        )
