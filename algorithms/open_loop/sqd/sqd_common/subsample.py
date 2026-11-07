@@ -8,9 +8,10 @@ same subspaces for the same RNG state.
 - Open-shell batches keep at least one string per spin, so a very small
   ``subspace_dim`` cannot produce an empty subspace.
 - Carryover CI strings, the heaviest strings of the previous iteration's ground
-  state, come first in every batch and count toward its size. The rest of a
-  batch is drawn from the sampled strings without them. Without carryover the
-  batches and the RNG draws are those of plain subsampling.
+  state, come first in every batch and count toward its size, but take at most
+  ``carryover_fraction`` of it. The rest of a batch is drawn from the sampled
+  strings without them. Without carryover the batches and the RNG draws are
+  those of plain subsampling.
 """
 
 from typing import Iterator
@@ -77,6 +78,7 @@ def subsample(
     open_shell: bool = False,
     carryover: tuple[np.ndarray, np.ndarray] | None = None,
     nelec: tuple[int, int] | None = None,
+    carryover_fraction: float = 1.0,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     """Subsample batches of integer representation of determinants from unique set.
 
@@ -98,11 +100,14 @@ def subsample(
             the beta strings, without repeats, for both spins.
         nelec: Number of alpha and beta electrons, to check the carryover strings.
             Defaults to the Hamming weights of the first row of ``bitstring_matrix``.
+        carryover_fraction: Largest share of each batch the carryover strings take,
+            per spin. The heaviest ones are kept when there are more.
 
     Batches have at most ``max(1, int(sqrt(subspace_dim)))`` strings (closed shell)
     or the per-spin sizes of plain subsampling (open shell). The carryover strings
-    fill a batch first, truncated to that size, and the rest is drawn without
-    replacement from the other sampled strings, with renormalized probabilities.
+    fill a batch first, at most ``int(carryover_fraction * size)`` of them, and the
+    rest is drawn without replacement from the other sampled strings, with
+    renormalized probabilities.
     When the sampled and carryover strings together fit in ``subspace_dim``, the one
     batch is their union.
 
@@ -127,14 +132,10 @@ def subsample(
         ci_strs_all = _union(ci_strs_unique, forced)
         net_dim = len(ci_strs_all) ** 2
         if net_dim > subspace_dim:
+            size = max(1, int(np.sqrt(subspace_dim)))
+            draw = _Draw(ci_strs_unique, ci_probs_unique, forced, size, carryover_fraction)
             for _ in range(num_batches):
-                ci_strs_subsampled = _draw_with_forced(
-                    ci_strs_unique,
-                    ci_probs_unique,
-                    forced,
-                    size=max(1, int(np.sqrt(subspace_dim))),
-                    rng=rng,
-                )
+                ci_strs_subsampled = draw(rng)
                 yield (ci_strs_subsampled, ci_strs_subsampled)
         else:
             # Only returns a single set because running diagonalization
@@ -154,21 +155,23 @@ def subsample(
         net_dim = len(ci_strs_a_all) * len(ci_strs_b_all)
         truncate_rate = np.sqrt(subspace_dim / net_dim)
         if net_dim > subspace_dim:
+            draw_a = _Draw(
+                ci_strs_a_unique,
+                ci_probs_a_unique,
+                carry_a,
+                max(1, int(len(ci_strs_a_all) * truncate_rate)),
+                carryover_fraction,
+            )
+            draw_b = _Draw(
+                ci_strs_b_unique,
+                ci_probs_b_unique,
+                carry_b,
+                max(1, int(len(ci_strs_b_all) * truncate_rate)),
+                carryover_fraction,
+            )
             for _ in range(num_batches):
-                ci_strs_a_subsampled = _draw_with_forced(
-                    ci_strs_a_unique,
-                    ci_probs_a_unique,
-                    carry_a,
-                    size=max(1, int(len(ci_strs_a_all) * truncate_rate)),
-                    rng=rng,
-                )
-                ci_strs_b_subsampled = _draw_with_forced(
-                    ci_strs_b_unique,
-                    ci_probs_b_unique,
-                    carry_b,
-                    size=max(1, int(len(ci_strs_b_all) * truncate_rate)),
-                    rng=rng,
-                )
+                ci_strs_a_subsampled = draw_a(rng)
+                ci_strs_b_subsampled = draw_b(rng)
                 yield (ci_strs_a_subsampled, ci_strs_b_subsampled)
         else:
             # Only returns a single set because running diagonalization
@@ -222,38 +225,52 @@ def _union(ci_strs_unique: np.ndarray, forced: np.ndarray) -> np.ndarray:
     return np.unique(np.concatenate((ci_strs_unique, forced)))
 
 
-def _draw_with_forced(
-    ci_strs_unique: np.ndarray,
-    ci_probs_unique: np.ndarray,
-    forced: np.ndarray,
-    *,
-    size: int,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    """``size`` strings: the forced ones first, then ones drawn from the rest.
+class _Draw:
+    """Draws the batches of one spin: the forced strings first, then sampled ones.
 
-    Without forced strings, this is the plain draw of ``size`` strings, so the RNG
-    stream is the same as without carryover.
+    The forced (carryover) strings are cut to ``int(carryover_fraction * size)``,
+    heaviest first, so the sampled strings always fill the rest of a batch unless
+    the fraction is 1. The pool without the forced strings is the same for every
+    batch, so it is computed once here, not per batch. Without forced strings a
+    draw is the plain draw of ``size`` strings, so the RNG stream is the same as
+    without carryover.
     """
-    if len(forced) == 0:
-        return rng.choice(ci_strs_unique, size=size, replace=False, p=ci_probs_unique)
-    forced = forced[:size]
-    remaining = size - len(forced)
-    if remaining <= 0:
-        return forced
-    mask = ~np.isin(ci_strs_unique, forced)
-    candidates, weights = ci_strs_unique[mask], ci_probs_unique[mask]
-    if len(candidates) <= remaining:
-        drawn = candidates
-    else:
+
+    def __init__(
+        self,
+        ci_strs_unique: np.ndarray,
+        ci_probs_unique: np.ndarray,
+        forced: np.ndarray,
+        size: int,
+        carryover_fraction: float,
+    ) -> None:
+        self.size = size
+        self.forced = forced[: min(size, int(carryover_fraction * size))]
+        if len(self.forced) == 0:
+            self.candidates, self.weights = ci_strs_unique, ci_probs_unique
+            return
+        if ci_strs_unique.dtype == object:
+            # np.isin compares object arrays pairwise; a set lookup is linear.
+            kept = set(self.forced.tolist())
+            mask = np.array([ci not in kept for ci in ci_strs_unique.tolist()], dtype=bool)
+        else:
+            mask = ~np.isin(ci_strs_unique, self.forced)
+        self.candidates = ci_strs_unique[mask]
+        weights = ci_probs_unique[mask]
         total = weights.sum()
-        drawn = rng.choice(
-            candidates,
-            size=remaining,
-            replace=False,
-            p=weights / total if total > 0 else None,
-        )
-    return np.concatenate((forced, drawn))
+        self.weights = weights / total if total > 0 else None
+
+    def __call__(self, rng: np.random.Generator) -> np.ndarray:
+        if len(self.forced) == 0:
+            return rng.choice(self.candidates, size=self.size, replace=False, p=self.weights)
+        remaining = self.size - len(self.forced)
+        if remaining <= 0:
+            return self.forced
+        if len(self.candidates) <= remaining:
+            drawn = self.candidates
+        else:
+            drawn = rng.choice(self.candidates, size=remaining, replace=False, p=self.weights)
+        return np.concatenate((self.forced, drawn))
 
 
 def _unique_and_accumulate_probs(

@@ -216,6 +216,11 @@ async def run_configuration_recovery(
         )
     norb = raw_bitstrings.shape[1] // 2
     warned_no_carryover = False
+    if carryover_fraction >= 1.0:
+        logger.warning(
+            "carryover_fraction=1: from the second iteration on, the carryover strings can "
+            "fill a whole subspace, and then no recovered sample enters it."
+        )
     best_result: SCIResult | None = None
     outcome_records: list[dict] = []
     round_energies: list[float] = []
@@ -256,6 +261,7 @@ async def run_configuration_recovery(
             open_shell=open_shell,
             carryover=current_carryover if _has_carryover(current_carryover) else None,
             nelec=nelec,
+            carryover_fraction=carryover_fraction,
         )
         if batch_transform is not None:
             batches = batch_transform(batches, rng, current_carryover)
