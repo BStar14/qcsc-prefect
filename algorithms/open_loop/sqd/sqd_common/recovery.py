@@ -25,8 +25,13 @@ from sqd_common.subsample import postselect, subsample
 
 SolveFn = Callable[[tuple[np.ndarray, np.ndarray]], Awaitable[SCIResult]]
 # Maps the subsampled batches of a round, and the loop's RNG, to the batches solved.
+# The carryover CI strings of the round come third, so the transform can keep them.
 BatchTransformFn = Callable[
-    [Iterable[tuple[np.ndarray, np.ndarray]], np.random.Generator],
+    [
+        Iterable[tuple[np.ndarray, np.ndarray]],
+        np.random.Generator,
+        tuple[np.ndarray, np.ndarray],
+    ],
     Iterable[tuple[np.ndarray, np.ndarray]],
 ]
 # Called after each round with (next_round, occupancies for it, best total energy so far,
@@ -186,8 +191,9 @@ async def run_configuration_recovery(
         best_energy: Best total energy of those rounds.
         on_round_end: Called after each round, for example to write a checkpoint.
         batch_transform: Rewrites the subsampled batches of each round before they are
-            solved, for a solver that needs another input form (SBD). It draws from
-            ``rng`` after the subsampling, so the subspaces of the next round change.
+            solved, for a solver that needs another input form (SBD). It also gets the
+            round's carryover strings, to keep them. It draws from ``rng`` after the
+            subsampling, so the subspaces of the next round change.
         initial_carryover: Alpha and beta carryover CI strings for the first round.
         carryover_fraction: Share of each spin's strings kept as carryover, read from
             the best result of each round with :func:`carryover_of`. ``0`` uses no
@@ -250,7 +256,7 @@ async def run_configuration_recovery(
             nelec=nelec,
         )
         if batch_transform is not None:
-            batches = batch_transform(batches, rng)
+            batches = batch_transform(batches, rng, current_carryover)
         batches = list(batches)
         results: list[SCIResult] = await asyncio.gather(*(solve(ci) for ci in batches))
 

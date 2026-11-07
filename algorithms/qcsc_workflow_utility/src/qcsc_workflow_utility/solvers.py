@@ -43,14 +43,17 @@ def to_sbd_closed_shell(
     num_elec_a: int,
     probabilities: Mapping[int, float] | None = None,
     rng: np.random.Generator | None = None,
+    keep: Iterable[int] | None = None,
 ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     """Convert open-loop closed-shell subspaces into the form the SBD solver requires.
 
     Each batch ``(s, s)`` becomes ``(t, t)`` where ``t`` starts with the Hartree-Fock
     determinant ``(1 << num_elec_a) - 1``, followed by the other determinants of ``s``.
     The subspace size limit is kept: at most ``int(sqrt(subspace_dim)) - 1`` determinants
-    other than Hartree-Fock. When ``s`` has more, they are chosen without replacement,
-    weighted by ``probabilities`` (uniform if omitted), with ``rng``.
+    other than Hartree-Fock. When ``s`` has more, the ones in ``keep`` (for example the
+    carryover strings of the previous iteration) are kept first, in the order of ``s``, and
+    the rest are chosen without replacement, weighted by ``probabilities`` (uniform if
+    omitted), with ``rng``.
 
     This always includes Hartree-Fock, so the subspace differs from the one DICE gets.
     Open-shell batches (different alpha and beta sets) are passed through unchanged; the
@@ -60,6 +63,7 @@ def to_sbd_closed_shell(
     limit = int(np.sqrt(subspace_dim)) - 1
     if limit < 0:
         raise ValueError("subspace_dim must be at least 1")
+    kept_strings = {int(ci) for ci in keep} if keep is not None else set()
     for alpha, beta in batches:
         alpha = np.asarray(alpha, dtype=np.longlong).reshape(-1)
         beta = np.asarray(beta, dtype=np.longlong).reshape(-1)
@@ -70,10 +74,15 @@ def to_sbd_closed_shell(
         if len(others) > limit:
             if rng is None:
                 raise ValueError("rng is required to subsample the SBD subspace")
+            is_kept = np.array([int(ci) in kept_strings for ci in others], dtype=bool)
+            forced = alpha[np.isin(alpha, others[is_kept])]
+            forced = forced[np.sort(np.unique(forced, return_index=True)[1])][:limit]
+            candidates = others[~np.isin(others, forced)]
             weights = None
             if probabilities is not None:
-                weights = np.array([probabilities.get(int(ci), 0.0) for ci in others])
+                weights = np.array([probabilities.get(int(ci), 0.0) for ci in candidates])
                 weights = weights / weights.sum() if weights.sum() > 0 else None
-            others = rng.choice(others, size=limit, replace=False, p=weights)
+            drawn = rng.choice(candidates, size=limit - len(forced), replace=False, p=weights)
+            others = np.concatenate((forced, drawn))
         strings = np.concatenate(([hartree_fock], others)).astype(np.longlong)
         yield strings, strings

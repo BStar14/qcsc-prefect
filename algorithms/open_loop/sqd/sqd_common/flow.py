@@ -79,16 +79,24 @@ def check_solver_input(slug: str, elec_props: ElectronicProperties) -> None:
 def batch_transform(
     slug: str, subspace_dim: int, elec_props: ElectronicProperties
 ) -> BatchTransformFn | None:
-    """SBD needs the Hartree-Fock determinant first and one set for alpha and beta."""
+    """SBD needs the Hartree-Fock determinant first and one set for alpha and beta.
+
+    Adding Hartree-Fock can push a batch over its size, and then the carryover strings
+    of the round are kept and another string is dropped.
+    """
     if slug != SBD_SLUG:
         return None
 
-    def to_sbd(batches, rng):
+    def to_sbd(batches, rng, carryover=None):
+        keep = None
+        if carryover is not None:
+            keep = [int(ci) for strings in carryover for ci in np.asarray(strings).reshape(-1)]
         return to_sbd_closed_shell(
             batches,
             subspace_dim=subspace_dim,
             num_elec_a=elec_props.num_electrons[0],
             rng=rng,
+            keep=keep,
         )
 
     return to_sbd
