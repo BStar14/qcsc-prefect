@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from qcsc_prefect_core.models.gpu_request import validate_gpu_request
+from qcsc_prefect_fulqrum.solver import FulqrumSolverOptions
 from sqd_common.block_config import load_block_config
 from sqd_common.runtime_block import (
     build_runtime_block,
@@ -106,6 +107,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tol", type=float)
     parser.add_argument("--max-iter", type=int)
     parser.add_argument("--dense-max-dim", type=int)
+    parser.add_argument("--max-basis-size", type=int)
+    parser.add_argument("--block-size", type=int)
+    parser.add_argument("--min-restart-size", type=int)
+    parser.add_argument("--primme-method")
+    parser.add_argument("--convergence", choices=["abs", "rel", "norm", "energy"])
+    parser.add_argument("--energy-tol", type=float)
+    parser.add_argument(
+        "--process-grid",
+        type=int,
+        nargs=2,
+        metavar=("P_ALPHA", "P_BETA"),
+        help="gpu-mpi: ranks over the alpha and beta strings; their product is the rank count.",
+    )
+    parser.add_argument("--comm-backend", choices=["auto", "nccl", "host_mpi", "cuda_mpi"])
     parser.add_argument(
         "--return-sci-state",
         action=argparse.BooleanOptionalAction,
@@ -187,6 +202,49 @@ def _default_names(*, hpc_target: str) -> dict[str, str]:
         "script_filename": f"fulqrum_solver{suffix}",
         "metrics_artifact_key": f"{hpc_target}-sqd-fulqrum-metrics",
     }
+
+
+# create_fulqrum_blocks keywords that are FulqrumSolverOptions fields too.
+_SOLVER_OPTION_KEYS = (
+    "eigensolver",
+    "hamiltonian_format",
+    "tol",
+    "max_iter",
+    "dense_max_dim",
+    "backend",
+    "max_basis_size",
+    "block_size",
+    "min_restart_size",
+    "primme_method",
+    "convergence",
+    "energy_tol",
+    "process_grid",
+    "comm_backend",
+)
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
+def _tuning_settings(pick) -> dict[str, Any]:
+    """The eigensolver tuning keys; unset ones keep the solver block defaults."""
+    grid = pick("process_grid")
+    if grid is not None:
+        grid = tuple(int(p) for p in grid)
+        if len(grid) != 2:
+            raise RuntimeError(f"'process_grid' must be [alpha ranks, beta ranks]; got {grid}.")
+    method = pick("primme_method")
+    return dict(
+        max_basis_size=_optional_int(pick("max_basis_size")),
+        block_size=_optional_int(pick("block_size")),
+        min_restart_size=_optional_int(pick("min_restart_size")),
+        primme_method=None if method is None else str(method).strip(),
+        convergence=str(pick("convergence", "abs")).strip(),
+        energy_tol=float(pick("energy_tol", 1e-6)),
+        process_grid=grid,
+        comm_backend=str(pick("comm_backend", "auto")).strip(),
+    )
 
 
 def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
@@ -283,6 +341,7 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         max_iter=None if max_iter is None else int(max_iter),
         dense_max_dim=int(pick("dense_max_dim", 64)),
         return_sci_state=bool(pick("return_sci_state", False)),
+        **_tuning_settings(pick),
         backend=backend,
         slurm_memory=_optional_str(pick("slurm_memory")),
         gfscache=_optional_str(_pick_value(args.fugaku_gfscache, config.get("fugaku_gfscache"))),
@@ -302,6 +361,8 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
             resource_class=block_kwargs["resource_class"],
             gpus_per_node=gpus_per_node,
         )
+        # The eigensolver tuning must fit the eigensolver and backend; --dry-run checks it too.
+        FulqrumSolverOptions(**{k: block_kwargs[k] for k in _SOLVER_OPTION_KEYS})
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
     return block_kwargs

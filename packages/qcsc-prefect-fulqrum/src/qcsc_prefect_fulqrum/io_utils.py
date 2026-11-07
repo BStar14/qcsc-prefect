@@ -51,7 +51,18 @@ FORMAT_VERSION = 2
 # Versions this module reads; a missing key of an older version takes its default.
 READABLE_FORMAT_VERSIONS = (1, 2)
 # Solver options that version 2 added, with the values a version 1 solve implies.
-_V2_OPTION_DEFAULTS = {"backend": "cpu", "carryover_fraction": 0.0}
+_V2_OPTION_DEFAULTS = {
+    "backend": "cpu",
+    "carryover_fraction": 0.0,
+    "max_basis_size": None,
+    "block_size": None,
+    "min_restart_size": None,
+    "primme_method": None,
+    "convergence": "abs",
+    "energy_tol": 1e-6,
+    "process_grid": None,
+    "comm_backend": "auto",
+}
 INPUT_ARRAYS = "input.npz"
 INPUT_SPEC = "solver.json"
 OUTPUT_ARRAYS = "output.npz"

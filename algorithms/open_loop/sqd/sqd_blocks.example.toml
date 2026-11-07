@@ -69,6 +69,14 @@ python_executable = "/opt/venvs/qrmi/bin/python"
 # return_sci_state = false          # The workflow only needs energies and occupancies
 # backend = "cpu"                   # "gpu" or "gpu-mpi" (set by the GPU profiles)
 # gpus_per_node = 4                 # Scheduler GPU request; unset for CPU runs
+# max_basis_size = 64               # Eigensolver search subspace (ncv); scipy, primme, gpu-mpi
+# block_size = 4                    # PRIMME block size; primme and gpu-mpi
+# min_restart_size = 16             # PRIMME restart size; primme and gpu-mpi
+# primme_method = "PRIMME_DYNAMIC"  # PRIMME preset; primme and gpu-mpi
+# convergence = "abs"               # gpu-mpi: abs, rel, norm or energy
+# energy_tol = 1e-6                 # gpu-mpi with convergence = "energy"
+# process_grid = [2, 2]             # gpu-mpi: alpha x beta ranks, product = MPI ranks
+# comm_backend = "auto"             # gpu-mpi: auto, nccl, host_mpi or cuda_mpi
 # # DICE tuning
 # select_cutoff = 5e-4
 # davidson_tol = 1e-5

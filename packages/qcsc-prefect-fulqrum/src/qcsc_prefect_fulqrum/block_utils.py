@@ -8,6 +8,7 @@ from typing import Literal
 from qcsc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
 from qcsc_prefect_core.models.gpu_request import validate_gpu_request
 
+from .solver import FulqrumSolverOptions
 from .solver_job import FulqrumSolverJob
 
 
@@ -60,6 +61,14 @@ def create_fulqrum_blocks(
     dense_max_dim: int = 64,
     return_sci_state: bool = True,
     backend: Literal["cpu", "gpu", "gpu-mpi"] = "cpu",
+    max_basis_size: int | None = None,
+    block_size: int | None = None,
+    min_restart_size: int | None = None,
+    primme_method: str | None = None,
+    convergence: Literal["abs", "rel", "norm", "energy"] = "abs",
+    energy_tol: float = 1e-6,
+    process_grid: tuple[int, int] | None = None,
+    comm_backend: Literal["auto", "nccl", "host_mpi", "cuda_mpi"] = "auto",
     slurm_memory: str | None = None,
     gfscache: str | None = None,
     spack_modules: list[str] | None = None,
@@ -86,6 +95,12 @@ def create_fulqrum_blocks(
     execution reject it, and Miyabi-G accepts only 1. These are checked here, before
     any block is saved. The solver block's
     ``carryover_fraction`` is left at 0; the SQD flow sets it for each run.
+
+    The eigensolver tuning (``max_basis_size``, ``block_size``,
+    ``min_restart_size``, ``primme_method``, and for ``gpu-mpi`` ``convergence``,
+    ``energy_tol``, ``process_grid`` and ``comm_backend``) is checked against the
+    eigensolver and backend before any block is saved, so an option the solver would
+    ignore fails here.
 
     When ``ompthreads`` is set and ``environments`` has no ``OMP_NUM_THREADS``,
     it is exported with the same value, because not every scheduler template
@@ -121,6 +136,24 @@ def create_fulqrum_blocks(
         mpiprocs = gpus_per_node
     if mpiprocs is None:
         mpiprocs = 1
+
+    # Raises for tuning the eigensolver or backend would ignore, before any block is saved.
+    FulqrumSolverOptions(
+        eigensolver=eigensolver,
+        hamiltonian_format=hamiltonian_format,
+        tol=tol,
+        max_iter=max_iter,
+        dense_max_dim=dense_max_dim,
+        backend=backend,
+        max_basis_size=max_basis_size,
+        block_size=block_size,
+        min_restart_size=min_restart_size,
+        primme_method=primme_method,
+        convergence=convergence,
+        energy_tol=energy_tol,
+        process_grid=process_grid,
+        comm_backend=comm_backend,
+    )
 
     register_fulqrum_block_types()
 
@@ -190,6 +223,14 @@ def create_fulqrum_blocks(
         dense_max_dim=dense_max_dim,
         return_sci_state=return_sci_state,
         backend=backend,
+        max_basis_size=max_basis_size,
+        block_size=block_size,
+        min_restart_size=min_restart_size,
+        primme_method=primme_method,
+        convergence=convergence,
+        energy_tol=energy_tol,
+        process_grid=process_grid,
+        comm_backend=comm_backend,
     ).save(solver_block_name, overwrite=True)
 
     return {

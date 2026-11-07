@@ -48,6 +48,12 @@ Eigensolver = Literal["scipy", "primme"]
 HamiltonianFormat = Literal["csr", "matrix_free"]
 Backend = Literal["cpu", "gpu", "gpu-mpi"]
 BACKENDS = ("cpu", "gpu", "gpu-mpi")
+Convergence = Literal["abs", "rel", "norm", "energy"]
+CONVERGENCE_TESTS = ("abs", "rel", "norm", "energy")
+CommBackend = Literal["auto", "nccl", "host_mpi", "cuda_mpi"]
+COMM_BACKENDS = ("auto", "nccl", "host_mpi", "cuda_mpi")
+# Distributed PRIMME's default method in fulqrum 1.0 (primme_distributed.py at 2e2d66e).
+GPU_MPI_DEFAULT_METHOD = "PRIMME_GD_Olsen_plusK"
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,24 @@ class FulqrumSolverOptions:
         backend: ``"cpu"``, ``"gpu"`` or ``"gpu-mpi"``; see the module docstring.
         carryover_fraction: Share of each spin's CI strings returned as carryover,
             heaviest first, in ``[0, 1]``. ``0`` returns none.
+        max_basis_size: Largest search subspace of the iterative eigensolver
+            (``ncv`` of scipy, PRIMME and distributed PRIMME). ``None`` uses the
+            solver default.
+        block_size: PRIMME block size (``maxBlockSize``), the number of vectors
+            expanded per step. ``primme`` and ``gpu-mpi`` only.
+        min_restart_size: Vectors PRIMME keeps at a restart (``minRestartSize``).
+            ``primme`` and ``gpu-mpi`` only.
+        primme_method: PRIMME preset (``method``). ``None`` keeps PRIMME's choice
+            for ``primme`` and ``PRIMME_GD_Olsen_plusK`` for ``gpu-mpi``.
+        convergence: Stopping test of distributed PRIMME (``conv``): ``abs``,
+            ``rel``, ``norm`` or ``energy``. ``gpu-mpi`` only.
+        energy_tol: Ritz-value stability tolerance of the ``energy`` test.
+            ``gpu-mpi`` only.
+        process_grid: ``(p_alpha, p_beta)`` ranks over the alpha and beta strings,
+            whose product is the number of ranks. ``None`` lets fulqrum choose.
+            ``gpu-mpi`` only.
+        comm_backend: Transport between ranks: ``auto``, ``nccl``, ``host_mpi``
+            or ``cuda_mpi``. ``gpu-mpi`` only.
     """
 
     eigensolver: Eigensolver = "scipy"
@@ -80,6 +104,14 @@ class FulqrumSolverOptions:
     return_amplitudes: bool = True
     backend: Backend = "cpu"
     carryover_fraction: float = 0.0
+    max_basis_size: int | None = None
+    block_size: int | None = None
+    min_restart_size: int | None = None
+    primme_method: str | None = None
+    convergence: Convergence = "abs"
+    energy_tol: float = 1e-6
+    process_grid: tuple[int, int] | None = None
+    comm_backend: CommBackend = "auto"
 
     def __post_init__(self) -> None:
         if self.eigensolver not in ("scipy", "primme"):
@@ -94,6 +126,46 @@ class FulqrumSolverOptions:
             raise ValueError(f"Unknown backend: {self.backend!r}")
         if not 0.0 <= self.carryover_fraction <= 1.0:
             raise ValueError(f"carryover_fraction must be in [0, 1], got {self.carryover_fraction}")
+        for name in ("max_basis_size", "block_size", "min_restart_size"):
+            value = getattr(self, name)
+            if value is not None and value < 1:
+                raise ValueError(f"{name} must be >= 1, got {value}")
+        if self.convergence not in CONVERGENCE_TESTS:
+            raise ValueError(f"Unknown convergence: {self.convergence!r}")
+        if self.energy_tol <= 0:
+            raise ValueError(f"energy_tol must be > 0, got {self.energy_tol}")
+        if self.comm_backend not in COMM_BACKENDS:
+            raise ValueError(f"Unknown comm_backend: {self.comm_backend!r}")
+        if self.process_grid is not None:
+            grid = tuple(int(p) for p in self.process_grid)
+            if len(grid) != 2 or min(grid) < 1:
+                raise ValueError(f"process_grid must be two positive integers, got {grid}")
+            # JSON gives a list back; keep a tuple so options compare equal.
+            object.__setattr__(self, "process_grid", grid)
+        # Options the selected eigensolver cannot use fail here, not on the node.
+        primme_only = ("block_size", "min_restart_size", "primme_method")
+        if self.backend != "gpu-mpi" and self.eigensolver == "scipy":
+            unused = [name for name in primme_only if getattr(self, name) is not None]
+            if unused:
+                raise ValueError(
+                    f"{', '.join(unused)} apply to PRIMME only; set eigensolver='primme' or "
+                    "backend='gpu-mpi', or leave them unset"
+                )
+        if self.backend != "gpu-mpi":
+            unused = [
+                name
+                for name, default in (
+                    ("convergence", "abs"),
+                    ("energy_tol", 1e-6),
+                    ("process_grid", None),
+                    ("comm_backend", "auto"),
+                )
+                if getattr(self, name) != default
+            ]
+            if unused:
+                raise ValueError(
+                    f"{', '.join(unused)} apply to backend='gpu-mpi' only; leave them unset"
+                )
 
 
 @dataclass
@@ -190,14 +262,34 @@ def _eigsh_lowest(op, dim: int, v0: np.ndarray, options: FulqrumSolverOptions):
             v0=v0.reshape(dim, 1),
             tol=options.tol,
             maxiter=options.max_iter,
+            **_primme_options(options),
         )
     else:
         import scipy.sparse.linalg as spla
 
+        extra = {}
+        if options.max_basis_size is not None:
+            # ARPACK needs k < ncv <= dim.
+            extra["ncv"] = min(max(options.max_basis_size, 2), dim)
         evals, evecs = spla.eigsh(
-            op, k=1, which="SA", v0=v0, tol=options.tol, maxiter=options.max_iter
+            op, k=1, which="SA", v0=v0, tol=options.tol, maxiter=options.max_iter, **extra
         )
     return float(np.real(evals[0])), np.asarray(evecs).reshape(dim)
+
+
+def _primme_options(options: FulqrumSolverOptions) -> dict:
+    """The set PRIMME options, as ``primme.eigsh`` and distributed PRIMME name them."""
+    names = {
+        "max_basis_size": "ncv",
+        "block_size": "maxBlockSize",
+        "min_restart_size": "minRestartSize",
+        "primme_method": "method",
+    }
+    return {
+        kwarg: getattr(options, field)
+        for field, kwarg in names.items()
+        if getattr(options, field) is not None
+    }
 
 
 def _build_hamiltonian(h1, eri, strs_a, strs_b, norb: int, timings: dict):
@@ -497,7 +589,15 @@ def _solve_gpu_mpi(hsub, subspace, strs_a, strs_b, options: FulqrumSolverOptions
     na, nb = len(strs_a), len(strs_b)
     device = _local_rank() % _device_count(cupy)
     t0 = time.perf_counter()
-    H = fq_gpu.DistributedMPIGPUHamiltonian(hsub, comm=comm, gpu_ids=(device,))
+    grid_kwargs = {} if options.process_grid is None else {"process_grid": options.process_grid}
+    if options.process_grid is not None and np.prod(options.process_grid) != comm.Get_size():
+        raise ValueError(
+            f"process_grid {options.process_grid} needs {int(np.prod(options.process_grid))} "
+            f"ranks; the job runs {comm.Get_size()}"
+        )
+    H = fq_gpu.DistributedMPIGPUHamiltonian(
+        hsub, comm=comm, gpu_ids=(device,), comm_backend=options.comm_backend, **grid_kwargs
+    )
     ranges = _tile_ranges(H, na, nb)
     timings["projection"] = time.perf_counter() - t0
     if comm.Get_rank() == 0:
@@ -518,6 +618,9 @@ def _solve_gpu_mpi(hsub, subspace, strs_a, strs_b, options: FulqrumSolverOptions
         v0_local=_distributed_v0(diag, comm, MPI),
         precond_diag_local=diag,
         gpu="auto",
+        conv=options.convergence,
+        energy_tol=options.energy_tol,
+        **{"method": GPU_MPI_DEFAULT_METHOD, **_primme_options(options)},
     )
     energy = float(np.real(evals[0]))
     timings["eigensolve"] = time.perf_counter() - t0

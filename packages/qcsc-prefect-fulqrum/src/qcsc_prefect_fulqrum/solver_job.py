@@ -19,7 +19,7 @@ from .io_utils import (
     read_solver_output,
     write_solver_input,
 )
-from .solver import Backend, FulqrumSolution, FulqrumSolverOptions
+from .solver import Backend, CommBackend, Convergence, FulqrumSolution, FulqrumSolverOptions
 
 
 def _logger():
@@ -118,6 +118,73 @@ class FulqrumSolverJob(Block):
             "Carryover Fraction parameter for each run, so leave it at 0 in the block."
         ),
     )
+    max_basis_size: int | None = Field(
+        default=None,
+        gt=0,
+        title="Max Basis Size",
+        description=(
+            "Largest search subspace of the eigensolver (ncv), for scipy, primme and "
+            "gpu-mpi. A larger basis converges in fewer iterations but needs more memory. "
+            "Empty uses the solver default."
+        ),
+    )
+    block_size: int | None = Field(
+        default=None,
+        gt=0,
+        title="Block Size",
+        description=(
+            "PRIMME block size: vectors expanded per iteration (maxBlockSize). For primme "
+            "and gpu-mpi. Empty uses the PRIMME default."
+        ),
+    )
+    min_restart_size: int | None = Field(
+        default=None,
+        gt=0,
+        title="Min Restart Size",
+        description=(
+            "Vectors PRIMME keeps when it restarts (minRestartSize). For primme and "
+            "gpu-mpi. Empty uses the PRIMME default."
+        ),
+    )
+    primme_method: str | None = Field(
+        default=None,
+        title="PRIMME Method",
+        description=(
+            "PRIMME preset, for example PRIMME_DYNAMIC or PRIMME_GD_Olsen_plusK. For primme "
+            "and gpu-mpi. Empty keeps PRIMME's choice (PRIMME_GD_Olsen_plusK for gpu-mpi)."
+        ),
+    )
+    convergence: Convergence = Field(
+        default="abs",
+        title="Convergence Test",
+        description=(
+            "gpu-mpi only: abs or rel residual below Eigensolver Tolerance, norm, or energy "
+            "(the Ritz value stops changing by more than Energy Tolerance)."
+        ),
+    )
+    energy_tol: float = Field(
+        default=1e-6,
+        gt=0,
+        title="Energy Tolerance",
+        description="gpu-mpi with Convergence Test energy: Ritz-value stability tolerance.",
+    )
+    process_grid: tuple[int, int] | None = Field(
+        default=None,
+        title="Process Grid",
+        description=(
+            "gpu-mpi only: [alpha ranks, beta ranks] the subspace is split over. Their "
+            "product must equal the MPI ranks of the job (nodes x MPI procs per node). "
+            "Empty lets fulqrum choose."
+        ),
+    )
+    comm_backend: CommBackend = Field(
+        default="auto",
+        title="Communication Backend",
+        description=(
+            "gpu-mpi only: transport between ranks. auto picks NCCL when every rank has its "
+            "own GPU, else host MPI; cuda_mpi needs a CUDA-aware MPI."
+        ),
+    )
 
     def solver_options(self) -> FulqrumSolverOptions:
         """Return the numerical controls passed to the compute-node solver."""
@@ -131,6 +198,14 @@ class FulqrumSolverJob(Block):
             return_amplitudes=self.return_sci_state,
             backend=self.backend,
             carryover_fraction=self.carryover_fraction,
+            max_basis_size=self.max_basis_size,
+            block_size=self.block_size,
+            min_restart_size=self.min_restart_size,
+            primme_method=self.primme_method,
+            convergence=self.convergence,
+            energy_tol=self.energy_tol,
+            process_grid=self.process_grid,
+            comm_backend=self.comm_backend,
         )
 
     async def run(
