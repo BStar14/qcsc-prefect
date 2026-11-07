@@ -200,3 +200,48 @@ def test_sbd_block_gets_the_ratio_only_above_zero(run_loop):
     # Fraction 0 leaves the block as it is and ignores the strings it returns.
     assert used == [0.5] * 4
     assert all(r["num_carryover_a"] == 0 for r in artifacts["recovery"])
+
+
+class _FailingBlock(_FulqrumLikeBlock):
+    """Fails one call; the other calls of that round wait, so they can be cancelled."""
+
+    fail_call: int = 3
+    cancelled: list = Field(default_factory=list)
+
+    async def run(self, ci_strings, one_body_tensor, two_body_tensor, norb, nelec, spin_sq=None):
+        call = len(self.calls) + 1
+        if call == self.fail_call:
+            self.calls.append((self.carryover_fraction, ci_strings))
+            await asyncio.sleep(0)
+            raise RuntimeError("fulqrum solve failed on rank 1: MemoryError")
+        if call > self.fail_call - 1 and self.fail_call:
+            self.calls.append((self.carryover_fraction, ci_strings))
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                self.cancelled.append(call)
+                raise
+        return await super().run(ci_strings, one_body_tensor, two_body_tensor, norb, nelec)
+
+
+def test_a_failed_batch_fails_the_round_and_a_retry_resumes_it(run_loop):
+    from sqd_common.recovery import RoundFailedError
+
+    # Round 1 (calls 1-2) completes; call 3, a batch of round 2, fails.
+    block = _FailingBlock(root_dir=str(run_loop.tmp), fail_call=3)
+    with pytest.raises(RoundFailedError, match=r"iteration 2 failed: batch 1 of 2") as info:
+        run_loop("run-a", block, max_iterations=3)
+    assert "MemoryError" in str(info.value.__cause__)
+    # The round's other batch was cancelled, which cancels its scheduler job.
+    assert block.cancelled == [4]
+    saved = checkpoint.load_checkpoint(run_loop.root / "run-a" / checkpoint.CKPT_NAME)
+    assert saved.next_step == 1 and len(saved.carryover[0]) == 2
+
+    # A Retry keeps the flow run ID, so it finds its own checkpoint and redoes round 2.
+    retry = _FulqrumLikeBlock(root_dir=str(run_loop.tmp))
+    _, artifacts = run_loop("run-a", retry, max_iterations=3)
+    rows = artifacts["recovery"]
+    assert len(rows) == 4 and len({r["round"] for r in rows}) == 2
+    assert all(r["num_carryover_a"] == 2 for r in rows)
+    saved = checkpoint.load_checkpoint(run_loop.root / "run-a" / checkpoint.CKPT_NAME)
+    assert saved.next_step == 3

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -14,13 +16,15 @@ from qcsc_prefect_fulqrum.solver import FulqrumSolution, FulqrumSolverOptions
 
 @pytest.fixture(autouse=True)
 def _clear_rank_env(monkeypatch):
-    for var in cli._PROCESS_INDEX_ENV_VARS:
+    for var in (*cli._PROCESS_INDEX_ENV_VARS, *cli._PROCESS_COUNT_ENV_VARS):
         monkeypatch.delenv(var, raising=False)
 
 
 class FakeComm:
-    def __init__(self, rank, size):
-        self.rank, self.size = rank, size
+    """One process's view of COMM_WORLD; ``peers_ok`` is what the others report."""
+
+    def __init__(self, rank, size, peers_ok=True):
+        self.rank, self.size, self.peers_ok = rank, size, peers_ok
         self.events = []
 
     def Get_rank(self):
@@ -32,14 +36,19 @@ class FakeComm:
     def Barrier(self):
         self.events.append("barrier")
 
+    def allgather(self, value):
+        self.events.append("allgather")
+        return [value if r == self.rank else self.peers_ok for r in range(self.size)]
+
     def Abort(self, code):
         self.events.append(("abort", code))
 
 
 @pytest.fixture
 def fake_mpi(monkeypatch):
-    def install(rank, size):
-        comm = FakeComm(rank, size)
+    def install(rank, size, peers_ok=True):
+        monkeypatch.setenv("OMPI_COMM_WORLD_SIZE", str(size))
+        comm = FakeComm(rank, size, peers_ok)
         mpi = types.SimpleNamespace(COMM_WORLD=comm)
         monkeypatch.setitem(sys.modules, "mpi4py", types.SimpleNamespace(MPI=mpi))
         monkeypatch.setitem(sys.modules, "mpi4py.MPI", mpi)
@@ -83,10 +92,11 @@ def _raise(exc: BaseException):
         return caught
 
 
-def test_gpu_mpi_index_comes_from_comm_world_not_the_environment(
-    monkeypatch, tmp_path, fake_mpi, capsys
+@pytest.mark.parametrize("backend", ["cpu", "gpu", "gpu-mpi"])
+def test_a_multi_process_launch_uses_the_comm_world_rank(
+    monkeypatch, tmp_path, fake_mpi, capsys, backend
 ):
-    _write_input(tmp_path, "gpu-mpi")
+    _write_input(tmp_path, backend)
     monkeypatch.setattr(cli, "solve_fulqrum", _fake_solve)
     # The launcher says rank 0, COMM_WORLD says rank 1: COMM_WORLD wins.
     monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "0")
@@ -94,7 +104,7 @@ def test_gpu_mpi_index_comes_from_comm_world_not_the_environment(
     assert cli.main([str(tmp_path)]) == 0
     assert not (tmp_path / io_utils.OUTPUT_RESULT).exists()
     assert capsys.readouterr().out == ""
-    assert comm.events == ["barrier"]
+    assert comm.events == ["barrier", "allgather"]
 
     monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
     fake_mpi(rank=0, size=2)
@@ -102,24 +112,23 @@ def test_gpu_mpi_index_comes_from_comm_world_not_the_environment(
     assert io_utils.read_solver_output(tmp_path, norb=2).energy == -0.5
 
 
-@pytest.mark.parametrize("backend", ["cpu", "gpu"])
-def test_other_backends_keep_the_environment_index(monkeypatch, tmp_path, fake_mpi, backend):
-    _write_input(tmp_path, backend)
+def test_a_single_process_launch_needs_no_mpi(monkeypatch, tmp_path, fake_mpi):
+    _write_input(tmp_path, "gpu-mpi")
     monkeypatch.setattr(cli, "solve_fulqrum", _fake_solve)
-    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
-    comm = fake_mpi(rank=0, size=2)
+    comm = fake_mpi(rank=0, size=4)
+    monkeypatch.delenv("OMPI_COMM_WORLD_SIZE")
     assert cli.main([str(tmp_path)]) == 0
-    assert not (tmp_path / io_utils.OUTPUT_RESULT).exists()
     assert comm.events == []
 
 
-def test_gpu_mpi_failing_rank_writes_its_file_and_aborts(monkeypatch, tmp_path, fake_mpi):
-    _write_input(tmp_path, "gpu-mpi")
+@pytest.mark.parametrize("backend", ["cpu", "gpu", "gpu-mpi"])
+def test_a_failing_rank_writes_its_file_and_aborts(monkeypatch, tmp_path, fake_mpi, backend):
+    _write_input(tmp_path, backend)
     monkeypatch.setattr(cli, "solve_fulqrum", _boom)
     comm = fake_mpi(rank=1, size=4)
 
     assert cli.main([str(tmp_path)]) == 1
-    assert comm.events == ["barrier", ("abort", 1)]
+    assert comm.events == ["barrier", "allgather", ("abort", 1)]
     assert not (tmp_path / io_utils.OUTPUT_ERROR).exists()
     error = io_utils.read_solver_error(tmp_path)
     assert (error["rank"], error["type"], error["message"]) == (1, "RuntimeError", "rank exploded")
@@ -130,7 +139,17 @@ def test_gpu_mpi_failing_rank_writes_its_file_and_aborts(monkeypatch, tmp_path, 
     assert info.value.error["rank"] == 1
 
 
-def test_gpu_mpi_rank_0_failure_writes_error_json_and_aborts(monkeypatch, tmp_path, fake_mpi):
+def test_a_failing_rank_fails_the_solve_even_with_a_result(monkeypatch, tmp_path, fake_mpi):
+    _write_input(tmp_path, "cpu")
+    monkeypatch.setattr(cli, "solve_fulqrum", _fake_solve)
+    fake_mpi(rank=0, size=2)
+    assert cli.main([str(tmp_path)]) == 0
+    io_utils.write_solver_error(tmp_path, _raise(MemoryError("rank 1 out of memory")), rank=1)
+    with pytest.raises(io_utils.FulqrumSolverError, match="on rank 1: MemoryError"):
+        io_utils.read_solver_output(tmp_path, norb=2)
+
+
+def test_rank_0_failure_writes_error_json_and_aborts(monkeypatch, tmp_path, fake_mpi):
     _write_input(tmp_path, "gpu-mpi")
     monkeypatch.setattr(cli, "solve_fulqrum", _boom)
     comm = fake_mpi(rank=0, size=2)
@@ -140,34 +159,41 @@ def test_gpu_mpi_rank_0_failure_writes_error_json_and_aborts(monkeypatch, tmp_pa
     assert (tmp_path / io_utils.OUTPUT_ERROR).exists()
 
 
-def test_gpu_mpi_single_rank_does_not_abort(monkeypatch, tmp_path, fake_mpi):
+def test_an_input_read_failure_on_any_rank_stops_every_rank(monkeypatch, tmp_path, fake_mpi):
+    """A rank that cannot read the input must not leave its peers waiting in the solve."""
     _write_input(tmp_path, "gpu-mpi")
-    monkeypatch.setattr(cli, "solve_fulqrum", _boom)
-    comm = fake_mpi(rank=0, size=1)
+    solved = []
+    monkeypatch.setattr(cli, "solve_fulqrum", lambda **p: solved.append(p) or _fake_solve(**p))
+
+    # This rank reads the input; a peer does not.
+    comm = fake_mpi(rank=0, size=2, peers_ok=False)
     assert cli.main([str(tmp_path)]) == 1
-    assert ("abort", 1) not in comm.events
+    assert solved == []
+    assert comm.events == ["barrier", "allgather"]
+    assert "another process" in io_utils.read_solver_error(tmp_path)["message"]
 
-
-def test_env_backends_never_abort(monkeypatch, tmp_path, fake_mpi):
-    _write_input(tmp_path, "gpu")
-    monkeypatch.setattr(cli, "solve_fulqrum", _boom)
-    monkeypatch.setenv("SLURM_PROCID", "2")
-    comm = fake_mpi(rank=2, size=4)
+    # This rank cannot read it: it reports its own error, and nobody solves.
+    (tmp_path / io_utils.INPUT_SPEC).write_text("{not json", encoding="utf-8")
+    comm = fake_mpi(rank=1, size=2)
     assert cli.main([str(tmp_path)]) == 1
-    assert comm.events == []
-    assert (tmp_path / "error.rank2.json").exists()
+    assert solved == []
+    assert comm.events == ["barrier", "allgather"]
+    error = io_utils.read_solver_error(tmp_path)
+    assert error["type"] == "RuntimeError"  # rank 0's error.json from the first call
+    assert (tmp_path / "error.rank1.json").exists()
 
 
-def test_gpu_mpi_without_mpi4py_falls_back_to_the_environment(monkeypatch, tmp_path):
+def test_without_mpi4py_the_environment_index_is_used(monkeypatch, tmp_path):
     _write_input(tmp_path, "gpu-mpi")
     monkeypatch.setitem(sys.modules, "mpi4py", None)
     monkeypatch.setattr(cli, "solve_fulqrum", _boom)
+    monkeypatch.setenv("PMIX_SIZE", "4")
     monkeypatch.setenv("PMIX_RANK", "3")
     assert cli.main([str(tmp_path)]) == 1
     assert io_utils.read_solver_error(tmp_path)["rank"] == 3
 
 
-def test_gpu_mpi_control_process_clears_stale_rank_errors(monkeypatch, tmp_path, fake_mpi):
+def test_control_process_clears_stale_rank_errors(monkeypatch, tmp_path, fake_mpi):
     _write_input(tmp_path, "gpu-mpi")
     io_utils.write_solver_error(tmp_path, _raise(RuntimeError("old")), rank=3)
     io_utils.write_solver_error(tmp_path, _raise(RuntimeError("old")), rank=0)
@@ -178,7 +204,20 @@ def test_gpu_mpi_control_process_clears_stale_rank_errors(monkeypatch, tmp_path,
     assert io_utils.read_solver_output(tmp_path, norb=2).energy == -0.5
 
 
-def test_each_process_clears_only_its_own_stale_error(monkeypatch, tmp_path):
+def test_without_a_communicator_only_old_rank_errors_are_cleared(monkeypatch, tmp_path):
+    _write_input(tmp_path, "cpu")
+    for rank in (1, 2):
+        io_utils.write_solver_error(tmp_path, _raise(RuntimeError("old")), rank=rank)
+    old = time.time() - 3600
+    os.utime(tmp_path / "error.rank1.json", (old, old))
+    monkeypatch.setattr(cli, "solve_fulqrum", _fake_solve)
+    assert cli.main([str(tmp_path)]) == 0
+    # The old file is from an earlier run; the fresh one may be a peer's of this run.
+    assert not (tmp_path / "error.rank1.json").exists()
+    assert (tmp_path / "error.rank2.json").exists()
+
+
+def test_each_process_clears_its_own_stale_error(monkeypatch, tmp_path):
     _write_input(tmp_path, "cpu")
     for rank in (1, 2):
         io_utils.write_solver_error(tmp_path, _raise(RuntimeError("old")), rank=rank)
@@ -189,9 +228,8 @@ def test_each_process_clears_only_its_own_stale_error(monkeypatch, tmp_path):
     assert (tmp_path / "error.rank2.json").exists()
 
 
-def test_unreadable_spec_still_fails_through_read_solver_input(tmp_path):
+def test_unreadable_spec_fails_with_its_own_error(tmp_path):
     (tmp_path / io_utils.INPUT_SPEC).write_text("{not json", encoding="utf-8")
-    assert cli._requested_backend(tmp_path) is None
     assert cli.main([str(tmp_path)]) == 1
     assert io_utils.read_solver_error(tmp_path)["type"] == "JSONDecodeError"
 
