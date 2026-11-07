@@ -114,7 +114,8 @@ class FulqrumSolverJob(Block):
         title="Carryover Fraction",
         description=(
             "Share of each spin's CI strings, heaviest first, returned for the next "
-            "configuration recovery round. 0 returns none. The SQD flow sets it per run."
+            "configuration recovery round. 0 returns none. The SQD flow sets it from its "
+            "Carryover Fraction parameter for each run, so leave it at 0 in the block."
         ),
     )
 

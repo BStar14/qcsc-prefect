@@ -179,14 +179,13 @@ def test_gpu_mpi_runs_one_rank_per_gpu(saved, tmp_path):
         gpus_per_node=4,
         ompthreads=8,
         backend="gpu-mpi",
-        carryover_fraction=0.25,
     )
     execution = _block(saved, "execution")
     solver = _block(saved, "solver")
     assert execution.resource_class == "gpu"
     assert (execution.gpus_per_node, execution.mpiprocs, execution.ompthreads) == (4, 4, 8)
     assert execution.launcher == "srun"
-    assert (solver.backend, solver.carryover_fraction) == ("gpu-mpi", 0.25)
+    assert (solver.backend, solver.carryover_fraction) == ("gpu-mpi", 0.0)
 
 
 def test_gpu_mpi_keeps_an_explicit_mpiprocs(saved, tmp_path):

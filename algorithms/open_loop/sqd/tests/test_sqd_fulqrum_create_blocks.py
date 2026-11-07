@@ -109,7 +109,9 @@ def test_environments_and_csv_lists():
     assert kwargs["fulqrum_executable"] == "qcsc-fulqrum-solve"
 
 
-@pytest.mark.parametrize("key", ["shots", "sampler_options_json", "options_variable_name"])
+@pytest.mark.parametrize(
+    "key", ["shots", "sampler_options_json", "options_variable_name", "carryover_fraction"]
+)
 def test_run_settings_are_rejected_as_block_settings(key):
     config = {**_example_config(), key: 100}
     with pytest.raises(RuntimeError, match=f"'{key}' is not a block setting.*flow parameters"):
@@ -291,7 +293,7 @@ def test_gpu_profiles_resolve_to_gpu_mpi(tmp_path, profile, qrmi, expected):
     assert {key: kwargs[key] for key in expected} == expected
     assert kwargs["resource_class"] == "gpu"
     assert kwargs["backend"] == "gpu-mpi"
-    assert kwargs["carryover_fraction"] == 0.0
+    assert "carryover_fraction" not in kwargs
     assert kwargs["environments"] == {"FQ_DIST_BACKEND": "auto"}
     inspect.signature(_create_fulqrum_blocks_signature()).bind(**kwargs)
 
@@ -309,14 +311,13 @@ def test_user_file_and_advanced_override_the_gpu_profile(tmp_path):
     path = _gpu_config(
         tmp_path,
         "slurm-gpu",
-        advanced='backend = "gpu"\ncarryover_fraction = 0.3\ngpus_per_node = 2',
+        advanced='backend = "gpu"\ngpus_per_node = 2',
     )
     config = load_block_config(path)
     assert (config["backend"], config["gpus_per_node"]) == ("gpu", 2)
     kwargs = _resolve(config=config)
     # [advanced] overrides the profile; the profile's mpiprocs is kept.
     assert (kwargs["backend"], kwargs["gpus_per_node"], kwargs["mpiprocs"]) == ("gpu", 2, 4)
-    assert kwargs["carryover_fraction"] == 0.3
 
     # A top-level key of the user file overrides [advanced].
     text = path.read_text().replace(
@@ -343,10 +344,9 @@ def test_gpu_mpi_defaults_mpiprocs_to_gpus_per_node():
 
 
 def test_gpu_cli_flags_override_config():
-    argv = ["--backend", "gpu", "--gpus-per-node", "2", "--carryover-fraction", "0.5"]
+    argv = ["--backend", "gpu", "--gpus-per-node", "2"]
     kwargs = _resolve(argv, _example_config())
     assert (kwargs["backend"], kwargs["gpus_per_node"]) == ("gpu", 2)
-    assert kwargs["carryover_fraction"] == 0.5
     assert _resolve(config=_example_config())["gpus_per_node"] is None
 
 
@@ -355,7 +355,6 @@ def test_gpu_cli_flags_override_config():
     [
         ({"backend": "gpu-mpi"}, "MPI launcher"),
         ({"backend": "tpu"}, "'backend' must be one of"),
-        ({"carryover_fraction": 1.5}, "carryover_fraction"),
     ],
 )
 def test_invalid_gpu_settings(overrides, message):

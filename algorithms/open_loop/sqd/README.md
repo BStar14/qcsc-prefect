@@ -86,8 +86,10 @@ state of a round, each spin's `int(fraction × n)` strings with the largest marg
 weight are kept in every subspace of the next round. They count toward
 `subspace_dim`, and the rest of a subspace is sampled as before. `0` turns carryover
 off. fulqrum and SBD select the strings on the compute node; for DICE they come from
-its ground state, so keep the DICE block's `return_sci_state` on. The carryover is
-saved in the checkpoint, and a run can resume with another fraction.
+its ground state, so keep the DICE block's `return_sci_state` on. The fraction is a
+flow parameter only; the flow sets it on the solver block of each run (the SBD
+block's `carryover_ratio` too). The carryover is saved in the checkpoint, and a run
+can resume with another fraction.
 
 `default_params/` holds complete examples for N2 (6-31G, 1s cores frozen, 16 orbitals,
 32 qubits), whose integrals are in `data/n2_631g_fc.fcidump`
@@ -263,7 +265,7 @@ Then start a run of the `sqd` deployment with `default_params/n2_dice.json`, who
 | --- | --- | --- |
 | Your settings | top of the file | `solver`, `profile`, `queue`, `project`, `work_dir`, `fulqrum_executable`, `eigensolver`, `[dice] dice_executable`, `[qrmi] resource` and `python_executable` |
 | System profile | `sqd_common/profiles/<profile>.toml`, or your own file given by path | `hpc_target`, `resource_class`, `launcher`, `num_nodes`, `mpiprocs`, `ompthreads`, `gpus_per_node`, `walltime`, `modules`, `pre_commands`, `environments`, the fulqrum `backend`, the `fugaku_*` keys, the DICE MPI settings (`[dice]`), the QRMI job's `walltime`, `ompthreads` and `timeout_seconds` (`[qrmi]`) |
-| Advanced | the commented `[advanced]` table | block names, `runtime_block_name`, `script_filename`, `metrics_artifact_key`, `timeout_seconds`, solver tuning, the block default of `carryover_fraction` |
+| Advanced | the commented `[advanced]` table | block names, `runtime_block_name`, `script_filename`, `metrics_artifact_key`, `timeout_seconds`, solver tuning |
 
 Later layers override earlier ones: the profile, then `[advanced]`, then the top
 level of your file, then its `[<solver>]` table. Any profile key can be set in your

@@ -34,6 +34,7 @@ FLOW_PARAMETER_KEYS = {
     "shots": "sampling.shots",
     "sampler_options_json": "sampling.shots",
     "options_variable_name": "sampling.shots",
+    "carryover_fraction": "sqd.carryover_fraction",
 }
 QRMI_KEYS = frozenset(
     {
@@ -99,11 +100,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--solver-block-name")
 
     parser.add_argument("--backend", choices=BACKENDS)
-    parser.add_argument(
-        "--carryover-fraction",
-        type=float,
-        help="Solver block default; the flow parameter sqd.carryover_fraction sets it per run.",
-    )
     parser.add_argument("--eigensolver", choices=["scipy", "primme"])
     parser.add_argument("--hamiltonian-format", choices=["csr", "matrix_free"])
     parser.add_argument("--tol", type=float)
@@ -237,9 +233,6 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         )
     # gpu-mpi runs one rank per GPU, so mpiprocs follows gpus_per_node unless it is set.
     mpiprocs = pick("mpiprocs", (gpus_per_node or 1) if backend == "gpu-mpi" else 1)
-    carryover_fraction = float(pick("carryover_fraction", 0.0))
-    if not 0.0 <= carryover_fraction <= 1.0:
-        raise RuntimeError(f"'carryover_fraction' must be in [0, 1]; got {carryover_fraction}.")
     block_kwargs: dict[str, Any] = dict(
         hpc_target=hpc_target,
         project=str(project or "").strip(),
@@ -282,7 +275,6 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         dense_max_dim=int(pick("dense_max_dim", 64)),
         return_sci_state=bool(pick("return_sci_state", False)),
         backend=backend,
-        carryover_fraction=carryover_fraction,
         slurm_memory=_optional_str(pick("slurm_memory")),
         gfscache=_optional_str(_pick_value(args.fugaku_gfscache, config.get("fugaku_gfscache"))),
         spack_modules=_normalize_str_list(

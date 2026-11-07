@@ -59,7 +59,6 @@ def create_fulqrum_blocks(
     dense_max_dim: int = 64,
     return_sci_state: bool = True,
     backend: Literal["cpu", "gpu", "gpu-mpi"] = "cpu",
-    carryover_fraction: float = 0.0,
     slurm_memory: str | None = None,
     gfscache: str | None = None,
     spack_modules: list[str] | None = None,
@@ -82,8 +81,8 @@ def create_fulqrum_blocks(
 
     ``gpus_per_node`` is the scheduler GPU request on the execution profile; use
     it with ``resource_class="gpu"`` so the GPU queue is selected. Fugaku and
-    local execution reject it, and Miyabi-G accepts only 1. ``carryover_fraction``
-    is the solver block default; the SQD flow sets it per run.
+    local execution reject it, and Miyabi-G accepts only 1. The solver block's
+    ``carryover_fraction`` is left at 0; the SQD flow sets it for each run.
 
     When ``ompthreads`` is set and ``environments`` has no ``OMP_NUM_THREADS``,
     it is exported with the same value, because not every scheduler template
@@ -177,7 +176,6 @@ def create_fulqrum_blocks(
         dense_max_dim=dense_max_dim,
         return_sci_state=return_sci_state,
         backend=backend,
-        carryover_fraction=carryover_fraction,
     ).save(solver_block_name, overwrite=True)
 
     return {
