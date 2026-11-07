@@ -31,7 +31,7 @@ from qiskit.primitives.containers import BitArray, DataBin  # noqa: E402
 from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
 from qiskit.quantum_info import Statevector  # noqa: E402
 from qiskit_ibm_runtime import RuntimeEncoder  # noqa: E402
-from sqd_common import flow, lucj, postprocess, sampling  # noqa: E402
+from sqd_common import flow, lucj, postprocess, sampling, topology  # noqa: E402
 from sqd_common.flow_params import (  # noqa: E402
     CircuitParameters,
     FlowParameters,
@@ -75,7 +75,7 @@ def circuit_parameters(reset=False):
 
 def lucj_parameters(params, h2):
     with patch.object(lucj, "get_run_logger", return_value=LOGGER):
-        return lucj.get_lucj_params.fn(params, h2)
+        return lucj.get_lucj_params.fn(params, h2, "heavy-hex")
 
 
 def make_circuit(params, h2):
@@ -256,7 +256,7 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     monkeypatch.setattr(runtime_mod, "_sample_on_slurm", runtime_mod._sample_on_slurm.fn)
     monkeypatch.setattr(runtime_mod, "get_run_logger", lambda: LOGGER)
     monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
-    for module in (lucj, sampling, postprocess, flow):
+    for module in (lucj, sampling, postprocess, flow, topology):
         monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
     monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
     monkeypatch.setattr(sampling, "create_table_artifact", artifact)

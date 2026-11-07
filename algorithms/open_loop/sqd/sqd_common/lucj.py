@@ -14,6 +14,8 @@ from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister
 from qiskit.transpiler import Target
 
 from sqd_common.flow_params import CircuitParameters
+from sqd_common.topology import MAX_AB_PAIRS as MAX_AB_PAIRS
+from sqd_common.topology import Topology, interaction_pairs
 from sqd_common.transpile import build_pass_manager, derive_seed, isa_gate_depth
 
 NpStrict3DArrayC128 = Annotated[
@@ -31,26 +33,13 @@ class LUCJParameters(BaseModel):
     orbital_rotations: NpStrict3DArrayC128
     norb: int
     nelec: tuple[int, int]
+    qpu_topology: Topology
 
     def to_operator(self) -> ffsim.UCJOpSpinBalanced:
         return ffsim.UCJOpSpinBalanced(
             diag_coulomb_mats=self.diag_coulomb_mats,
             orbital_rotations=self.orbital_rotations,
         )
-
-
-# Alpha-beta pairs kept on a heavy-hex (Heron) lattice.
-MAX_AB_PAIRS = 5
-
-
-def interaction_pairs(norb: int) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
-    """Heavy-hex LUCJ interactions: alpha-alpha neighbours, alpha-beta every 4th orbital.
-
-    At most ``MAX_AB_PAIRS`` alpha-beta pairs are kept, starting from orbital 0.
-    """
-    aa_indices = [(p, p + 1) for p in range(norb - 1)]
-    ab_indices = [(p, p) for p in range(0, norb, 4)][:MAX_AB_PAIRS]
-    return aa_indices, ab_indices
 
 
 @task(
@@ -62,27 +51,33 @@ def interaction_pairs(norb: int) -> tuple[list[tuple[int, int]], list[tuple[int,
 def get_lucj_params(
     circuit_params: CircuitParameters,
     elec_props: ElectronicProperties,
+    qpu_topology: Topology,
 ) -> LUCJParameters:
     """Initialize the LUCJ parameters from the CCSD t2 amplitudes.
 
-    The interactions are restricted to the pairs a heavy-hex lattice can
-    implement without SWAP gates. With ``compress``, the truncated double
-    factorization is optimized to reproduce t2 more closely.
+    The interactions are restricted to the pairs that ``qpu_topology`` can
+    implement without SWAP gates (see ``interaction_pairs``). With ``compress``,
+    the truncated double factorization is optimized to reproduce t2 more closely.
 
     Args:
         circuit_params: LUCJ layers and compression settings.
         elec_props: Electronic properties with the CCSD t2 amplitudes.
+        qpu_topology: Resolved QPU topology, never ``auto`` (see
+            ``sqd_common.topology.resolve_topology``). It is an input of its own,
+            so the persisted result of one topology is not reused for another.
 
     Returns:
-        LUCJ operator parameters, including the system size.
+        LUCJ operator parameters, including the system size and the topology.
     """
     logger = get_run_logger()
-    pairs = interaction_pairs(elec_props.num_orbitals)
+    pairs = interaction_pairs(elec_props.num_orbitals, qpu_topology)
     logger.info(
-        "Getting LUCJ parameters: %d layer(s), %d alpha-alpha and %d alpha-beta pairs%s.",
+        "Getting LUCJ parameters: %d layer(s), %d alpha-alpha and %d alpha-beta pairs "
+        "for the %s topology%s.",
         circuit_params.n_lucj_layers,
         len(pairs[0]),
         len(pairs[1]),
+        qpu_topology,
         ", compressed" if circuit_params.compress else "",
     )
 
@@ -112,6 +107,7 @@ def get_lucj_params(
         orbital_rotations=ucj_op.orbital_rotations,
         norb=elec_props.num_orbitals,
         nelec=elec_props.num_electrons,
+        qpu_topology=qpu_topology,
     )
 
 

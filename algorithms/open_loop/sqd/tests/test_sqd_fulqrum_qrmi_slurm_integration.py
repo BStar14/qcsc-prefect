@@ -246,7 +246,7 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_runtime, caplog):
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
         bool_array = asyncio.run(
             sampling.quantum_sampling.fn(
-                lucj_params=lucj.get_lucj_params.fn(params, elec_props),
+                lucj_params=lucj.get_lucj_params.fn(params, elec_props, "heavy-hex"),
                 circuit_params=params,
                 sampling_params=SamplingParameters(shots=SHOTS),
             )
