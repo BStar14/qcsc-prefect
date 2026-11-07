@@ -209,6 +209,17 @@ class CircuitParameters(BaseModel):
         title="Reset Mitigation",
         json_schema_extra=_at(3),
     )
+    qpu_topology: Literal["auto", "heavy-hex", "square"] = Field(
+        default="auto",
+        description=(
+            "Qubit connectivity the LUCJ interaction pairs are chosen for. heavy-hex (Heron): "
+            "alpha-beta pairs on every 4th orbital, at most 5. square (Nighthawk): alpha-beta "
+            "pairs on every orbital. auto reads the backend when the workflow host can see it, "
+            "and uses heavy-hex otherwise."
+        ),
+        title="QPU Topology",
+        json_schema_extra=_at(4),
+    )
     configure_transpiler: bool = Field(
         default=False,
         description=(
@@ -216,13 +227,13 @@ class CircuitParameters(BaseModel):
             "SABRE layout search (10000 layout trials, 10 SWAP trials, 8 iterations)."
         ),
         title="Configure Transpiler",
-        json_schema_extra=_at(4),
+        json_schema_extra=_at(5),
     )
     transpiler: TranspilerParameters = Field(
         default_factory=TranspilerParameters,
         description="Used only when Configure Transpiler is on.",
         title="Transpiler",
-        json_schema_extra=_at(5),
+        json_schema_extra=_at(6),
     )
 
     @property
@@ -384,6 +395,18 @@ class SQDParameters(BaseModel):
         ge=1,
         json_schema_extra=_at(2),
     )
+    carryover_fraction: float = Field(
+        default=0.5,
+        description=(
+            "Share of each spin's CI strings, heaviest in the best ground state of an "
+            "iteration, kept in every subspace of the next iteration. They count toward "
+            "Subspace Dimension. 0 turns carryover off."
+        ),
+        title="Carryover Fraction",
+        ge=0.0,
+        le=1.0,
+        json_schema_extra=_at(3),
+    )
     checkpoint: bool = Field(
         default=True,
         description=(
@@ -395,7 +418,7 @@ class SQDParameters(BaseModel):
             "removed. The solver job directories next to it are much larger."
         ),
         title="Checkpoint Recovery",
-        json_schema_extra=_at(3),
+        json_schema_extra=_at(4),
     )
     resume_checkpoint: str | None = Field(
         default=None,
@@ -408,7 +431,7 @@ class SQDParameters(BaseModel):
             "continues at iteration 33/200. The file is only read."
         ),
         title="Resume from Checkpoint",
-        json_schema_extra=_at(4),
+        json_schema_extra=_at(5),
     )
 
 

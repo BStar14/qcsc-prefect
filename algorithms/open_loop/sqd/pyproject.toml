@@ -27,7 +27,7 @@ dependencies = [
     "pydantic",
     "pydantic_numpy",
     "qiskit",
-    "qiskit-addon-sqd>=0.12.0",
+    "qiskit-addon-sqd>=0.14.0",
     "qiskit-ibm-runtime",
     "qcsc-prefect-fulqrum==0.3.0",
     "qcsc-prefect-qiskit[slurm]==0.3.0",
