@@ -109,3 +109,53 @@ def test_source_round_trip(tmp_path):
     checkpoint.write_source(tmp_path, key, resumed_from=None)
     source = checkpoint.read_source(tmp_path)
     assert checkpoint.key_mismatch(source, key) == [] and source["resumed_from"] is None
+
+
+def test_carryover_round_trip_keeps_int64_strings(tmp_path):
+    path = tmp_path / checkpoint.CKPT_NAME
+    carry = (np.array([12, 3, 5], dtype=np.int64), np.array([9], dtype=np.int64))
+    occ = (np.ones(NORB), np.ones(NORB))
+    checkpoint.save_checkpoint(path, occ, 2, -1.0, carryover=carry)
+    with np.load(path, allow_pickle=False) as raw:
+        assert raw["carryover_a"].dtype == np.int64
+    state = checkpoint.load_checkpoint(path)
+    assert state.carryover[0].tolist() == [12, 3, 5] and state.carryover[1].tolist() == [9]
+    assert state.carryover[0].dtype == np.int64
+
+
+def test_carryover_of_64_or_more_orbitals_is_stored_as_decimal_strings(tmp_path):
+    norb = 70
+    path = tmp_path / checkpoint.CKPT_NAME
+    big = [(1 << 69) | 1, (1 << 64) | (1 << 3)]
+    carry = (np.array(big, dtype=object), np.array(big[:1], dtype=object))
+    checkpoint.save_checkpoint(path, (np.ones(norb), np.ones(norb)), 1, -2.0, carryover=carry)
+    with np.load(path, allow_pickle=False) as raw:
+        assert raw["carryover_a"].dtype.kind == "U"
+    state = checkpoint.load_checkpoint(path)
+    assert state.carryover[0].dtype == object and state.carryover[0].tolist() == big
+    assert state.carryover[1].tolist() == big[:1]
+
+
+@pytest.mark.parametrize("old_key", [True, False], ids=["empty-carryover-key", "no-key"])
+def test_checkpoint_without_per_spin_carryover_loads_with_none(tmp_path, old_key):
+    path = tmp_path / checkpoint.CKPT_NAME
+    arrays = dict(
+        occ_a=np.ones(NORB),
+        occ_b=np.zeros(NORB),
+        next_step=np.int64(3),
+        best_energy=np.float64(-1.5),
+    )
+    if old_key:
+        arrays["carryover"] = np.empty((0, 0), dtype=bool)
+    np.savez(path, **arrays)
+    state = checkpoint.load_checkpoint(path)
+    assert state.next_step == 3 and state.best_energy == -1.5
+    assert len(state.carryover[0]) == 0 and len(state.carryover[1]) == 0
+
+
+def test_carryover_fraction_is_not_in_the_resume_key():
+    sqd = SimpleNamespace(subspace_dim=16, num_batches=2, carryover_fraction=0.5)
+    other = SimpleNamespace(subspace_dim=16, num_batches=2, carryover_fraction=0.0)
+    key = checkpoint.resume_key(_samples(), _elec_props(), sqd, solver="fulqrum_solver_job")
+    assert "carryover_fraction" not in key
+    assert checkpoint.key_mismatch(key, _key(sqd=other)) == []
