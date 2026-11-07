@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,7 @@ async def run_slurm_job(
     watch_poll_interval: float = 10.0,
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "slurm-job-metrics",
+    submit_env: Mapping[str, str] | None = None,
 ) -> SlurmRunResult:
     """Execute a Slurm job end-to-end from runtime models.
 
@@ -90,6 +92,8 @@ async def run_slurm_job(
         watch_poll_interval: Poll interval in seconds for job status checks.
         timeout_seconds: Optional timeout for waiting final status.
         metrics_artifact_key: Prefect artifact key for job metrics table.
+        submit_env: Extra environment variables for ``sbatch`` only; the job and
+            its SPANK plugins see them, and the rendered script does not hold them.
 
     Returns:
         `SlurmRunResult` containing job id, exit status, state, and
@@ -102,7 +106,8 @@ async def run_slurm_job(
     script_path = write_script_file(work_dir=work_dir, filename=script_filename, text=script_text)
 
     runtime = SlurmRuntime()
-    submit = await runtime.submit(script_path, cwd=work_dir)
+    extra = {"env": dict(submit_env)} if submit_env else {}
+    submit = await runtime.submit(script_path, cwd=work_dir, **extra)
     final_status = await runtime.wait_final_status(
         submit.job_id,
         watch_poll_interval=watch_poll_interval,

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,13 +21,17 @@ class CancelError(RuntimeError):
     """Raised when job cancellation fails."""
 
 
-async def run_command(*args: str, cwd: Path | None = None) -> str:
+async def run_command(
+    *args: str, cwd: Path | None = None, env: Mapping[str, str] | None = None
+) -> str:
     """Run a Slurm command asynchronously and return decoded stdout.
 
     Args:
         *args: Command and arguments passed to
             `asyncio.create_subprocess_exec`.
         cwd: Optional working directory for the subprocess.
+        env: Extra environment variables for the subprocess only, added to this
+            process's environment. They never appear in the command line.
 
     Returns:
         Standard output decoded with replacement for invalid bytes.
@@ -38,6 +44,7 @@ async def run_command(*args: str, cwd: Path | None = None) -> str:
     proc = await asyncio.create_subprocess_exec(
         *args,
         cwd=str(cwd) if cwd else None,
+        env={**os.environ, **env} if env else None,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -92,12 +99,21 @@ class SlurmRuntime:
         # Initialize the logger attribute for the class
         self.logger = logging.getLogger(self.__class__.__name__)
 
-    async def submit(self, script_path: Path, *, cwd: Path | None = None) -> SubmitResult:
+    async def submit(
+        self,
+        script_path: Path,
+        *,
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> SubmitResult:
         """Submit a Slurm batch script with ``sbatch --parsable``.
 
         Args:
             script_path: Path to the generated Slurm script.
             cwd: Optional working directory for ``sbatch``.
+            env: Extra environment variables for ``sbatch`` only. sbatch passes its
+                environment to the job, so SPANK plugins and the job script see them
+                too, while the script file does not contain them.
 
         Returns:
             Parsed submission payload containing the Slurm job id.
@@ -107,7 +123,7 @@ class SlurmRuntime:
         """
 
         try:
-            stdout = await run_command("sbatch", "--parsable", str(script_path), cwd=cwd)
+            stdout = await run_command("sbatch", "--parsable", str(script_path), cwd=cwd, env=env)
         except Exception as e:
             raise SubmitError(f"sbatch failed for {script_path}") from e
 

@@ -546,6 +546,7 @@ async def _prepare_job_from_blocks(
     user_args: list[str] | None = None,
     fugaku_job_name: str | None = None,
     execution_profile_overrides: dict[str, Any] | None = None,
+    slurm_qpu: str | None = None,
 ) -> _PreparedBlockJob:
     command_block = await _load_block(CommandBlock, command_block_name)
     execution_profile_block = await _load_block(ExecutionProfileBlock, execution_profile_block_name)
@@ -619,7 +620,7 @@ async def _prepare_job_from_blocks(
             partition=submission_target.queue_name,
             account=submission_target.project or None,
             executable=executable,
-            qpu=hpc_block.slurm_qpu,
+            qpu=slurm_qpu or hpc_block.slurm_qpu,
             memory=getattr(hpc_block, "slurm_memory", None),
             ntasks=getattr(hpc_block, "slurm_ntasks", None),
             extra_directives=tuple(hpc_block.slurm_extra_directives),
@@ -1610,6 +1611,8 @@ async def run_job_from_blocks(
     metrics_artifact_key: str = "hpc-job-metrics",
     fugaku_job_name: str | None = None,
     execution_profile_overrides: dict[str, Any] | None = None,
+    slurm_qpu: str | None = None,
+    submit_env: dict[str, str] | None = None,
 ) -> Any:
     """Resolve Prefect blocks and execute a job on the configured target.
 
@@ -1638,6 +1641,10 @@ async def run_job_from_blocks(
             is derived from the command name.
         execution_profile_overrides: Optional runtime overrides for selected
             execution profile fields, such as ``num_nodes`` or ``walltime``.
+        slurm_qpu: Slurm only: ``--qpu`` resource for this job, instead of the HPC
+            profile's ``slurm_qpu``.
+        submit_env: Slurm only: extra environment variables for ``sbatch``. The
+            job and its SPANK plugins see them; the rendered script does not.
 
     Returns:
         A target-specific result object: ``LocalRunResult``,
@@ -1661,7 +1668,10 @@ async def run_job_from_blocks(
         user_args=user_args,
         fugaku_job_name=fugaku_job_name,
         execution_profile_overrides=execution_profile_overrides,
+        slurm_qpu=slurm_qpu,
     )
+    if (slurm_qpu or submit_env) and prepared.submission_target.hpc_target != "slurm":
+        raise ValueError("slurm_qpu and submit_env apply to hpc_target 'slurm' only.")
 
     if prepared.submission_target.hpc_target == "local":
         return await run_local_job(
@@ -1703,6 +1713,7 @@ async def run_job_from_blocks(
             watch_poll_interval=watch_poll_interval,
             timeout_seconds=timeout_seconds,
             metrics_artifact_key=metrics_artifact_key,
+            submit_env=submit_env,
         )
 
     raise NotImplementedError(

@@ -9,7 +9,8 @@ QRMI; they differ in where the code runs:
 | --- | --- | --- |
 | Runs in | a Slurm job on a compute node | the workflow (Prefect worker) process |
 | Session | the Batch that SPANK acquires | none: one job per `sampler()` call |
-| QRMI settings | compute-node environment | `resource_config` (stored as a secret) |
+| QRMI settings | `qrmi_config.json` on the nodes, or the runtime's plain settings | the runtime's settings and API key |
+| API key | `qrmi_config.json` on the compute nodes only | the block's secret `api_key` |
 | Needs | shared `root_dir`, three execution blocks, SPANK | network access to IBM Quantum |
 | Resource types | as configured for SPANK | `ibm-quantum-compute-service` only |
 
@@ -81,6 +82,21 @@ SPANK must acquire a Batch before Python starts. Configure the selected resource
 with `QRMI_IBM_QCS_SESSION_MODE="batch"` on every eligible node. The worker checks
 the resource-prefixed mode and acquisition-token presence before execution.
 It does not change the mode or print the token.
+
+The service CRN, the endpoints and the session mode may also come from the runtime
+instead of `qrmi_config.json`. `QrmiRuntime(job_settings={...})` takes them by
+their QRMI names without the `<resource>_` prefix (`QrmiRuntimeBlock` builds it
+from its `service_crn`, `endpoint`, `iam_endpoint` and `session_mode` fields).
+They are passed to `sbatch` in its environment as `<resource>_QRMI_IBM_QCS_*`, not
+written into the script, and SPANK sets them with priority over the file. The
+API key cannot travel this way: SPANK reads per-job settings only from the job's
+environment, which Slurm records, and QRMI has no key-file setting. So
+`QRMI_IBM_QCS_IAM_APIKEY` must stay in `qrmi_config.json` on the compute nodes,
+and a Slurm runtime with an API key is rejected. A `qrmi_config.json` entry then
+needs only the resource's `name`, `type` and the key.
+
+`QrmiRuntime(slurm_qpu=...)` requests another `--qpu` than the HPC profile's for
+one runtime, for example when a run selects another backend.
 
 ## Sampling
 
@@ -360,9 +376,13 @@ time, final status, Target width and the per-PUB compilation report.
 
 ### Runtime block
 
-`QrmiRuntimeBlock` stores the runtime settings in Prefect, with `resource_config`
-as a secret. `prepare` is a Python callable and cannot be stored; pass it when
-building the runtime:
+`QrmiRuntimeBlock` stores the runtime settings in Prefect. The resource, Service
+CRN, endpoints and session mode are plain fields, visible and editable in the
+block form. The IBM Cloud API key is the only secret: `api_key` is masked in the
+form, `repr` and logs, and is accepted only with `scheduler="iqp"`. For IQP the
+endpoints default to IBM Quantum's when left empty. `resource_config`, also
+secret, takes any other QRMI setting; the fields win over it. `prepare` is a
+Python callable and cannot be stored; pass it when building the runtime:
 
 ```python
 from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
@@ -370,7 +390,8 @@ from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
 QrmiRuntimeBlock(
     scheduler="iqp",
     resource="ibm_kingston",
-    resource_config={...},
+    service_crn="<your service instance CRN>",
+    api_key="<your API key>",
 ).save("my-qrmi-runtime", overwrite=True)
 
 runtime = await QrmiRuntimeBlock.aload_runtime("my-qrmi-runtime", prepare=prepare)

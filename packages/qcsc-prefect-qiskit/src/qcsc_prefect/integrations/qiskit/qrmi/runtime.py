@@ -88,6 +88,12 @@ class QrmiRuntime:
     scheduler: Literal["slurm", "iqp"] = field(default="slurm", kw_only=True)
     # Credentials: kept out of repr so that logs and task parameters do not show them.
     resource_config: Mapping[str, str] | None = field(default=None, kw_only=True, repr=False)
+    # Slurm only: QRMI settings without the "<resource>_" prefix (never the API key), passed
+    # to sbatch's environment so that SPANK reads them over qrmi_config.json.
+    job_settings: Mapping[str, str] | None = field(default=None, kw_only=True)
+    # Slurm only: a --qpu resource for this run instead of the HPC profile's, set when a run
+    # selects another backend than the block's.
+    slurm_qpu: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         self._validate_scheduler()
@@ -102,8 +108,16 @@ class QrmiRuntime:
                     'resource_config is only used by scheduler="iqp"; Slurm compute nodes '
                     "read QRMI settings from their own environment"
                 )
+            secret = sorted(key for key in self.job_settings or {} if "APIKEY" in key)
+            if secret:
+                raise ValueError(
+                    f"job_settings must not contain {', '.join(secret)}: the Slurm job "
+                    "environment is stored with the job"
+                )
         elif self.scheduler == "iqp":
             extra = [name for name in SLURM_FIELDS if getattr(self, name)]
+            if self.job_settings:
+                extra.append("job_settings")
             if extra:
                 raise ValueError(f'scheduler="iqp" does not use {", ".join(extra)}')
             if not isinstance(self.resource_config, Mapping) or not self.resource_config:
@@ -185,6 +199,12 @@ async def _sample_on_slurm(circuits, shots, registers, configs, runtime) -> Prim
         work_dir=work_dir,
         script_filename="sampler.slurm",
         user_args=["--request", "sampler_request.json"],
+        # A run that selects another backend also requests it as --qpu.
+        slurm_qpu=runtime.slurm_qpu,
+        submit_env={
+            f"{runtime.resource}_{key}": value
+            for key, value in (runtime.job_settings or {}).items()
+        },
         watch_poll_interval=runtime.watch_poll_interval,
         timeout_seconds=runtime.timeout_seconds,
         metrics_artifact_key="qrmi-slurm-job",
