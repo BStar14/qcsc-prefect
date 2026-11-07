@@ -248,7 +248,9 @@ def test_every_process_reports_failure(monkeypatch, tmp_path):
     # The scheduler may sample any process, so all of them must exit non-zero.
     monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "1")
     assert cli.main([str(tmp_path)]) == 1
-    assert io_utils.read_solver_error(tmp_path) is None
+    # A non-control process records its failure in its own file.
+    assert not (tmp_path / io_utils.OUTPUT_ERROR).exists()
+    assert io_utils.read_solver_error(tmp_path)["rank"] == 1
 
     monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "0")
     assert cli.main([str(tmp_path)]) == 1
