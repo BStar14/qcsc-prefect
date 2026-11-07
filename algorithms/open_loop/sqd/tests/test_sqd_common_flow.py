@@ -193,6 +193,13 @@ def test_sbd_gets_hf_first_batches_and_its_input_is_checked_after_map(stages):
     # Hartree-Fock (1 << 1) - 1 = 1 first; subspace_dim 4 allows one other determinant.
     assert alpha[0] == 1 and len(alpha) == 2
     np.testing.assert_array_equal(alpha, beta)
+    # A carryover string keeps that slot.
+    carryover = (np.array([4], dtype=np.int64), np.array([4], dtype=np.int64))
+    for seed in range(10):
+        ((alpha, _),) = list(
+            transform([(strings, strings)], np.random.default_rng(seed), carryover)
+        )
+        assert alpha.tolist() == [1, 4]
 
 
 @pytest.mark.parametrize(

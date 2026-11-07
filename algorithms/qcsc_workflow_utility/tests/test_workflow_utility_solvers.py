@@ -54,7 +54,7 @@ def test_parse_block_ref():
 HF = 0b0011  # Two electrons per spin.
 
 
-def convert(batches, subspace_dim, seed=0, probabilities=None):
+def convert(batches, subspace_dim, seed=0, probabilities=None, keep=None):
     return list(
         to_sbd_closed_shell(
             batches,
@@ -62,6 +62,7 @@ def convert(batches, subspace_dim, seed=0, probabilities=None):
             num_elec_a=2,
             probabilities=probabilities,
             rng=np.random.default_rng(seed),
+            keep=keep,
         )
     )
 
@@ -101,3 +102,28 @@ def test_open_shell_batches_pass_through_unchanged():
     ((out_a, out_b),) = convert([(alpha, beta)], subspace_dim=4)
     assert out_a.tolist() == alpha.tolist()
     assert out_b.tolist() == beta.tolist()
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_kept_strings_survive_the_hartree_fock_slot(seed):
+    # A carryover-first batch of 3 strings without HF; subspace_dim 9 leaves 2 other slots.
+    determinants = np.array([0b1100, 0b0101, 0b1010])
+    ((alpha, beta),) = convert(
+        [(determinants, determinants)], subspace_dim=9, seed=seed, keep=[0b1100, 0b0101]
+    )
+    assert alpha.tolist() == [HF, 0b1100, 0b0101]
+    np.testing.assert_array_equal(alpha, beta)
+
+
+def test_kept_strings_are_truncated_to_the_limit_in_batch_order():
+    determinants = np.array([0b1100, 0b0101, 0b1010, 0b0110])
+    ((alpha, _),) = convert([(determinants, determinants)], subspace_dim=9, keep=determinants)
+    assert alpha.tolist() == [HF, 0b1100, 0b0101]
+
+
+def test_without_kept_strings_the_draw_is_unchanged():
+    determinants = np.array([0b0101, 0b0110, 0b1001, 0b1010, 0b1100])
+    for seed in range(5):
+        assert [a.tolist() for a, _ in convert([(determinants, determinants)], 9, seed)] == [
+            a.tolist() for a, _ in convert([(determinants, determinants)], 9, seed, keep=[])
+        ]

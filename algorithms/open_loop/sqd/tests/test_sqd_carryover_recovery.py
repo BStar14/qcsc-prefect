@@ -101,6 +101,20 @@ def test_best_result_carryover_leads_every_subspace_of_the_next_round():
     assert all(r["dimension"] == 16 for r in outcome.records)
 
 
+def test_batch_transform_gets_the_round_carryover():
+    seen = []
+
+    def transform(batches, rng, carryover):
+        seen.append(carryover)
+        return batches
+
+    co_round0 = _carry((0, 1), (0, 5))
+    solver = _FakeSolver([-1.0, -2.0, -3.0, -2.5], [None, co_round0, None, None])
+    _run(solver, max_iterations=2, batch_transform=transform)
+    assert len(seen[0][0]) == 0
+    np.testing.assert_array_equal(seen[1][0], co_round0[0])
+
+
 def test_initial_carryover_seeds_the_first_round():
     solver = _FakeSolver([-1.0, -2.0], [None, None])
     outcome = _run(
