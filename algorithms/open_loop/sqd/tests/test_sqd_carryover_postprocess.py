@@ -164,7 +164,7 @@ def test_checkpoint_saves_and_a_resume_reuses_the_carryover(run_loop):
         resume_checkpoint=str(run_loop.root / "run-a"),
     )
     rows = artifacts["recovery"]
-    assert [r["round"] for r in rows] == [1, 1]
+    assert [r["round"] for r in rows] == [2, 2]
     assert all(r["num_carryover_a"] == 2 for r in rows)
 
 
@@ -178,7 +178,7 @@ def test_a_new_fraction_resumes_the_same_checkpoint(run_loop):
         resume_checkpoint=str(run_loop.root / "run-a"),
     )
     rows = artifacts["recovery"]
-    assert [r["round"] for r in rows] == [1, 1]
+    assert [r["round"] for r in rows] == [2, 2]
     # Fraction 0 uses no carryover, not even the checkpointed one.
     assert all(r["num_carryover_a"] == 0 for r in rows)
     saved = checkpoint.load_checkpoint(run_loop.root / "run-b" / checkpoint.CKPT_NAME)
@@ -242,7 +242,7 @@ def test_a_failed_batch_fails_the_round_and_a_retry_resumes_it(run_loop):
     retry = _FulqrumLikeBlock(root_dir=str(run_loop.tmp))
     _, artifacts = run_loop("run-a", retry, max_iterations=3)
     rows = artifacts["recovery"]
-    assert len(rows) == 4 and len({r["round"] for r in rows}) == 2
+    assert [r["round"] for r in rows] == [2, 2, 3, 3]
     assert all(r["num_carryover_a"] == 2 for r in rows)
     saved = checkpoint.load_checkpoint(run_loop.root / "run-a" / checkpoint.CKPT_NAME)
     assert saved.next_step == 3

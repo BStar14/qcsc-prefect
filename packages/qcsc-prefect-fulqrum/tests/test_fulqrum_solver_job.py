@@ -187,3 +187,16 @@ def test_package_exports_prefect_side_lazily():
     assert callable(pkg.create_fulqrum_blocks)
     with pytest.raises(AttributeError):
         pkg.not_a_name  # noqa: B018
+
+
+def test_requested_carryover_that_selected_nothing_is_empty_not_none(monkeypatch, tmp_path):
+    """A fraction too small for the subspace selects no string; that is not 'no carryover'."""
+    _fake_scheduler(
+        monkeypatch, on_run=lambda wd: io_utils.write_solver_output(wd, _solution(False))
+    )
+    solver = FulqrumSolverJob(
+        root_dir=str(tmp_path), return_sci_state=False, carryover_fraction=0.4
+    )
+    result = _run(solver)
+    assert result.carryover is not None
+    assert [len(c) for c in result.carryover] == [0, 0]

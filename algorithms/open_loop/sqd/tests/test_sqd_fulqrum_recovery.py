@@ -97,13 +97,16 @@ def test_subsampled_rounds_are_variational_and_recorded():
     raw = _raw_samples(mol["norb"])
     outcome = _run(raw, mol, _solve_fermion_fn(mol), subspace_dim=49, num_batches=3)
     assert len(outcome.records) == 6
-    assert [r["round"] for r in outcome.records] == [0, 0, 0, 1, 1, 1]
+    # Rounds and batches count from 1 in the table artifact, as in the log.
+    assert [r["round"] for r in outcome.records] == [1, 1, 1, 2, 2, 2]
+    assert [r["batch"] for r in outcome.records] == [1, 2, 3, 1, 2, 3]
+    assert "subspace" not in outcome.records[0]
     assert all(r["dimension"] == 49 for r in outcome.records)
     total_fci = mol["e_fci"] + mol["e_nuc"]
     assert all(r["energy"] >= total_fci - 1e-9 for r in outcome.records)
     assert outcome.best_energy == pytest.approx(min(r["energy"] for r in outcome.records))
     assert outcome.round_energies == pytest.approx(
-        [min(r["energy"] for r in outcome.records if r["round"] == k) for k in (0, 1)]
+        [min(r["energy"] for r in outcome.records if r["round"] == k) for k in (1, 2)]
     )
 
 
@@ -168,7 +171,7 @@ def test_resume_runs_only_the_remaining_rounds_and_reports_them():
         on_round_end=lambda *args: ends.append(args),
     )
     assert len(calls) == 4
-    assert [r["round"] for r in outcome.records] == [2, 2, 3, 3]
+    assert [r["round"] for r in outcome.records] == [3, 3, 4, 4]
     assert outcome.round_energies == [-2.0, -0.5]
     # The stored best is a floor; no round of this call beats it.
     assert outcome.best_energy == -10.0 and outcome.best_result is None

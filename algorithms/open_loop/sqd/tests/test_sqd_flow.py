@@ -129,7 +129,7 @@ def test_flow_defaults_to_the_fulqrum_solver_block(offline):
         }
         assert call["norb"] == 6 and call["nelec"] == (2, 2)
     table = _recovery_table(offline)
-    assert [row["round"] for row in table] == [0, 0, 1, 1]
+    assert [row["round"] for row in table] == [1, 1, 2, 2]
     assert energy == pytest.approx(min(row["energy"] for row in table))
     # LiH/STO-3G: SQD is variational, a few mHa above FCI (-7.882 Ha) at most here.
     assert -7.8825 < energy < -7.80

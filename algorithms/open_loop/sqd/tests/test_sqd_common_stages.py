@@ -546,7 +546,7 @@ def test_sqd_loop_diagonalizes_with_the_solver_block(lih, offline, tmp_path):
     assert artifact["key"] == "my-artifact"
     assert checkpoint["key"] == postprocess.CHECKPOINT_ARTIFACT_KEY
     assert checkpoint["table"][0]["checkpoint"].startswith(str(tmp_path))
-    assert [row["round"] for row in artifact["table"]] == [0, 0, 1, 1]
+    assert [row["round"] for row in artifact["table"]] == [1, 1, 2, 2]
     assert energy == pytest.approx(min(row["energy"] for row in artifact["table"]))
     # LiH/STO-3G: SQD is variational, a few mHa above FCI (-7.882 Ha) at most here.
     assert -7.8825 < energy < -7.80
@@ -604,7 +604,7 @@ def test_retry_resumes_after_the_last_completed_round(ckpt_run):
 
     energy, solver, artifacts = ckpt_run("run-a", max_iterations=4)
     assert len(solver.calls) == 4  # rounds 3 and 4 only
-    assert [row["round"] for row in artifacts["recovery"]] == [2, 2, 3, 3]
+    assert [row["round"] for row in artifacts["recovery"]] == [3, 3, 4, 4]
     assert _ckpt(ckpt_run.root / "run-a") == (4, pytest.approx(energy))
     (row,) = artifacts[postprocess.CHECKPOINT_ARTIFACT_KEY]
     assert row["completed_iterations"] == 4 and row["resumed_from"] is None
@@ -618,7 +618,7 @@ def test_resume_checkpoint_continues_another_run_with_more_rounds(ckpt_run):
 
     energy, solver, artifacts = ckpt_run("run-b", max_iterations=5, resume_checkpoint=given)
     assert len(solver.calls) == 6  # rounds 3 to 5
-    assert [row["round"] for row in artifacts["recovery"]] == [2, 2, 3, 3, 4, 4]
+    assert [row["round"] for row in artifacts["recovery"]] == [3, 3, 4, 4, 5, 5]
     assert energy <= first
     assert (ckpt_run.root / "run-a" / "ckpt_t00_w0.npz").read_bytes() == before
     assert _ckpt(ckpt_run.root / "run-b")[0] == 5
