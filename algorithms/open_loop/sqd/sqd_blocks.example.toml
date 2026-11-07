@@ -12,6 +12,7 @@
 
 solver = "fulqrum"                  # "fulqrum" or "dice" (needs sqd[dice])
 profile = "slurm"                   # "slurm", "miyabi", "fugaku", or a path to your profile
+# GPU fulqrum (one MPI rank per GPU): "slurm-gpu" or "miyabi-gpu"; set queue to a GPU queue
 
 queue = "normal"                    # Partition (Slurm) or resource group (Miyabi, Fugaku)
 # project = "YOUR_ACCOUNT"          # Slurm account; required as the group on Miyabi and Fugaku
@@ -66,6 +67,9 @@ python_executable = "/opt/venvs/qrmi/bin/python"
 # max_iter = 1000                   # Default: solver default
 # dense_max_dim = 64
 # return_sci_state = false          # The workflow only needs energies and occupancies
+# backend = "cpu"                   # "gpu" or "gpu-mpi" (set by the GPU profiles)
+# gpus_per_node = 4                 # Scheduler GPU request; unset for CPU runs
+# carryover_fraction = 0.0          # Block default; the run's Carryover Fraction sets it
 # # DICE tuning
 # select_cutoff = 5e-4
 # davidson_tol = 1e-5

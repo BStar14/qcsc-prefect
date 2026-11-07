@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from qcsc_prefect_adapters.fugaku.builder import (
     FugakuJobRequest,
     render_manifest_bulk_script,
@@ -97,3 +98,11 @@ def test_render_manifest_bulk_script_selects_manifest_with_pjm_bulknum(
     assert "TrimSQD" not in text
     assert "/${PJM_BULKNUM}/" not in text
     assert "input_dir" not in text
+
+
+def test_fugaku_rejects_gpus_per_node(tmp_path: Path):
+    profile = ExecutionProfile(command_key="hello", num_nodes=1, gpus_per_node=1)
+    req = FugakuJobRequest(queue_name="small", project="ra000000", executable="/path/to/hello")
+
+    with pytest.raises(ValueError, match="Fugaku nodes have no GPUs"):
+        render_script(work_dir=tmp_path, exec_profile=profile, req=req)

@@ -27,6 +27,7 @@ from sqd_common.runtime_block import (
 )
 
 HPC_TARGETS = ("slurm", "local", "miyabi", "fugaku")
+BACKENDS = ("cpu", "gpu", "gpu-mpi")
 QRMI_WORKER_ARGS = ["-m", "qcsc_prefect.integrations.qiskit.qrmi.worker"]
 # Run settings that belong to the flow parameters, not to the blocks.
 FLOW_PARAMETER_KEYS = {
@@ -77,6 +78,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mpiprocs", type=int)
     parser.add_argument("--ompthreads", type=int)
     parser.add_argument("--resource-class", choices=["cpu", "gpu"])
+    parser.add_argument("--gpus-per-node", type=int)
     parser.add_argument("--modules", nargs="+")
     parser.add_argument("--mpi-options", nargs="*")
     parser.add_argument("--pre-commands", nargs="*")
@@ -96,6 +98,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--hpc-profile-block-name")
     parser.add_argument("--solver-block-name")
 
+    parser.add_argument("--backend", choices=BACKENDS)
+    parser.add_argument(
+        "--carryover-fraction",
+        type=float,
+        help="Solver block default; the flow parameter sqd.carryover_fraction sets it per run.",
+    )
     parser.add_argument("--eigensolver", choices=["scipy", "primme"])
     parser.add_argument("--hamiltonian-format", choices=["csr", "matrix_free"])
     parser.add_argument("--tol", type=float)
@@ -216,6 +224,22 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
 
     max_iter = pick("max_iter")
     ompthreads = pick("ompthreads")
+    gpus_per_node = pick("gpus_per_node")
+    gpus_per_node = None if gpus_per_node is None else int(gpus_per_node)
+    backend = str(pick("backend", "cpu")).strip().lower()
+    if backend not in BACKENDS:
+        raise RuntimeError(f"'backend' must be one of {', '.join(BACKENDS)}; got {backend!r}.")
+    launcher = str(pick("launcher", "single")).strip()
+    if backend == "gpu-mpi" and launcher == "single":
+        raise RuntimeError(
+            "backend = 'gpu-mpi' runs one MPI rank per GPU; set launcher to an MPI launcher "
+            "such as 'srun' or 'mpirun'."
+        )
+    # gpu-mpi runs one rank per GPU, so mpiprocs follows gpus_per_node unless it is set.
+    mpiprocs = pick("mpiprocs", (gpus_per_node or 1) if backend == "gpu-mpi" else 1)
+    carryover_fraction = float(pick("carryover_fraction", 0.0))
+    if not 0.0 <= carryover_fraction <= 1.0:
+        raise RuntimeError(f"'carryover_fraction' must be in [0, 1]; got {carryover_fraction}.")
     block_kwargs: dict[str, Any] = dict(
         hpc_target=hpc_target,
         project=str(project or "").strip(),
@@ -235,12 +259,13 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         command_name="sqd-fulqrum",
         executable_key="sqd_fulqrum_solver",
         profile_name="sqd-fulqrum-omp",
-        launcher=str(pick("launcher", "single")).strip(),
+        launcher=launcher,
         num_nodes=int(pick("num_nodes", 1)),
-        mpiprocs=int(pick("mpiprocs", 1)),
+        mpiprocs=int(mpiprocs),
         ompthreads=None if ompthreads is None else int(ompthreads),
         walltime=str(pick("walltime", "01:00:00")).strip(),
         resource_class=str(pick("resource_class", "cpu")).strip(),
+        gpus_per_node=gpus_per_node,
         modules=_normalize_str_list(pick("modules")),
         mpi_options=_normalize_str_list(pick("mpi_options")),
         pre_commands=_normalize_str_list(pick("pre_commands")),
@@ -256,6 +281,8 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         max_iter=None if max_iter is None else int(max_iter),
         dense_max_dim=int(pick("dense_max_dim", 64)),
         return_sci_state=bool(pick("return_sci_state", False)),
+        backend=backend,
+        carryover_fraction=carryover_fraction,
         slurm_memory=_optional_str(pick("slurm_memory")),
         gfscache=_optional_str(_pick_value(args.fugaku_gfscache, config.get("fugaku_gfscache"))),
         spack_modules=_normalize_str_list(

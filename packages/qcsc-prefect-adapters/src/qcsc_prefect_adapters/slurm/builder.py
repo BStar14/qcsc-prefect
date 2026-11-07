@@ -65,6 +65,8 @@ def to_slurm_template_kwargs(*, exec_profile: ExecutionProfile, req: SlurmJobReq
         kw["ompthreads"] = exec_profile.ompthreads
     if exec_profile.walltime is not None:
         kw["walltime"] = exec_profile.walltime
+    if exec_profile.gpus_per_node is not None:
+        kw["gpus_per_node"] = exec_profile.gpus_per_node
     if exec_profile.modules:
         kw["modules"] = list(exec_profile.modules)
     if exec_profile.pre_commands:

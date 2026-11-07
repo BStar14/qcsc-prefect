@@ -82,3 +82,24 @@ def test_render_slurm_script_omits_optional_directives(tmp_path: Path):
     assert "#SBATCH --account" not in text
     assert "#SBATCH --qpu" not in text
     assert "#SBATCH --workload-kind" not in text
+    assert "--gpus-per-node" not in text
+
+
+def test_render_slurm_script_requests_gpus_per_node(tmp_path: Path):
+    profile = ExecutionProfile(
+        command_key="fulqrum",
+        num_nodes=2,
+        mpiprocs=4,
+        ompthreads=8,
+        gpus_per_node=4,
+        launcher="srun",
+        mpi_options=["--mpi=pmix"],
+    )
+    req = SlurmJobRequest(partition="gpu", executable="/opt/bin/solve")
+
+    text = render_script(work_dir=tmp_path, exec_profile=profile, req=req)
+
+    assert "#SBATCH --gpus-per-node=4" in text
+    assert "#SBATCH --ntasks-per-node=4" in text
+    assert text.index("#SBATCH --gpus-per-node=4") < text.index("QCSC_PREFECT_EXECUTABLE")
+    assert 'srun --mpi=pmix "${QCSC_PREFECT_EXECUTABLE}"' in text
