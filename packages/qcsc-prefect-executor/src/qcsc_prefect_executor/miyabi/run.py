@@ -178,10 +178,15 @@ async def run_miyabi_job(
     stdout = truncate_log(_read_text_if_exists(out_path))
     stderr = truncate_log(_read_text_if_exists(err_path))
 
+    # existing behavior returns Exit_status as int
+    exit_status = int(final_status.get("Exit_status", "0") or "0")
+
     if stdout:
         logger.info(stdout)
     if stderr:
-        logger.error(stderr)
+        # Programs also write progress and warnings to stderr; only a failed job's is an error.
+        log_stderr = logger.warning if exit_status == 0 else logger.error
+        log_stderr(stderr)
 
     # 4) metrics artifact (table) (same shape as existing code)
     art_dict = _create_job_artifact(job_id=job_id, job_status=final_status)
@@ -190,6 +195,4 @@ async def run_miyabi_job(
         key=metrics_artifact_key,
     )
 
-    # existing behavior returns Exit_status as int
-    exit_status = int(final_status.get("Exit_status", "0") or "0")
     return MiyabiRunResult(job_id=job_id, exit_status=exit_status, job_status=final_status_any)

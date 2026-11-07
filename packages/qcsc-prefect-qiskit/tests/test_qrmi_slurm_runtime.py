@@ -391,7 +391,9 @@ def test_configured_compilation_through_worker(runtime, monkeypatch, custom):
     qrmi = ModuleType("qrmi")
     qrmi.QRMIService = lambda: SimpleNamespace(resources=lambda: [resource])
     ibm = ModuleType("qrmi.primitives.ibm")
-    ibm.get_target = lambda acquired: target if acquired is resource else None
+    ibm.get_backend = lambda acquired: SimpleNamespace(
+        target=target if acquired is resource else None
+    )
     monkeypatch.setitem(sys.modules, "qrmi", qrmi)
     monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
     monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)
@@ -558,7 +560,7 @@ def install_fake_qrmi(monkeypatch, resource_id, target):
     qrmi = ModuleType("qrmi")
     qrmi.QRMIService = lambda: SimpleNamespace(resources=lambda: [resource])
     ibm = ModuleType("qrmi.primitives.ibm")
-    ibm.get_target = lambda _: target
+    ibm.get_backend = lambda _: SimpleNamespace(target=target)
     monkeypatch.setitem(sys.modules, "qrmi", qrmi)
     monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
     monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)
@@ -752,7 +754,7 @@ def test_generic_handoff_with_custom_resource_and_registers(runtime, tmp_path, m
     qrmi.QRMIService = lambda: SimpleNamespace(resources=lambda: [resource])
     ibm = ModuleType("qrmi.primitives.ibm")
     target = GenericBackendV2(num_qubits=3, basis_gates=["rz", "sx", "x", "cx"]).target
-    ibm.get_target = lambda _: target
+    ibm.get_backend = lambda _: SimpleNamespace(target=target)
     monkeypatch.setitem(sys.modules, "qrmi", qrmi)
     monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
     monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)

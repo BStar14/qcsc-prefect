@@ -101,7 +101,7 @@ def _record_modules():
     Path("node_modules.json").write_text(json.dumps(loaded))
 
 
-def get_target(resource):
+def get_backend(resource):
     # Record the worker's modules at exit, after it has imported the compilation hook.
     atexit.register(_record_modules)
     return GenericBackendV2(
@@ -109,7 +109,7 @@ def get_target(resource):
         basis_gates=["rz", "sx", "x", "cz"],
         coupling_map=CouplingMap.from_line(8, bidirectional=True),
         seed=42,
-    ).target
+    )
 """
 
 FAKE_TASK_RUNNER = """\
@@ -146,7 +146,7 @@ def _write_fakes(root: Path) -> tuple[Path, Path]:
     (site / "qrmi" / "primitives").mkdir(parents=True)
     (site / "qrmi" / "__init__.py").write_text(FAKE_QRMI)
     (site / "qrmi" / "primitives" / "__init__.py").write_text("")
-    (site / "qrmi" / "primitives" / "ibm.py").write_text("from qrmi import get_target\n")
+    (site / "qrmi" / "primitives" / "ibm.py").write_text("from qrmi import get_backend\n")
     runner = root / "fake_task_runner"
     runner.write_text(f"#!{NODE_PYTHON}\n{FAKE_TASK_RUNNER}")
     runner.chmod(0o755)

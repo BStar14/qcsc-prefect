@@ -13,10 +13,14 @@ from qcsc_prefect_executor.miyabi import run as run_mod
 class _LoggerStub:
     def __init__(self) -> None:
         self.info_lines: list[str] = []
+        self.warning_lines: list[str] = []
         self.error_lines: list[str] = []
 
     def info(self, message: str) -> None:
         self.info_lines.append(message)
+
+    def warning(self, message: str) -> None:
+        self.warning_lines.append(message)
 
     def error(self, message: str) -> None:
         self.error_lines.append(message)
@@ -110,7 +114,9 @@ def test_run_miyabi_job_local_mock(tmp_path: Path, monkeypatch):
     assert (tmp_path / "job.pbs").exists()
     assert logger.info_lines[0] == f"Create Script file in {tmp_path / 'job.pbs'}"
     assert logger.info_lines[1:] == ["hello from stdout"]
-    assert logger.error_lines == ["warning from stderr"]
+    # A successful job's stderr is progress or warnings, not an error.
+    assert logger.warning_lines == ["warning from stderr"]
+    assert logger.error_lines == []
     assert runtime_calls[0][0] == "submit"
     assert runtime_calls[1] == (
         "wait_final_status",
@@ -119,3 +125,31 @@ def test_run_miyabi_job_local_mock(tmp_path: Path, monkeypatch):
     )
     assert len(artifact_calls) == 1
     assert artifact_calls[0]["key"] == "pytest-metrics"
+
+
+def test_run_miyabi_job_logs_stderr_of_a_failed_job_as_error(tmp_path: Path, monkeypatch):
+    stderr_path = tmp_path / "output.err"
+    stderr_path.write_text("Traceback: boom")
+    final_status = {"Exit_status": "1", "Error_Path": f"login-node:{stderr_path}"}
+    logger = _LoggerStub()
+
+    async def fake_create_table_artifact(*, table: list[list[Any]], key: str) -> None:
+        pass
+
+    monkeypatch.setattr(run_mod, "MiyabiPBSRuntime", lambda: _RuntimeStub(final_status, []))
+    monkeypatch.setattr(run_mod, "get_run_logger", lambda: logger)
+    monkeypatch.setattr(run_mod, "create_table_artifact", fake_create_table_artifact)
+
+    result = asyncio.run(
+        run_mod.run_miyabi_job(
+            work_dir=tmp_path,
+            script_filename="job.pbs",
+            exec_profile=ExecutionProfile(command_key="hello", num_nodes=1, launcher="single"),
+            req=MiyabiJobRequest(queue_name="normal", project="z99999", executable="/bin/false"),
+            watch_poll_interval=0.01,
+        )
+    )
+
+    assert result.exit_status == 1
+    assert logger.error_lines == ["Traceback: boom"]
+    assert logger.warning_lines == []

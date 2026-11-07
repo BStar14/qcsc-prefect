@@ -48,7 +48,7 @@ def test_bell_example_round_trip(tmp_path, monkeypatch, shots):
     qrmi.QRMIService = lambda: SimpleNamespace(resources=lambda: [resource])
     ibm = ModuleType("qrmi.primitives.ibm")
     target = GenericBackendV2(num_qubits=2, basis_gates=["rz", "sx", "x", "cx"], seed=42).target
-    ibm.get_target = lambda _: target
+    ibm.get_backend = lambda _: SimpleNamespace(target=target)
     monkeypatch.setitem(sys.modules, "qrmi", qrmi)
     monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
     monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)
