@@ -194,14 +194,46 @@ Before starting, make sure:
 
 - For `quantum_source = "real-device"`, you have IBM Quantum credentials for QRMI. See
   the [QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md).
-- You have built the solver for your site: fulqrum with
-  `packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`, DICE under
-  `packages/qcsc-prefect-dice/native`, or SBD under `packages/qcsc-prefect-sbd/native`.
+- You have built the solver for your site (see [Python environments](#python-environments)).
+
+### Python environments
+
+The workflow uses two Python environments, and the solvers run outside both:
+
+| Environment | Where | Holds |
+| --- | --- | --- |
+| `~/venv/prefect` | workflow host | Prefect, the qcsc-prefect packages and this workflow (see [Install](#install)) |
+| `~/venv/sqd-node` | compute nodes, for `scheduler = "slurm"` | the QRMI worker: QRMI with `task_runner`, `qcsc-prefect-qiskit` and `sqd_common` |
+
+Create the workflow host environment as in the
+[Python environment guide](../../../docs/howto/howto_setup_python_env.md)
+(`uv venv ~/venv/prefect -p 3.12`). For QRMI sampling in Slurm, create the compute-node
+environment on a path the compute nodes see, from the repository root:
+
+```bash
+uv venv ~/venv/sqd-node -p 3.12
+source ~/venv/sqd-node/bin/activate
+uv pip install "qrmi[ibm]"                            # QRMI and task_runner
+uv pip install -e packages/qcsc-prefect-qiskit
+uv pip install --no-deps -e algorithms/open_loop/sqd
+```
+
+Its `bin/python` is the top-level `python_executable` of `sqd_blocks.toml`
+(`--python-executable` on the command line).
+
+Each solver is built on its own, and its block points to the built executable:
+
+| Solver | Build | Executable in `sqd_blocks.toml` |
+| --- | --- | --- |
+| fulqrum | `packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`, into its own venv `native/fulqrum` | `[fulqrum] fulqrum_executable`: `/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve` |
+| DICE | the `build_dice*.sh` scripts in `packages/qcsc-prefect-dice/native` | `[dice] dice_executable`: `/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice` |
+| SBD | `packages/qcsc-prefect-sbd/native/build_sbd_slurm.sh` (or `build_sbd.sh`, `build_sbd_gpu.sh`, `build_sbd_fugaku.sh`) | `[sbd] sbd_executable`: `/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag` |
 
 ### Install
 
 The package is installed from a source checkout. On the submit host (where the
-Prefect process runs and the scheduler commands work), from the repository root:
+Prefect process runs and the scheduler commands work), in `~/venv/prefect`, from the
+repository root:
 
 ```bash
 uv pip install --no-deps \
@@ -315,7 +347,7 @@ Block names follow the solver and system:
 Later layers override earlier ones: the profile, then `[advanced]`, then the top
 level of your file, then its `[<solver>]` table. Any profile key can be set in your
 file to override it, and any setting can also be given as a CLI flag. A config
-without `profile` or `solver` is read as before, as one flat table.
+without `profile` or `solver` is read as one flat table.
 
 The bundled profiles are `slurm`, `miyabi` and `fugaku` (CPU), plus two for the GPU
 builds of fulqrum (`backend = "gpu-mpi"`) and SBD (`solver_mode = "gpu"`, `diag-gpu`),
@@ -341,7 +373,9 @@ Each batch is one MPI job of the SBD `diag` executable.
 1. **Compute nodes:** build `diag` with the script for your system under
    `packages/qcsc-prefect-sbd/native/`: `build_sbd_slurm.sh` (Slurm, MPI and
    OpenBLAS), `build_sbd.sh` (Miyabi-C), `build_sbd_gpu.sh` (`diag-gpu`, Miyabi-G) or
-   `build_sbd_fugaku.sh`.
+   `build_sbd_fugaku.sh`. The CPU scripts write
+   `packages/qcsc-prefect-sbd/native/diag`, the default `sbd_executable` of the
+   example, and `build_sbd_gpu.sh` writes `diag-gpu` beside it.
 2. **Submit host:** install `qcsc-prefect-sbd` and `sqd[sbd]` (see [Install](#install)).
 3. Set `solver = "sbd"` and `[sbd] sbd_executable` in `sqd_blocks.toml`, then create
    the blocks:
@@ -353,7 +387,8 @@ Each batch is one MPI job of the SBD `diag` executable.
 
    `--solver sbd` selects SBD for a file with another `solver`. The MPI launcher,
    ranks and threads come from the profile's `[sbd]` table; the `[sbd]` table of your
-   file sets the Davidson tuning. The product of `task_comm_size`, `adet_comm_size`
+   file sets the Davidson tuning (`block`, `iteration`, `tolerance`, `carryover_type`,
+   `solver_mode` and the three comm sizes). The product of `task_comm_size`, `adet_comm_size`
    and `bdet_comm_size` must divide the MPI ranks, and `solver_mode = "gpu"` needs a
    GPU profile (`resource_class = "gpu"`); `--dry-run` checks both.
 
@@ -383,7 +418,7 @@ runs depends on the block's scheduler:
   `qcsc-prefect-qiskit` (the worker, which imports Prefect), and this package from the
   same revision. The hook imports only Qiskit and qiskit-ibm-runtime, so ffsim,
   Prefect-Qiskit and the solvers are not needed there. Install them into that Python,
-  for example `~/venv/sqd-node` (the workflow host runs `~/venv/prefect`), check the
+  `~/venv/sqd-node` in [Python environments](#python-environments), check the
   imports, and set its path as the top-level `python_executable`. If the QRMI worker
   environment already has `qcsc-prefect-qiskit`, only the last three commands are
   needed:

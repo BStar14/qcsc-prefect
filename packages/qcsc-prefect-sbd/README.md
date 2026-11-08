@@ -79,8 +79,13 @@ set must not repeat a determinant. The FCIDUMP has no core energy, so `energy` i
 electronic energy, as with the DICE solver.
 
 The block refers to a `CommandBlock`, an `ExecutionProfileBlock` and an `HPCProfileBlock`
-by name. `algorithms/closed_loop/sqd_de/create_blocks.py` creates all four blocks for Miyabi, Fugaku or
-Slurm.
+by name. `create_sbd_blocks` creates all four. In the open-loop SQD workflow,
+`sqd-create-blocks --solver sbd` (`algorithms/open_loop/sqd/sqd_sbd/create_blocks.py`)
+creates them from `sqd_blocks.toml` as `sqd-sbd-solver`, `cmd-sqd-sbd-solver`,
+`exec-sqd-sbd-<system>` and `hpc-<system>-sqd-sbd`; see
+[its README](../../algorithms/open_loop/sqd/README.md).
+`algorithms/closed_loop/sqd_de/create_blocks.py` creates them for the closed-loop
+workflow on Miyabi, Fugaku or Slurm.
 
 Blocks saved before this package existed, when `SBDSolverJob` was defined in
 `algorithms/closed_loop/sqd_de`, keep working: the block type name (`SBD Solver Job`) and

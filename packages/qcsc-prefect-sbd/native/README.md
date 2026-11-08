@@ -53,6 +53,19 @@ The modified program generates the following output files:
 
 These files are consumed by the Prefect integration block to construct a corresponding Python data class.
 
+## Building the Executable on a Slurm Cluster
+
+For a generic Slurm cluster with an MPI C++ wrapper (`mpicxx` or `mpic++`) and OpenBLAS,
+run:
+
+```bash
+bash ./build_sbd_slurm.sh
+```
+
+It produces `packages/qcsc-prefect-sbd/native/diag`. Launch it with `srun --mpi=pmix`
+(match the PMI plugin of your Slurm and MPI), as the `slurm` profile of the open-loop SQD
+workflow does with 4 ranks and 1 thread each.
+
 ## Building the Executable on Miyabi
 
 To build the executable, run the provided build script:
@@ -110,10 +123,12 @@ Upon successful compilation, an executable named `diag` will be created in this 
 packages/qcsc-prefect-sbd/native/diag
 ```
 
-Set the absolute path to this executable in the SBD block configuration file:
+`build_sbd.sh` and `build_sbd_slurm.sh` write the same path. Set the absolute path to this
+executable in the SBD block configuration file:
 
 ```toml
-# algorithms/closed_loop/sqd_de/sbd_blocks.toml (or the block config of another algorithm)
+# algorithms/open_loop/sqd/sqd_blocks.toml, in its [sbd] table
+# (or algorithms/closed_loop/sqd_de/sbd_blocks.toml, or the block config of another algorithm)
 sbd_executable = "/abs/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 ```
 
