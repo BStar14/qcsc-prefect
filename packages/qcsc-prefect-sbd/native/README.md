@@ -22,9 +22,15 @@ The Python-facing input/output files, including determinant byte order and carry
 padding, are unchanged. The native compatibility tests cover MPI broadcast, energy,
 occupancies and the carryover round trip with a small analytic Hamiltonian.
 
-The Python wrapper explicitly passes `--carryover_type 1`; upstream defaults to type
-0, which produces no carryover even when `--carryover_ratio` is set. User arguments
-are appended afterward and can override the carryover type intentionally.
+The Python wrapper passes `--carryover_type` from the `SBDSolverJob.carryover_type`
+field, 1 by default; upstream defaults to type 0, which produces no carryover even when
+`--carryover_ratio` is set. User arguments are appended afterward and can override it.
+
+The driver reads `fcidump.txt` and `AlphaDets.bin` unless `--fcidump` or `--adetfile`
+name other files. With `--bdetfile` it reads a separate beta determinant set (open shell);
+without it the beta set is the alpha set. GPU builds (`-DSBD_THRUST` with a CUDA
+compiler) bind each rank to GPU `node-local rank % GPU count`, from `SLURM_LOCALID` or
+`OMPI_COMM_WORLD_LOCAL_RANK`, before `MPI_Init`.
 
 After building the CPU executable, run them with:
 
@@ -43,6 +49,7 @@ The modified program generates the following output files:
 - `occ_a.txt`: Average occupancies of alpha orbitals
 - `occ_b.txt`: Average occupancies of beta orbitals
 - `carryover.bin`: Carryover bitstrings in `uint8` format with big-endian ordering
+- `carryover_b.bin`: Beta carryover bitstrings in the same format, only with `--bdetfile`
 
 These files are consumed by the Prefect integration block to construct a corresponding Python data class.
 

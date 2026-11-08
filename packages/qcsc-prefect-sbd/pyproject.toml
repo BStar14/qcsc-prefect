@@ -20,6 +20,8 @@ dependencies = [
     "prefect>=2.19",
     "pydantic>=2",
     "pyscf",
+    "qcsc-prefect-blocks==0.3.1",
+    "qcsc-prefect-core==0.3.1",
     "qcsc-prefect-executor==0.3.1",
 ]
 
