@@ -1,6 +1,6 @@
 # Sample-based Quantum Diagonalization
 
-This package (`sqd` 2.2) implements the QCSC algorithm demonstrated in the paper [Chemistry Beyond the Scale of Exact Diagonalization on a Quantum-Centric Supercomputer](https://arxiv.org/abs/2405.05068).
+This package (`sqd` 2.1) implements the QCSC algorithm demonstrated in the paper [Chemistry Beyond the Scale of Exact Diagonalization on a Quantum-Centric Supercomputer](https://arxiv.org/abs/2405.05068).
 
 It provides one Prefect flow, `sqd` (deploy with `sqd-deploy`). The solver that
 diagonalizes each subspace is chosen once, with `solver` in `sqd_blocks.toml`:
@@ -428,9 +428,9 @@ The resume key of a checkpoint now includes the solver type, so a checkpoint
 written before 2.0 is not resumed: a Retry moves it aside and starts at round 1,
 and `resume_checkpoint` refuses it.
 
-### From 2.1 to 2.2
+### From 2.0 to 2.1
 
-| 2.1 | 2.2 |
+| 2.0 | 2.1 |
 | --- | --- |
 | `molecule.ccsd_maxiter` (default 4) | CCSD Restarts of the Advanced SQD Settings block (default 10) |
 | `circuit.use_reset_mitigation`, `circuit.configure_transpiler`, `circuit.transpiler.*` | Reset Mitigation, Optimization Level and the SABRE fields of the Advanced SQD Settings block |
@@ -445,7 +445,7 @@ and `resume_checkpoint` refuses it.
 Run `qcsc-qrmi login`, then re-run `sqd-create-blocks` once: it saves the blocks under the new names and creates
 the Advanced SQD Settings block, and the blocks under the old names can then be
 deleted in Prefect Cloud. To keep using the old blocks instead, name them in
-`[advanced]`. A run form filled before 2.2 keeps the moved fields hidden at their old
+`[advanced]`. A run form filled before 2.1 keeps the moved fields hidden at their old
 values; those are ignored, and a changed value fails with a pointer to the block.
 For the same reason, a `solver_block_ref` of `fulqrum_solver_job/sqd-fulqrum-solver`,
 the old run form default, is ignored; to run with that block while the Advanced SQD

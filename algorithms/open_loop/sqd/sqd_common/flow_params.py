@@ -438,7 +438,7 @@ class FlowParameters(BaseModel):
         description=(
             "Leave empty to use the Solver Block of the Advanced Settings Block. Set it, as "
             "'<block type slug>/<block name>', only to run with another solver block. "
-            "fulqrum_solver_job/sqd-fulqrum-solver, the run form default before sqd 2.2, is "
+            "fulqrum_solver_job/sqd-fulqrum-solver, the run form default before sqd 2.1, is "
             "ignored here."
         ),
         title="Solver Block Override",
@@ -457,6 +457,6 @@ class FlowParameters(BaseModel):
             "",
             DEFAULT_SOLVER_BLOCK_REF,
         ):
-            # The default of a run form filled before 2.2 is stale: the block holds it now.
+            # The default of a run form filled before 2.1 is stale: the block holds it now.
             data = {key: value for key, value in data.items() if key != "solver_block_ref"}
         return data
