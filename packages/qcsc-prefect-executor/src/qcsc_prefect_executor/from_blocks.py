@@ -620,8 +620,7 @@ async def _prepare_job_from_blocks(
             partition=submission_target.queue_name,
             account=submission_target.project or None,
             executable=executable,
-            # The profile decides whether the job requests a QPU; slurm_qpu, which one.
-            qpu=(slurm_qpu or hpc_block.slurm_qpu) if hpc_block.slurm_qpu else None,
+            qpu=slurm_qpu or hpc_block.slurm_qpu,
             memory=getattr(hpc_block, "slurm_memory", None),
             ntasks=getattr(hpc_block, "slurm_ntasks", None),
             extra_directives=tuple(hpc_block.slurm_extra_directives),
@@ -1643,8 +1642,7 @@ async def run_job_from_blocks(
         execution_profile_overrides: Optional runtime overrides for selected
             execution profile fields, such as ``num_nodes`` or ``walltime``.
         slurm_qpu: Slurm only: ``--qpu`` resource for this job, instead of the HPC
-            profile's ``slurm_qpu``. A profile without ``slurm_qpu`` requests no QPU,
-            and this argument is then ignored.
+            profile's ``slurm_qpu``.
         submit_env: Slurm only: extra environment variables for ``sbatch``. The
             job and its SPANK plugins see them; the rendered script does not. A
             value of None removes the variable from the environment sbatch inherits.

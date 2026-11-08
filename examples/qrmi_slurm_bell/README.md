@@ -46,14 +46,14 @@ ExecutionProfileBlock(
 HPCProfileBlock(
     hpc_target="slurm",
     queue_cpu="debug",
-    slurm_qpu="test_heron",
     slurm_ntasks=1,
     executable_map={"python": "/shared/venv/qrmi/bin/python"},
 ).save("qrmi-bell-hpc", overwrite=True)
 ```
 
-The HPC profile's `slurm_qpu` must match the flow's `--resource`. The selected
-Python must import the installed worker from an arbitrary job directory.
+The job requests the flow's `--resource` as `--qpu`, so the HPC profile names no
+QPU; the resource must be in the cluster's `qrmi_config.json`. The selected Python
+must import the installed worker from an arbitrary job directory.
 A read-only installation check on each compute node is:
 
 ```bash

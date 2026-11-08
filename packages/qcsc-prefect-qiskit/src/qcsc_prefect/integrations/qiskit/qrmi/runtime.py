@@ -92,6 +92,9 @@ class QrmiRuntime:
     # Slurm only: QRMI settings without the "<resource>_" prefix (never the API key), passed
     # to sbatch's environment so that SPANK reads them over qrmi_config.json.
     job_settings: Mapping[str, str] | None = field(default=None, kw_only=True)
+    # Slurm only: request ``resource`` as the job's --qpu. Off only for tests without a
+    # QPU, which then follow the HPC profile's slurm_qpu.
+    request_qpu: bool = field(default=True, kw_only=True)
 
     def __post_init__(self) -> None:
         self._validate_scheduler()
@@ -211,9 +214,8 @@ async def _sample_on_slurm(circuits, shots, registers, configs, runtime) -> Prim
         work_dir=work_dir,
         script_filename="sampler.slurm",
         user_args=["--request", "sampler_request.json"],
-        # The job requests the runtime's resource, which the worker checks, whenever the
-        # HPC profile requests a QPU.
-        slurm_qpu=runtime.resource,
+        # The job requests the runtime's resource, which the worker checks.
+        slurm_qpu=runtime.resource if runtime.request_qpu else None,
         submit_env=_job_environment(runtime),
         watch_poll_interval=runtime.watch_poll_interval,
         timeout_seconds=runtime.timeout_seconds,
