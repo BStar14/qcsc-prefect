@@ -27,7 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Compute-node solver. The fulqrum this package needs is not on PyPI; build it per
-# site with native/build_fulqrum.sh and install this package there with --no-deps.
+# site with native/build_fulqrum.sh, which installs this package there with --no-deps.
 # The CPU backend works with fulqrum>=0.5; the gpu and gpu-mpi backends need 1.0
 # built with FQ_BUILD_GPU=1.
 solver = [

@@ -24,9 +24,11 @@ This package provides:
   `miyabi` or `fugaku`.
 
 Fulqrum itself is not installed from PyPI. It is built per site with
-`native/build_fulqrum.sh`, by default fulqrum 1.0 at a pinned commit. Install
-this package into that environment with `--no-deps`; the compute node then needs
-only numpy, scipy and fulqrum, plus CuPy and mpi4py for the GPU backends.
+`native/build_fulqrum.sh`, by default fulqrum 1.0 at a pinned commit, into the
+virtual environment `native/fulqrum`. The script installs this package there
+with `--no-deps`, so the executable is `native/fulqrum/bin/qcsc-fulqrum-solve`;
+the compute node needs only numpy, scipy and fulqrum, plus CuPy and mpi4py for
+the GPU backends.
 [native/README.md](native/README.md) has the CPU and GPU build recipes, the
 launch layout and the runtime variables.
 
@@ -86,7 +88,7 @@ create_fulqrum_blocks(
     hpc_target="slurm",
     queue="normal",
     root_dir="/shared/fulqrum-jobs",
-    fulqrum_executable="/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve",
+    fulqrum_executable="/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve",
     ompthreads=8,
 )
 

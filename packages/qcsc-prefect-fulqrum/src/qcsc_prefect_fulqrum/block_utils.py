@@ -78,8 +78,8 @@ def create_fulqrum_blocks(
     """Create the standard block set required to run fulqrum on qcsc-prefect.
 
     ``fulqrum_executable`` is the ``qcsc-fulqrum-solve`` entry point of the
-    compute-node environment, for example
-    ``/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve``.
+    compute-node environment that ``native/build_fulqrum.sh`` builds, for example
+    ``/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve``.
 
     ``backend`` selects the solver path (see :mod:`qcsc_prefect_fulqrum.solver`):
 

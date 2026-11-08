@@ -1,11 +1,15 @@
 #!/bin/bash
 # Build fulqrum into a dedicated compute-side virtual environment.
 #
-# Usage: build_fulqrum.sh <venv_dir> [fulqrum_src_dir]
+# Usage: build_fulqrum.sh [venv_dir] [fulqrum_src_dir]
 #
-# If fulqrum_src_dir is omitted, fulqrum is cloned at FULQRUM_REF into
-# ./external/fulqrum, with the submodules the build needs. README.md next to
-# this script has the CPU and GPU recipes.
+# venv_dir defaults to fulqrum/ next to this script. After fulqrum, the script
+# installs qcsc-prefect-fulqrum from this checkout with --no-deps, so the
+# compute-node executable is <venv_dir>/bin/qcsc-fulqrum-solve. If
+# fulqrum_src_dir is omitted, fulqrum is cloned at FULQRUM_REF into external/fulqrum
+# next to this script, with the submodules the build needs; pass "" as venv_dir
+# to build a given source into the default venv. README.md next to this script
+# has the CPU and GPU recipes.
 #
 # Environment:
 #   PYTHON             interpreter used to create the venv (default: python3)
@@ -19,6 +23,8 @@
 #                        Needs a C compiler, Python headers, pkg-config, and an
 #                        LP64 BLAS/LAPACK with a .pc file (openblas, mkl, blis or lapack).
 #   PRIMME_VERSION     primme version to build (default: 3.2.3)
+#   FULQRUM_SKIP_CLI   1 to skip installing qcsc-prefect-fulqrum, for example
+#                      when it is installed editable later (default: 0)
 #
 # GPU build: the CUDA kernels, GPUHamiltonian, and the distributed GPU solver
 # with fulqrum's own patched PRIMME. Needs the CUDA toolkit (nvcc), an MPI with
@@ -34,13 +40,17 @@
 #                      cupy-cuda12x for a CUDA 12 toolkit)
 set -euo pipefail
 
-VENV_DIR=${1:?usage: build_fulqrum.sh <venv_dir> [fulqrum_src_dir]}
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+VENV_DIR=${1:-$SCRIPT_DIR/fulqrum}
+# Absolute, since the checks below run from /.
+case "$VENV_DIR" in /*) ;; *) VENV_DIR="$(pwd)/$VENV_DIR" ;; esac
 SRC_DIR=${2:-}
 PYTHON=${PYTHON:-python3}
 FULQRUM_REPO=${FULQRUM_REPO:-https://github.com/Qiskit/fulqrum.git}
 FULQRUM_REF=${FULQRUM_REF:-2e2d66e6bafb617e7c685b3591b0a0018202d2cd}
 FULQRUM_WITH_GPU=${FULQRUM_WITH_GPU:-0}
 FULQRUM_CUPY=${FULQRUM_CUPY:-cupy-cuda13x>=14,<15}
+FULQRUM_SKIP_CLI=${FULQRUM_SKIP_CLI:-0}
 export FQ_BUILD_PARALLEL=${FQ_BUILD_PARALLEL:-$(nproc 2>/dev/null || echo 1)}
 
 die() {
@@ -97,7 +107,7 @@ EOF
 fi
 
 if [ -z "$SRC_DIR" ]; then
-    SRC_DIR="$(pwd)/external/fulqrum"
+    SRC_DIR="$SCRIPT_DIR/external/fulqrum"
     rm -rf "$SRC_DIR"
     git clone "$FULQRUM_REPO" "$SRC_DIR"
     git -C "$SRC_DIR" checkout "$FULQRUM_REF"
@@ -111,6 +121,10 @@ fi
 if [ "$FULQRUM_WITH_GPU" = 1 ] && [ ! -f "$SRC_DIR/third-party/primme/include/primme.h" ]; then
     die "$SRC_DIR is missing the third-party/primme submodule" \
         "(git submodule update --init --recursive third-party/primme)"
+fi
+if [ "$FULQRUM_SKIP_CLI" != 1 ] && [ ! -f "$SCRIPT_DIR/../pyproject.toml" ]; then
+    die "$SCRIPT_DIR/.. is not the qcsc-prefect-fulqrum package: run this script from" \
+        "packages/qcsc-prefect-fulqrum/native of a checkout, or set FULQRUM_SKIP_CLI=1"
 fi
 
 "$PYTHON" -m venv "$VENV_DIR"
@@ -147,6 +161,10 @@ if [ -n "${FULQRUM_EXTRA_PIP:-}" ]; then
     # shellcheck disable=SC2086
     "$VENV_DIR/bin/python" -m pip install $FULQRUM_EXTRA_PIP
 fi
+if [ "$FULQRUM_SKIP_CLI" != 1 ]; then
+    # The compute-node CLI; fulqrum, numpy and setuptools are already in the venv.
+    "$VENV_DIR/bin/python" -m pip install --no-deps --no-build-isolation "$SCRIPT_DIR/.."
+fi
 
 # Import from outside the source tree so the installed package is checked.
 cd /
@@ -178,4 +196,10 @@ if count:
 else:
     print("warning: no CUDA device on this host; rerun this check on a GPU node")
 PYCODE
+fi
+if [ "$FULQRUM_SKIP_CLI" != 1 ]; then
+    "$VENV_DIR/bin/qcsc-fulqrum-solve" --help >/dev/null
+    echo "fulqrum executable: $VENV_DIR/bin/qcsc-fulqrum-solve"
+else
+    echo "fulqrum venv: $VENV_DIR (qcsc-prefect-fulqrum not installed: FULQRUM_SKIP_CLI=1)"
 fi

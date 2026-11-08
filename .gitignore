@@ -217,6 +217,11 @@ packages/qcsc-prefect-sbd/native/sbd/
 .DS_Store
 .vscode/sftp.json
 
+# Native fulqrum build outputs
+packages/qcsc-prefect-fulqrum/native/fulqrum/
+packages/qcsc-prefect-fulqrum/native/fulqrum-gpu/
+packages/qcsc-prefect-fulqrum/native/external/
+
 # Local fulqrum Docker/Slurm testbed
 packages/qcsc-prefect-fulqrum/native/docker/
 

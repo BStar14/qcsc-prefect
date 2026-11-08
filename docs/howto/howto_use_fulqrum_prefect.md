@@ -20,28 +20,32 @@ GPU across nodes (`gpu-mpi`). The GPU backends need a GPU build of fulqrum; see
 
 The package is installed from the source checkout. It runs in two environments.
 
-**Compute nodes** need only numpy, scipy and fulqrum. Build fulqrum into a dedicated
-virtual environment, then install this package into it without dependencies:
+**Compute nodes** need only numpy, scipy and fulqrum. `build_fulqrum.sh` builds fulqrum into
+a dedicated virtual environment, `packages/qcsc-prefect-fulqrum/native/fulqrum` of the
+checkout, and installs this package into it without dependencies:
 
 ```bash
 cd /path/to/qcsc-prefect
-packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh /opt/venvs/fulqrum
-/opt/venvs/fulqrum/bin/python -m pip install --no-deps packages/qcsc-prefect-fulqrum
+packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh
 ```
 
-`build_fulqrum.sh` clones fulqrum at a pinned commit unless a source directory is passed as
-the second argument. It needs a C++ compiler with OpenMP support. Set `FULQRUM_WITH_PRIMME=1`
+The script clones fulqrum at a pinned commit into `native/external/fulqrum`. It takes
+another virtual environment directory as its first argument and a fulqrum checkout to build
+instead as its second. It needs a C++ compiler with OpenMP support. Set `FULQRUM_WITH_PRIMME=1`
 to also build the optional PRIMME eigensolver (`eigensolver="primme"`). PRIMME needs a C
 compiler, Python headers, `pkg-config` and a BLAS/LAPACK with a `.pc` file, for example
 `openblas-devel`. The script header lists the other environment variables.
 
-The path of `/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve` is the executable that the blocks
-point to. The compute environment does not need Prefect or qiskit-addon-sqd.
+The build ends by printing the executable that the blocks point to,
+`/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve`. The checkout must be visible at the same path on the compute
+nodes. The compute environment does not need Prefect or qiskit-addon-sqd.
 
 **The workflow host** (where the Prefect process runs and jobs are submitted) installs the
-package with its dependencies:
+package with its dependencies, into the `~/venv/prefect` environment of
+[the Python environment setup](howto_setup_python_env.md):
 
 ```bash
+source ~/venv/prefect/bin/activate
 python -m pip install \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-blocks \
@@ -62,7 +66,7 @@ create_fulqrum_blocks(
     hpc_target="slurm",
     queue="normal",
     root_dir="/shared/fulqrum-jobs",
-    fulqrum_executable="/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve",
+    fulqrum_executable="/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve",
     ompthreads=8,
 )
 ```
@@ -108,4 +112,6 @@ The `sqd` workflow in `algorithms/open_loop/sqd` runs the SQD experiment of
 arXiv:2405.05068 with this solver by default: `sqd-create-blocks` saves the
 `sqd-fulqrum-solver` block and records `fulqrum_solver_job/sqd-fulqrum-solver` as
 Solver Block of the Advanced SQD Settings block. Its README covers block creation from a TOML file
-(`sqd-create-blocks`), deployment (`sqd-deploy`) and QRMI sampling.
+(`sqd-create-blocks`), deployment (`sqd-deploy`) and QRMI sampling. The QRMI sampler job runs
+the top-level `python_executable` of that file, a compute-node Python such as
+`~/venv/sqd-node/bin/python`, and fulqrum stays in its own environment.

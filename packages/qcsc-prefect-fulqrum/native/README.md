@@ -1,19 +1,23 @@
 # Building fulqrum for `qcsc-fulqrum-solve`
 
 `build_fulqrum.sh` builds [fulqrum](https://github.com/Qiskit/fulqrum) into a
-dedicated virtual environment on the target system. By default it clones the
-pinned commit `2e2d66e` (fulqrum 1.0.0, branch `v1.0.0-rc`) with the submodules
-the build needs. Then install this package into that environment with
-`--no-deps`:
+dedicated virtual environment on the target system, `native/fulqrum` next to
+the script by default. It clones the pinned commit `2e2d66e` (fulqrum 1.0.0,
+branch `v1.0.0-rc`) into `native/external/fulqrum` with the submodules the build
+needs, and then installs this package into the environment with `--no-deps`.
+From the repository root:
 
 ```bash
-packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh /opt/venvs/fulqrum
-/opt/venvs/fulqrum/bin/python -m pip install --no-deps packages/qcsc-prefect-fulqrum
+packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh
 ```
 
-The compute node then runs `/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve`. Run
-`build_fulqrum.sh` without arguments to see its options in the header, or pass a
-fulqrum checkout as the second argument to build that instead of cloning.
+The compute node then runs
+`/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve`,
+which the script prints at the end. The header of `build_fulqrum.sh` lists its
+options. Pass another virtual environment directory as the first argument, and a
+fulqrum checkout as the second to build that instead of cloning.
+`FULQRUM_SKIP_CLI=1` leaves this package out, for an environment that installs
+it later, for example in editable mode.
 
 ## Backends
 
@@ -49,7 +53,7 @@ determinants are always solved densely on the CPU.
 Needs a C++17 compiler with OpenMP and Python 3.11 or later:
 
 ```bash
-build_fulqrum.sh /opt/venvs/fulqrum
+packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh
 ```
 
 `FULQRUM_WITH_PRIMME=1` also builds PyPI's `primme` for `eigensolver="primme"`.
@@ -78,7 +82,8 @@ make install PREFIX=$HOME/.local/opt/openblas-ilp64 INTERFACE64=1 \
     SYMBOLSUFFIX=64_ LIBNAMESUFFIX=64_ DYNAMIC_ARCH=1 USE_THREAD=1 USE_OPENMP=0
 
 # Then, with the site's CUDA and MPI modules loaded:
-FULQRUM_WITH_GPU=1 FQ_CUDA_ARCH=sm_90 build_fulqrum.sh /opt/venvs/fulqrum-gpu
+FULQRUM_WITH_GPU=1 FQ_CUDA_ARCH=sm_90 \
+    packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh packages/qcsc-prefect-fulqrum/native/fulqrum-gpu
 ```
 
 | Variable | Default | Purpose |
@@ -101,8 +106,8 @@ backend, and prints the MPI library mpi4py uses. On a build host without a GPU
 it warns that no device is visible; run it again on a compute node:
 
 ```bash
-/opt/venvs/fulqrum-gpu/bin/python -c 'import cupy; print(cupy.cuda.runtime.getDeviceCount())'
-mpirun -n 2 /opt/venvs/fulqrum-gpu/bin/python -c \
+packages/qcsc-prefect-fulqrum/native/fulqrum-gpu/bin/python -c 'import cupy; print(cupy.cuda.runtime.getDeviceCount())'
+mpirun -n 2 packages/qcsc-prefect-fulqrum/native/fulqrum-gpu/bin/python -c \
     'from mpi4py import MPI; print(MPI.COMM_WORLD.rank, MPI.COMM_WORLD.size)'
 ```
 
@@ -138,15 +143,16 @@ environment (a fulqrum dependency) plus pytest, and runs only with
 `FULQRUM_GPU=1`. From the repository root, on a GPU node:
 
 ```bash
-/opt/venvs/fulqrum-gpu/bin/python -m pip install pytest
-/opt/venvs/fulqrum-gpu/bin/python -m pip install --no-deps packages/qcsc-prefect-fulqrum
+packages/qcsc-prefect-fulqrum/native/fulqrum-gpu/bin/python -m pip install pytest
 
 # One process: the gpu backend on every GPU it sees, gpu-mpi on one rank.
-FULQRUM_GPU=1 /opt/venvs/fulqrum-gpu/bin/python -m pytest -p no:cacheprovider \
+FULQRUM_GPU=1 packages/qcsc-prefect-fulqrum/native/fulqrum-gpu/bin/python -m pytest \
+    -p no:cacheprovider \
     packages/qcsc-prefect-fulqrum/tests/test_fulqrum_gpu_integration.py
 
 # One rank per GPU; with Slurm, srun --mpi=pmix -n 2 --gpus-per-task=1 instead.
-FULQRUM_GPU=1 mpirun -n 2 /opt/venvs/fulqrum-gpu/bin/python -m pytest -p no:cacheprovider \
+FULQRUM_GPU=1 mpirun -n 2 packages/qcsc-prefect-fulqrum/native/fulqrum-gpu/bin/python -m pytest \
+    -p no:cacheprovider \
     packages/qcsc-prefect-fulqrum/tests/test_fulqrum_gpu_integration.py
 ```
 
