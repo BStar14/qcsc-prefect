@@ -154,6 +154,42 @@ def test_dice_runtime_table_saves_the_block_after_the_solver(monkeypatch, tmp_pa
     assert "secret-key" not in out
 
 
+@pytest.mark.parametrize(
+    ("profile", "extra", "expected"),
+    [
+        ("miyabi", "", ["-np", "4"]),
+        ("miyabi", "num_nodes = 3", ["-np", "12"]),
+        ("fugaku", "num_nodes = 5", ["-n", "10"]),
+    ],
+)
+def test_dice_mpi_options_default_to_all_ranks(
+    monkeypatch, tmp_path, capsys, profile, extra, expected
+):
+    pytest.importorskip("qcsc_prefect_dice")
+    from sqd_dice import create_blocks as dice
+
+    path = _dice_config(tmp_path, profile)
+    path.write_text(path.read_text().replace("[dice]\n", f"[dice]\n{extra}\n", 1))
+    monkeypatch.setattr(sys, "argv", ["sqd-create-blocks", "--config", str(path), "--dry-run"])
+    dice.main()
+    blocks = json.loads(capsys.readouterr().out)["blocks"]
+    assert blocks["mpi_options"] == expected
+
+
+def test_dice_mpi_options_that_differ_from_the_ranks_fail(monkeypatch, tmp_path):
+    pytest.importorskip("qcsc_prefect_dice")
+    from sqd_dice import create_blocks as dice
+
+    monkeypatch.setattr(
+        dice, "create_dice_blocks", lambda **kwargs: pytest.fail("no block may be saved")
+    )
+    path = _dice_config(tmp_path)
+    path.write_text(path.read_text().replace("[dice]\n", '[dice]\nmpi_options = ["-np", "2"]\n', 1))
+    monkeypatch.setattr(sys, "argv", ["sqd-create-blocks", "--config", str(path)])
+    with pytest.raises(RuntimeError, match=r"starts 2 MPI ranks.*1 x 4 = 4"):
+        dice.main()
+
+
 def test_dice_runtime_table_rejects_a_key_before_any_block(monkeypatch, tmp_path):
     pytest.importorskip("qcsc_prefect_dice")
     from sqd_dice import create_blocks as dice

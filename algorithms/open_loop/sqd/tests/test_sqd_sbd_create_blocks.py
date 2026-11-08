@@ -208,6 +208,23 @@ def test_comm_sizes_that_divide_the_ranks_pass():
     assert kwargs["num_nodes"] * kwargs["mpiprocs"] == 8
 
 
+def test_the_mpi_options_count_must_match_the_ranks(tmp_path):
+    # The Miyabi profile starts -np 4; four nodes need -np 16 too.
+    config = load_block_config(_sbd_config(tmp_path, "miyabi", extra="num_nodes = 4"))
+    with pytest.raises(RuntimeError, match=r"starts 4 MPI ranks.*4 x 4 = 16"):
+        _resolve(config=config)
+    config["mpi_options"] = ["-np", "16"]
+    assert _resolve(config=config)["num_nodes"] == 4
+
+
+def test_the_fugaku_ranks_per_node_must_match_mpiprocs(tmp_path):
+    config = load_block_config(_sbd_config(tmp_path, "fugaku"))
+    assert _resolve(config=config)["mpi_options_for_pjm"] == ["max-proc-per-node=2"]
+    config["mpiprocs"], config["mpi_options"] = 4, ["-n", "4"]
+    with pytest.raises(RuntimeError, match=r"max-proc-per-node=2 ranks.*mpiprocs = 4"):
+        _resolve(config=config)
+
+
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [
