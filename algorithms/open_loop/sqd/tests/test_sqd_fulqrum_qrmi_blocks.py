@@ -12,13 +12,20 @@ from sqd_common.block_config import load_block_config
 from sqd_fulqrum import create_blocks
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_blocks.example.toml"
-QRMI = {"resource": "test_heron", "python_executable": "/opt/venvs/qrmi/bin/python"}
+NODE_PYTHON = "~/venv/sqd-node/bin/python"
+QRMI = {"resource": "test_heron"}
 
 
-def _config(**qrmi):
-    """The example config with its default [qrmi] table replaced by ``qrmi``, or removed."""
+def _config(python_executable=NODE_PYTHON, **qrmi):
+    """The example config with its default [qrmi] table replaced by ``qrmi``, or removed.
+
+    ``python_executable`` is the top-level QRMI worker Python, or None to leave it unset.
+    """
     config = load_block_config(EXAMPLE)
     config.pop("qrmi")
+    config.pop("python_executable", None)
+    if python_executable is not None:
+        config["python_executable"] = python_executable
     if qrmi:
         config["qrmi"] = qrmi
     return config
@@ -27,8 +34,10 @@ def _config(**qrmi):
 def test_example_keeps_the_qrmi_table_active():
     with EXAMPLE.open("rb") as f:
         config = tomllib.load(f)
+    # The worker Python is a top-level setting.
+    assert config["python_executable"] == NODE_PYTHON
     # The backend and instance come from qcsc-qrmi login, so the table names neither.
-    assert config["qrmi"] == {"python_executable": "/opt/venvs/qrmi/bin/python"}
+    assert config["qrmi"] == {}
     assert "runtime" not in config
     # The profile adds the QRMI job's walltime, threads and timeout.
     merged = load_block_config(EXAMPLE)["qrmi"]
@@ -48,12 +57,24 @@ def _resolve(argv=(), config=None):
 
 def test_config_without_qrmi_table_creates_no_qrmi_blocks():
     assert _resolve() is None
+    # A top-level python_executable alone configures no QRMI job.
+    assert _resolve(config=_config()) is None
+    assert _resolve(config=_config(python_executable=None)) is None
+
+
+def test_python_executable_flag_and_alias_override_the_config():
+    for flag in ("--python-executable", "--qrmi-python-executable"):
+        qrmi = _resolve([flag, "/node/bin/python"], _config(**QRMI))
+        assert qrmi["python_executable"] == "/node/bin/python"
+    # The flag alone configures the QRMI job, with the backend qcsc-qrmi login chose.
+    qrmi = _resolve(["--python-executable", "/node/bin/python"], _config(python_executable=None))
+    assert qrmi["python_executable"] == "/node/bin/python" and qrmi["resource"] is None
 
 
 def test_qrmi_table_inherits_solver_settings():
     qrmi = _resolve(config=_config(**QRMI))
     assert qrmi["resource"] == "test_heron"
-    assert qrmi["python_executable"] == "/opt/venvs/qrmi/bin/python"
+    assert qrmi["python_executable"] == str(Path(NODE_PYTHON).expanduser())
     assert qrmi["root_dir"] == "/data/sqd/qrmi"
     assert (qrmi["queue"], qrmi["project"]) == ("normal", "")
     assert qrmi["ompthreads"] == 4 and qrmi["walltime"] == "00:30:00"
@@ -95,8 +116,12 @@ def test_qrmi_table_overrides_and_cli():
 @pytest.mark.parametrize(
     ("argv", "config", "message"),
     [
-        ((), _config(resource="test_heron"), "qrmi.python_executable"),
-        ((), _config(resource="bad id", python_executable="/p"), "whitespace"),
+        (
+            (),
+            _config(python_executable=None, resource="test_heron"),
+            "Missing required setting: python_executable$",
+        ),
+        ((), _config(resource="bad id"), "whitespace"),
         ((), _config(**QRMI, shots=10), "Unknown \\[qrmi\\] settings: shots"),
         (
             (),
@@ -104,6 +129,7 @@ def test_qrmi_table_overrides_and_cli():
                 "hpc_target": "local",
                 "work_dir": "/x",
                 "fulqrum_executable": "f",
+                "python_executable": "/p",
                 "qrmi": QRMI,
             },
             "hpc_target = 'slurm'",
@@ -113,6 +139,15 @@ def test_qrmi_table_overrides_and_cli():
 def test_invalid_qrmi_settings(argv, config, message):
     with pytest.raises(RuntimeError, match=message):
         _resolve(argv, config)
+
+
+def test_python_executable_in_the_qrmi_table_points_to_the_top_level():
+    config = _config(**QRMI)
+    config["qrmi"]["python_executable"] = "/p"
+    with pytest.raises(
+        RuntimeError, match=r"Set python_executable at the top of the config .*not in \[qrmi\]"
+    ):
+        _resolve(config=config)
 
 
 def test_dry_run_prints_the_runtime_block(tmp_path, capsys):
@@ -149,10 +184,13 @@ def test_runtime_table_never_takes_the_api_key(monkeypatch, tmp_path, capsys):
 
 
 def test_qrmi_table_without_a_backend_keeps_the_block_choice(tmp_path):
-    qrmi = _resolve(config=_config(python_executable="/p"))
+    # An empty [qrmi] table, as in the example, configures the QRMI job.
+    config = _config()
+    config["qrmi"] = {}
+    qrmi = _resolve(config=config)
     runtime = qrmi_blocks.qrmi_runtime_settings(qrmi)
     assert "resource" not in runtime and "instance" not in runtime
-    qrmi = _resolve(config=_config(python_executable="/p", resource="ibm_fez", instance="main"))
+    qrmi = _resolve(config=_config(resource="ibm_fez", instance="main"))
     runtime = qrmi_blocks.qrmi_runtime_settings(qrmi)
     assert (runtime["resource"], runtime["instance"]) == ("ibm_fez", "main")
 
@@ -233,7 +271,7 @@ def test_main_saves_separate_qrmi_blocks(tmp_path, monkeypatch, capsys):
     # The job requests the QRMI Runtime block's backend; the profile names none.
     assert hpc.hpc_target == "slurm" and hpc.slurm_qpu is None
     assert hpc.slurm_ntasks == 1
-    assert hpc.executable_map == {cmd.executable_key: "/opt/venvs/qrmi/bin/python"}
+    assert hpc.executable_map == {cmd.executable_key: str(Path(NODE_PYTHON).expanduser())}
     # The solver's HPC profile never requests the QPU.
     assert saved["hpc-slurm-sqd-fulqrum"].slurm_qpu is None
     ((name, settings),) = runtime_blocks
@@ -245,11 +283,10 @@ def test_main_saves_separate_qrmi_blocks(tmp_path, monkeypatch, capsys):
 
 
 def test_qrmi_keys_without_their_header_get_a_hint(tmp_path):
-    # In the example, a commented-out [qrmi] header leaves its keys in [dice].
-    text = EXAMPLE.read_text().replace("\n[qrmi]\n", "\n# [qrmi]\n")
+    # A commented-out [qrmi] header leaves its keys in the table above it.
     path = tmp_path / "blocks.toml"
-    path.write_text(text)
-    with pytest.raises(RuntimeError, match=r"python_executable in \[dice\].*header"):
+    path.write_text('solver = "fulqrum"\n[dice]\nwalltime = "01:00:00"\n# [qrmi]\nresource = "r"\n')
+    with pytest.raises(RuntimeError, match=r"resource in \[dice\].*header"):
         create_blocks.main(["--config", str(path), "--dry-run"])
 
 

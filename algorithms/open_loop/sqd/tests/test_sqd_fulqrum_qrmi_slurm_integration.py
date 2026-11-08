@@ -22,8 +22,8 @@ same paths on the compute nodes:
 Environment:
     SLURM_INTEGRATION=1        enable the test
     SQD_QRMI_SLURM_ROOT        shared job root (default /data/sqd-fulqrum-qrmi-integration)
-    SQD_QRMI_SLURM_PYTHON      compute-node Python with Prefect, Qiskit and
-                               qiskit-ibm-runtime (default: this interpreter)
+    SQD_QRMI_SLURM_PYTHON      compute-node Python, e.g. ~/venv/sqd-node/bin/python
+                               (default: this interpreter)
     FULQRUM_SLURM_PARTITION    default from the example TOML
     FULQRUM_SLURM_TIMEOUT      seconds, default 600
 """
@@ -206,9 +206,9 @@ def qrmi_runtime(monkeypatch):
     config["work_dir"] = str(ROOT)
     if os.getenv("FULQRUM_SLURM_PARTITION"):
         config["queue"] = os.environ["FULQRUM_SLURM_PARTITION"]
+    config["python_executable"] = NODE_PYTHON
     config["qrmi"] = {
         "resource": RESOURCE,
-        "python_executable": NODE_PYTHON,
         "walltime": "00:10:00",
         "ompthreads": 2,
         "timeout_seconds": TIMEOUT,

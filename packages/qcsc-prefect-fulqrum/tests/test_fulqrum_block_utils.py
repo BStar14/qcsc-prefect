@@ -8,7 +8,8 @@ pytest.importorskip("qiskit_addon_sqd")
 
 from qcsc_prefect_fulqrum import block_utils as mod  # noqa: E402
 
-EXE = "/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve"
+# Where native/build_fulqrum.sh puts the executable by default.
+EXE = "/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve"
 
 
 @pytest.fixture

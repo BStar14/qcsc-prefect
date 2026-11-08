@@ -11,7 +11,8 @@ job root is shared with the compute nodes:
 Environment:
     SLURM_INTEGRATION=1        enable the tests
     FULQRUM_SLURM_ROOT         shared job root (default /data/fulqrum-integration)
-    FULQRUM_SLURM_EXECUTABLE   default /opt/venvs/fulqrum/bin/qcsc-fulqrum-solve
+    FULQRUM_SLURM_EXECUTABLE   default native/fulqrum/bin/qcsc-fulqrum-solve of
+                               this package, as native/build_fulqrum.sh builds it
     FULQRUM_SLURM_PARTITION    default normal
     FULQRUM_SLURM_OMPTHREADS   default 4
     FULQRUM_SLURM_TIMEOUT      seconds, default 600
@@ -50,7 +51,10 @@ from qcsc_prefect_fulqrum import block_utils, io_utils, solver_job  # noqa: E402
 from qiskit_addon_sqd.fermion import solve_fermion  # noqa: E402
 
 ROOT = Path(os.getenv("FULQRUM_SLURM_ROOT", "/data/fulqrum-integration"))
-EXECUTABLE = os.getenv("FULQRUM_SLURM_EXECUTABLE", "/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve")
+DEFAULT_EXECUTABLE = (
+    Path(__file__).resolve().parents[1] / "native" / "fulqrum" / "bin" / "qcsc-fulqrum-solve"
+)
+EXECUTABLE = os.getenv("FULQRUM_SLURM_EXECUTABLE", str(DEFAULT_EXECUTABLE))
 PARTITION = os.getenv("FULQRUM_SLURM_PARTITION", "normal")
 OMPTHREADS = int(os.getenv("FULQRUM_SLURM_OMPTHREADS", "4"))
 TIMEOUT = float(os.getenv("FULQRUM_SLURM_TIMEOUT", "600"))
