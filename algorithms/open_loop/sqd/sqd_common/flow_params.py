@@ -437,9 +437,7 @@ class FlowParameters(BaseModel):
         default=None,
         description=(
             "Leave empty to use the Solver Block of the Advanced Settings Block. Set it, as "
-            "'<block type slug>/<block name>', only to run with another solver block. "
-            "fulqrum_solver_job/sqd-fulqrum-solver, the run form default before sqd 2.1, is "
-            "ignored here."
+            "'<block type slug>/<block name>', only to run with another solver block."
         ),
         title="Solver Block Override",
         json_schema_extra=_at(5),

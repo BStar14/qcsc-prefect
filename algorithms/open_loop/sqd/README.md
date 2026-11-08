@@ -404,53 +404,6 @@ backend that `login` saved:
 A change of the backend or the instance is printed.
 Without either table, an existing block is kept.
 
-## 🔀 Migrating from 1.x
-
-| 1.x (`sqd_dice`) | 2.0 (`sqd`) |
-| --- | --- |
-| Flows `sqd_2405_05068_fulqrum`, `sqd-2405-05068`; deployments `sqd_2405_05068_fulqrum`, `sqd_2405_05068` | One flow and deployment, `sqd` |
-| `solver_block_name: "sqd-fulqrum-solver"` | `solver_block_ref: "fulqrum_solver_job/sqd-fulqrum-solver"` (or `dice_shci_solver_job/…`, `sbd_solver_job/…`) |
-| `sampling.qrmi_runtime_config: {…}` | Save a `QrmiRuntimeBlock` with `sqd-create-blocks` (`[qrmi]` or `[runtime]`) and set `sampling.runtime_block_name` |
-| IBM `QuantumRuntime` block `ibm-runner` samples by default | The `qrmi-runtime` block samples; `ibm-runner` only reloads a job by `qiskit_runtime_job_id` |
-| `sampling.sampler_options` | Removed; QRMI takes `sampling.shots` only |
-| `sqd-fulqrum-deploy`, `sqd-deploy` | `sqd-deploy` |
-| `sqd-fulqrum-create-blocks`, `sqd-create-blocks` (DICE) | `sqd-create-blocks` (fulqrum), `sqd-create-blocks --solver dice` |
-| `pip install "sqd_dice[fulqrum,qrmi]"` | `pip install sqd` (fulqrum and QRMI included); `sqd[dice]`, `sqd[sbd]`, `sqd[all]` |
-| `default_params/fulqrum_n2*.json`, `dice_n2.json` | `default_params/n2*.json` |
-| `sqd_fulqrum_blocks.slurm.example.toml`, `sqd_blocks.fugaku.example.toml` | One `sqd_blocks.example.toml` with `solver`, `profile` and `[advanced]`; flat configs still work |
-| `circuit.optimization_level`, `circuit.sabre_*` | `circuit.transpiler.*`, with `circuit.configure_transpiler: true` |
-| `circuit.max_ab_pairs` | Removed; `circuit.qpu_topology` sets the alpha-beta pairs (at most 5 for `heavy-hex`) |
-
-Old parameter files that set these fields fail validation with a message that
-names the replacement. A removed field left empty or at its old default is ignored.
-That happens, for example, when a run form filled before 2.0 still holds hidden values.
-The resume key of a checkpoint now includes the solver type, so a checkpoint
-written before 2.0 is not resumed: a Retry moves it aside and starts at round 1,
-and `resume_checkpoint` refuses it.
-
-### From 2.0 to 2.1
-
-| 2.0 | 2.1 |
-| --- | --- |
-| `molecule.ccsd_maxiter` (default 4) | CCSD Restarts of the Advanced SQD Settings block (default 10) |
-| `circuit.use_reset_mitigation`, `circuit.configure_transpiler`, `circuit.transpiler.*` | Reset Mitigation, Optimization Level and the SABRE fields of the Advanced SQD Settings block |
-| `solver_block_ref` in the run form, default `fulqrum_solver_job/sqd-fulqrum-solver` | Solver Block of the Advanced SQD Settings block, set by `sqd-create-blocks`; `solver_block_ref` overrides it for one run |
-| DICE execution profile on Miyabi `exec-sqd-dice-mpi` | `exec-sqd-dice-miyabi` |
-| DICE solver block `sqd-solver`; QRMI blocks `cmd-sqd-fulqrum-qrmi`, `exec-sqd-fulqrum-qrmi`, `hpc-slurm-sqd-fulqrum-qrmi` | `sqd-dice-solver`; `cmd-sqd-qrmi`, `exec-sqd-qrmi`, `hpc-slurm-sqd-qrmi` |
-| Top-level `fulqrum_executable`, `eigensolver` in `sqd_blocks.toml` | `[fulqrum]` (top-level keys still work) |
-| `carryover_fraction` in `sqd_blocks.toml` | `sqd.carryover_fraction` of each run |
-| Backend in `[qrmi] resource`, the HPC profile's `slurm_qpu` and the QRMI Runtime block | QPU Backend of the QRMI Runtime block only; `qcsc-qrmi login` lists the backends |
-| CRN and API key in `qrmi_config.json` entries or `[runtime.qrmi]` | IBM Quantum Instance (its CRN) in the QRMI Runtime block; the API key once in `qrmi_config.json`, written by `qcsc-qrmi login` |
-
-Run `qcsc-qrmi login`, then re-run `sqd-create-blocks` once: it saves the blocks under the new names and creates
-the Advanced SQD Settings block, and the blocks under the old names can then be
-deleted in Prefect Cloud. To keep using the old blocks instead, name them in
-`[advanced]`. A run form filled before 2.1 keeps the moved fields hidden at their old
-values; those are ignored, and a changed value fails with a pointer to the block.
-For the same reason, a `solver_block_ref` of `fulqrum_solver_job/sqd-fulqrum-solver`,
-the old run form default, is ignored; to run with that block while the Advanced SQD
-Settings block names another, set Solver Block in the Advanced SQD Settings block.
-
 ## Tests
 
 Run the tests in `algorithms/open_loop/sqd/tests` from the repository root:
