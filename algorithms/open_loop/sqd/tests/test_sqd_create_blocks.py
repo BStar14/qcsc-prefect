@@ -69,7 +69,7 @@ def _dice_config(tmp_path, profile="miyabi", runtime=True):
     text = text.replace('# project = "YOUR_ACCOUNT"', 'project = "your-group"')
     if runtime:
         # Replace [qrmi] (Slurm only) with the commented IQP [runtime] tables.
-        start, end = text.index("\n[qrmi]\n"), text.index("# To sample from the workflow")
+        start, end = text.index("\n[qrmi]\n"), text.index("# IQP from the workflow host")
         text = text[:start] + "\n" + text[end:]
         text = text.replace("# [runtime]\n", "[runtime]\n", 1)
         text = text.replace('# scheduler = "iqp"\n', 'scheduler = "iqp"\n', 1)

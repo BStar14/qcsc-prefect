@@ -30,7 +30,7 @@ def test_example_toml_resolves_to_expected_settings():
     assert kwargs["hpc_target"] == "slurm"
     assert kwargs["queue"] == "normal"
     assert kwargs["project"] == ""
-    assert kwargs["root_dir"] == "/data/sqd"
+    assert kwargs["root_dir"] == "/shared/work/sqd"
     assert kwargs["fulqrum_executable"] == FULQRUM_EXECUTABLE
     assert kwargs["launcher"] == "single"
     assert (kwargs["num_nodes"], kwargs["mpiprocs"], kwargs["ompthreads"]) == (1, 1, 4)
@@ -233,7 +233,7 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
     assert exec_profile.environments == {"OMP_NUM_THREADS": "4"}
     assert hpc.hpc_target == "slurm" and hpc.queue_cpu == "normal"
     assert hpc.executable_map == {"sqd_fulqrum_solver": FULQRUM_EXECUTABLE}
-    assert solver.root_dir == str(Path("/data/sqd").resolve())
+    assert solver.root_dir == str(Path("/shared/work/sqd").resolve())
     assert solver.execution_profile_block_name == "exec-sqd-fulqrum-slurm"
     assert solver.hpc_profile_block_name == "hpc-slurm-sqd-fulqrum"
     assert solver.return_sci_state is False
@@ -248,7 +248,7 @@ def _gpu_config(tmp_path, profile, *, qrmi=True, advanced=""):
     text = text.replace('queue = "normal"', 'queue = "regular-g"', 1)
     text = text.replace('# project = "YOUR_ACCOUNT"', 'project = "gz00"', 1)
     if not qrmi:
-        start, end = text.index("\n[qrmi]\n"), text.index("# To sample from the workflow")
+        start, end = text.index("\n[qrmi]\n"), text.index("# IQP from the workflow host")
         text = text[:start] + "\n" + text[end:]
     if advanced:
         text += f"\n[advanced]\n{advanced}\n"

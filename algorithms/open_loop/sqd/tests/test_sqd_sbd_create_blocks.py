@@ -27,7 +27,7 @@ def _sbd_config(tmp_path, profile="slurm", *, qrmi=False, extra=""):
     text = text.replace('profile = "slurm" ', f'profile = "{profile}" ', 1)
     text = text.replace('# project = "YOUR_ACCOUNT"', 'project = "gz00"', 1)
     if not qrmi:
-        start, end = text.index("\n[qrmi]\n"), text.index("# To sample from the workflow")
+        start, end = text.index("\n[qrmi]\n"), text.index("# IQP from the workflow host")
         text = text[:start] + "\n" + text[end:]
     if extra:
         text = text.replace("[sbd]\n", f"[sbd]\n{extra}\n", 1)
@@ -137,7 +137,7 @@ def test_each_profile_resolves_its_sbd_table(tmp_path, profile, expected):
         "sqd-sbd-mpi",
     )
     assert kwargs["sbd_executable"] == SBD_EXECUTABLE
-    assert kwargs["root_dir"] == "/data/sqd"
+    assert kwargs["root_dir"] == "/shared/work/sqd"
 
 
 def test_the_fulqrum_keys_of_a_profile_do_not_reach_the_sbd_blocks(tmp_path):

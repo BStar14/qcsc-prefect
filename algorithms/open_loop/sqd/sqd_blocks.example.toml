@@ -1,105 +1,72 @@
-# Prefect blocks of the SQD workflow. Copy this file, edit it, and run:
-#   sqd-create-blocks --config sqd_blocks.toml
-# Add --dry-run to print the resolved settings without saving anything.
-#
-# Sections:
-#   1. Solver and system   which solver, and the system profile with its scheduler settings
-#   2. Cluster             queue, account and the shared work directory
-#   3. Solver              [fulqrum], [dice] or [sbd]: only the selected one is read
-#   4. Quantum sampling    [qrmi] (a QRMI job in Slurm) or [runtime] (IBM Quantum, IQP)
-#   5. Advanced SQD        [sqd_advanced]: CCSD restarts, reset mitigation, the transpiler
-#   6. Block overrides     [advanced]: block names and timeouts
-#
-# Block names follow the solver and system, for example sqd-fulqrum-solver and
-# exec-sqd-fulqrum-slurm, sqd-dice-solver and exec-sqd-dice-miyabi, or sqd-sbd-solver
-# and exec-sqd-sbd-slurm. The run form needs no solver: this script records the
-# solver block in the Advanced SQD Settings block (sqd-advanced-settings), which
-# every run reads.
+# Prefect blocks of the SQD workflow. Copy this file to sqd_blocks.toml, edit it, and run:
+#   sqd-create-blocks --config sqd_blocks.toml [--dry-run]
+# Settings: docs/tutorials/manage-qcsc-workflow-with-qcsc-prefect.ipynb
+# Nodes, ranks and threads: docs/tutorials/configure_sqd_solver_resources.md
+# Paths are not expanded from environment variables; write them out ("~" works).
 
 # ============================================================ 1. Solver and system
 
-solver = "fulqrum"      # "fulqrum", "dice" (needs sqd[dice]) or "sbd" (needs sqd[sbd])
-profile = "slurm"       # "slurm", "miyabi", "fugaku", or a path to your own profile
-                        # GPU fulqrum or SBD, one MPI rank per GPU: "slurm-gpu" or "miyabi-gpu"
-# Compute-node Python of the QRMI worker: qrmi with task_runner beside it,
-# qcsc-prefect-qiskit and sqd_common. The workflow host runs ~/venv/prefect.
-python_executable = "~/venv/sqd-node/bin/python"
-# Any key of the profile, for example walltime, num_nodes, mpiprocs or modules, can be
-# set here to override it.
+python_executable = "~/venv/sqd-node/bin/python"  # QRMI worker on the compute nodes
+profile = "slurm"       # slurm, slurm-gpu, miyabi, miyabi-gpu, fugaku, or a file path
+solver = "fulqrum"      # fulqrum, sbd (sqd[sbd]) or dice (sqd[dice])
 
 # ============================================================ 2. Cluster
 
-queue = "normal"        # Slurm partition, or Miyabi/Fugaku resource group; a GPU queue for GPU
-# project = "YOUR_ACCOUNT"  # Slurm account; required as the group on Miyabi and Fugaku
-work_dir = "/data/sqd"  # Shared between the workflow host and the compute nodes
+queue = "normal"        # Partition or resource group
+# project = "YOUR_ACCOUNT"  # Account or group; required on Miyabi and Fugaku
+work_dir = "/shared/work/sqd"  # Shared by the workflow host and the compute nodes
 
+# Any profile key (walltime, num_nodes, mpiprocs, modules) can be set here.
 # Keys after a [table] header belong to that table, so keep top-level keys above here.
 
-# ============================================================ 3. Solver
+# ============================================================ 3. Solver (only the selected one is read)
 
-# fulqrum: qcsc-fulqrum-solve of the venv that build_fulqrum.sh creates (native/fulqrum).
 [fulqrum]
 fulqrum_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve"
-eigensolver = "scipy"   # "primme" needs primme on the compute node
-# Tuning; empty keys keep the solver's defaults.
-# tol = 1e-8                        # Eigensolver tolerance
-# max_iter = 1000                   # Default: solver default
-# hamiltonian_format = "csr"        # "matrix_free" saves memory
+eigensolver = "scipy"   # or "primme" (FULQRUM_WITH_PRIMME=1)
+# tol = 1e-8
+# max_iter = 1000
+# hamiltonian_format = "csr"        # or "matrix_free"
 # dense_max_dim = 64
-# max_basis_size = 64               # Search subspace (ncv); scipy, primme, gpu-mpi
-# block_size = 4                    # PRIMME block size; primme and gpu-mpi
-# min_restart_size = 16             # PRIMME restart size; primme and gpu-mpi
-# primme_method = "PRIMME_DYNAMIC"  # PRIMME preset; primme and gpu-mpi
-# backend = "cpu"                   # "gpu" or "gpu-mpi" (set by the GPU profiles)
-# gpus_per_node = 4                 # Scheduler GPU request (set by the GPU profiles)
+# max_basis_size = 64
+# block_size = 4                    # primme, gpu-mpi
+# min_restart_size = 16             # primme, gpu-mpi
+# primme_method = "PRIMME_DYNAMIC"  # primme, gpu-mpi
+# backend = "cpu"                   # cpu, gpu or gpu-mpi
+# gpus_per_node = 4
 # convergence = "abs"               # gpu-mpi: abs, rel, norm or energy
-# energy_tol = 1e-6                 # gpu-mpi with convergence = "energy"
-# process_grid = [2, 2]             # gpu-mpi: alpha x beta ranks, product = MPI ranks
+# energy_tol = 1e-6                 # gpu-mpi, convergence = "energy"
+# process_grid = [2, 2]             # gpu-mpi: product = MPI ranks
 # comm_backend = "auto"             # gpu-mpi: auto, nccl, host_mpi or cuda_mpi
 
-# DICE: used only with solver = "dice", on Miyabi or Fugaku.
+[sbd]
+sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"  # diag-gpu for GPU
+# task_comm_size = 1                # Product of the three divides the MPI ranks
+# adet_comm_size = 1
+# bdet_comm_size = 1
+# block = 10
+# iteration = 2
+# tolerance = 1e-4
+# carryover_type = 1
+# solver_mode = "cpu"               # or "gpu"
+
 [dice]
-dice_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice"
+dice_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice"  # Miyabi, Fugaku
 # select_cutoff = 5e-4
 # davidson_tol = 1e-5
 # energy_tol = 1e-10
 
-# SBD: used only with solver = "sbd"; MPI ranks and launcher come from the profile's
-# [sbd] table. With solver_mode = "gpu" (the GPU profiles), point it at diag-gpu.
-[sbd]
-sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
-# task_comm_size = 1                # The product of the three comm sizes divides the MPI ranks
-# adet_comm_size = 1
-# bdet_comm_size = 1
-# block = 10                        # Maximum Davidson subspace size
-# iteration = 2                     # Davidson restarts
-# tolerance = 1e-4                  # Davidson residual norm
-# carryover_type = 1
-# solver_mode = "cpu"               # "gpu" (set by the GPU profiles)
-
 # ============================================================ 4. Quantum sampling
 
-# First run `qcsc-qrmi login` once. It stores the IBM Cloud API key in qrmi_config.json,
-# finds your instances and their backends, and saves the qrmi-runtime block with an
-# IBM Quantum Instance and a QPU Backend dropdown. Choose both there (Prefect Cloud);
-# sqd-create-blocks keeps them unless you set instance or resource below. Nothing
-# secret goes in this file.
-#
-# QRMI sampler job in Slurm, the default (fulqrum or SBD on Slurm; DICE on Miyabi or
-# Fugaku takes [runtime] instead). Creates its three blocks (cmd-sqd-qrmi,
-# exec-sqd-qrmi, hpc-slurm-sqd-qrmi) and the Slurm settings of the qrmi-runtime block.
-# The worker runs the top-level python_executable; the job's walltime, threads and
-# timeout come from the profile.
+# Run `qcsc-qrmi login` first; it saves the instance and QPU in the qrmi-runtime block.
+# No secret goes in this file.
 [qrmi]
 # queue = "cpu"                   # Default: the solver's queue
-# Optional; default: the choice saved by qcsc-qrmi login or in the block form.
-# resource = "ibm_kingston"       # QPU Backend
-# instance = "main-instance"      # IBM Quantum Instance, by name
+# resource = "ibm_kingston"       # Overrides the block's QPU Backend
+# instance = "main-instance"      # Overrides the block's IBM Quantum Instance
 # service_crn = "crn:v1:..."      # Overrides the instance's CRN
 
-# To sample from the workflow process through IBM Quantum (IQP) instead, comment out the
-# whole [qrmi] table above and uncomment [runtime]. The API key comes from the workflow
-# host's qrmi_config.json (qcsc-qrmi login) or QRMI_IBM_QCS_IAM_APIKEY.
+# IQP from the workflow host instead (Miyabi, Fugaku): comment out [qrmi], uncomment [runtime].
 # [runtime]
 # scheduler = "iqp"
 # resource = "ibm_kingston"       # Optional, as for [qrmi]
@@ -107,18 +74,17 @@ sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 
 # ============================================================ 5. Advanced SQD settings
 
-# The sqd-advanced-settings block, also editable in Prefect Cloud. Defaults shown.
+# The sqd-advanced-settings block; defaults shown.
 # [sqd_advanced]
-# ccsd_maxiter = 10                 # CCSD Restarts
-# use_reset_mitigation = false      # Reset Mitigation; reloads of earlier samples use it too
-# optimization_level = 3            # Transpiler
+# ccsd_maxiter = 10
+# use_reset_mitigation = false
+# optimization_level = 3
 # sabre_layout_trials = 10000
 # sabre_swap_trials = 10
 # sabre_max_iterations = 8
 
 # ============================================================ 6. Block overrides
 
-# Rarely changed. Uncomment a key to replace its default.
 # [advanced]
 # solver_block_name = "sqd-<solver>-solver"
 # command_block_name = "cmd-sqd-<solver>-solver"
@@ -128,4 +94,4 @@ sbd_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 # metrics_artifact_key = "<system>-sqd-<solver>-metrics"
 # runtime_block_name = "qrmi-runtime"
 # advanced_block_name = "sqd-advanced-settings"
-# timeout_seconds = 7200            # Monitoring of each solver job
+# timeout_seconds = 7200
