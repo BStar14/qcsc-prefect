@@ -11,6 +11,8 @@ from qcsc_prefect_adapters.slurm.builder import SlurmJobRequest, render_script, 
 from qcsc_prefect_adapters.slurm.runtime import SlurmRuntime
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
+from qcsc_prefect_executor.job_logs import log_job_stderr
+
 MAX_LOG_SIZE = 10_000
 
 
@@ -122,10 +124,9 @@ async def run_slurm_job(
 
     if logs := _read_text_if_exists(stdout_file):
         logger.info(truncate_log(logs))
-    if logs := _read_text_if_exists(stderr_file):
-        # Programs also write progress and warnings to stderr; only a failed job's is an error.
-        log_stderr = logger.warning if exit_status == 0 else logger.error
-        log_stderr(truncate_log(logs))
+    log_job_stderr(
+        logger, _read_text_if_exists(stderr_file), failed=exit_status != 0, truncate=truncate_log
+    )
 
     if final_status:
         artifact = _create_job_artifact(

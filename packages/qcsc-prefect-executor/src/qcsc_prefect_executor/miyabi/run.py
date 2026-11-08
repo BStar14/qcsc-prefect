@@ -17,6 +17,8 @@ from qcsc_prefect_adapters.miyabi.builder import (
 from qcsc_prefect_adapters.miyabi.runtime import MiyabiPBSRuntime
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
+from qcsc_prefect_executor.job_logs import log_job_stderr
+
 MAX_LOG_SIZE = 10_000  # mirror existing behavior
 
 
@@ -183,10 +185,7 @@ async def run_miyabi_job(
 
     if stdout:
         logger.info(stdout)
-    if stderr:
-        # Programs also write progress and warnings to stderr; only a failed job's is an error.
-        log_stderr = logger.warning if exit_status == 0 else logger.error
-        log_stderr(stderr)
+    log_job_stderr(logger, stderr, failed=exit_status != 0, truncate=lambda text: text)
 
     # 4) metrics artifact (table) (same shape as existing code)
     art_dict = _create_job_artifact(job_id=job_id, job_status=final_status)

@@ -301,8 +301,12 @@ async def run_configuration_recovery(
                 )
             )
         round_energies.append(round_energy)
+        # The iteration's lowest batch energy, and the lowest of all iterations so far
+        # (from the resumed run too); the outcome and the checkpoint keep the latter.
+        best_note = "new overall best" if best_energy == round_energy else "overall best"
         logger.info(
-            f"Best energy in SQD iteration {round_idx + 1}/{max_iterations}: {round_energy} Ha."
+            f"SQD iteration {round_idx + 1}/{max_iterations}: iteration best {round_energy} Ha; "
+            f"{best_note} {best_energy} Ha."
         )
         if on_round_end is not None:
             on_round_end(round_idx + 1, current_occupancies, best_energy, current_carryover)

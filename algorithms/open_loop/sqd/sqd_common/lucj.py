@@ -19,10 +19,31 @@ from sqd_common.topology import MAX_AB_PAIRS as MAX_AB_PAIRS
 from sqd_common.topology import Topology, interaction_pairs
 from sqd_common.transpile import build_pass_manager, derive_seed, isa_gate_depth
 
+
+def _complex_array_to_data_dict(array_like) -> dict:
+    """JSON data dict of a complex array that keeps the imaginary parts.
+
+    pydantic-numpy's default serializer casts every array to float, which drops the
+    imaginary part (with a ComplexWarning) and makes an array and its complex
+    conjugate serialize, and hash as a Prefect task input, alike. Each value is
+    written as its ``repr`` instead, for example ``"(0.1+0.7j)"``, which
+    ``np.array(..., dtype="complex128")`` reads back exactly.
+    """
+    array = np.asarray(array_like)
+    return {
+        "data_type": str(array.dtype),
+        "data": np.vectorize(lambda value: repr(complex(value)), otypes=[object])(array).tolist(),
+        "shape": list(array.shape),
+    }
+
+
 NpStrict3DArrayC128 = Annotated[
     np.ndarray[tuple[int, int, int], np.dtype[np.complex128]],
     NpArrayPydanticAnnotation.factory(
-        data_type=np.complex128, dimensions=3, strict_data_typing=True
+        data_type=np.complex128,
+        dimensions=3,
+        strict_data_typing=True,
+        serialize_numpy_array_to_json=_complex_array_to_data_dict,
     ),
 ]
 

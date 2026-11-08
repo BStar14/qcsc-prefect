@@ -284,12 +284,14 @@ class QrmiRuntimeBlock(Block):
                 try:
                     available = _live_backend_names(key, crn, self.resource)
                 except Exception as exc:  # noqa: BLE001 - any failure falls back to offline
+                    from .cli import _discovery_message
+
                     logger.warning(
-                        "Could not ask IBM Quantum whether %s can use %s (%s); using the "
-                        "Backend Access list.",
+                        "Could not ask IBM Quantum whether %s can use %s: %s Using the "
+                        "Backend Access list instead.",
                         label or "the Service CRN",
                         self.resource,
-                        type(exc).__name__,
+                        _discovery_message(exc),
                     )
                 else:
                     if self.resource not in available:
@@ -376,7 +378,8 @@ class QrmiRuntimeBlock(Block):
 def _live_backend_names(api_key: str, crn: str, backend: str) -> set[str]:
     """``{backend}`` if instance ``crn`` can use it, else an empty set (IBM Quantum)."""
     from qiskit_ibm_runtime import QiskitRuntimeService
-    from qiskit_ibm_runtime.exceptions import QiskitBackendNotFoundError
+
+    from qiskit.providers.exceptions import QiskitBackendNotFoundError
 
     from .cli import quiet_ibm_runtime
 

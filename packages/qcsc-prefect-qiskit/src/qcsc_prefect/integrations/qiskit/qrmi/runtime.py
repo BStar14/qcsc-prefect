@@ -17,7 +17,13 @@ from prefect.logging import get_run_logger
 from qiskit import QuantumCircuit, qpy
 from qiskit.primitives import PrimitiveResult
 
-from .contract import SCHEMA_VERSION, circuit_registers, decode_result, resolve_shots
+from .contract import (
+    SCHEMA_VERSION,
+    TASK_ENDED_FILE,
+    circuit_registers,
+    decode_result,
+    resolve_shots,
+)
 from .transpilation import preset_pass_manager_options
 
 DEFAULT_TRANSPILER = "qcsc_prefect.integrations.qiskit.qrmi.worker:generic_transpile"
@@ -32,6 +38,10 @@ async def run_job_from_blocks(**kwargs):
     from qcsc_prefect_executor.from_blocks import run_job_from_blocks as execute
 
     return await execute(**kwargs)
+
+
+class QrmiJobCancelled(RuntimeError):
+    """The QRMI job or its quantum task was cancelled, so there are no samples."""
 
 
 @dataclass
@@ -221,9 +231,12 @@ async def _sample_on_slurm(circuits, shots, registers, configs, runtime) -> Prim
         timeout_seconds=runtime.timeout_seconds,
         metrics_artifact_key="qrmi-slurm-job",
     )
+    # The executor cancels the Slurm job (scancel) and returns no status when the wait
+    # is cancelled, for example when the flow run is cancelled in Prefect.
+    cancelled = not job.state and not getattr(job, "job_status", None)
     record = {
         "job_id": job.job_id,
-        "state": job.state,
+        "state": "CANCELLED" if cancelled else job.state,
         "exit_status": job.exit_status,
         "work_dir": str(work_dir),
         "resource": runtime.resource,
@@ -231,8 +244,20 @@ async def _sample_on_slurm(circuits, shots, registers, configs, runtime) -> Prim
         "transpiler": runtime.transpiler,
     }
     (work_dir / "slurm_job.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+    if cancelled:
+        raise QrmiJobCancelled(
+            f"QRMI Slurm job {job.job_id} was cancelled with the run; Slurm stopped it, and its "
+            f"quantum task with it. Job directory: {work_dir}"
+        )
+    ended = work_dir / TASK_ENDED_FILE
+    if ended.is_file():
+        # The worker found the quantum task ended without a result, e.g. cancelled on IBM.
+        raise QrmiJobCancelled(f"{ended.read_text(encoding='utf-8').strip()} Job: {work_dir}")
     if job.state != "COMPLETED" or job.exit_status != 0:
-        raise RuntimeError(f"QRMI Slurm job {job.job_id} failed; see {work_dir}")
+        raise RuntimeError(
+            f"QRMI Slurm job {job.job_id} ended with state {job.state or 'unknown'} and exit "
+            f"status {job.exit_status}; see {work_dir}/output.err"
+        )
     result_path = work_dir / "result.json"
     if not result_path.is_file():
         raise RuntimeError(f"QRMI produced no result; see {work_dir}/output.err")

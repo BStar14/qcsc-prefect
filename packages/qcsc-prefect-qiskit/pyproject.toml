@@ -26,7 +26,7 @@ dependencies = [
 slurm = ["qcsc-prefect-executor==0.3.1"]
 
 [project.scripts]
-qcsc-qrmi-sampler = "qcsc_prefect.integrations.qiskit.qrmi.worker:main"
+qcsc-qrmi-sampler = "qcsc_prefect.integrations.qiskit.qrmi.worker:run"
 qcsc-qrmi = "qcsc_prefect.integrations.qiskit.qrmi.cli:main"
 
 [project.urls]

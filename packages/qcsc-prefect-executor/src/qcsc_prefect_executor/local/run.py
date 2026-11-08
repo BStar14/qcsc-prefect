@@ -13,6 +13,8 @@ from qcsc_prefect_adapters.local.runtime import (
 )
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
+from qcsc_prefect_executor.job_logs import log_job_stderr
+
 MAX_LOG_SIZE = 10_000
 
 
@@ -55,10 +57,12 @@ async def run_local_job(
 
     if process_result.stdout:
         logger.info(_truncate_log(process_result.stdout))
-    if process_result.stderr:
-        # Programs also write progress and warnings to stderr; only a failed job's is an error.
-        log_stderr = logger.warning if process_result.exit_status == 0 else logger.error
-        log_stderr(_truncate_log(process_result.stderr))
+    log_job_stderr(
+        logger,
+        process_result.stderr,
+        failed=process_result.exit_status != 0,
+        truncate=_truncate_log,
+    )
 
     job_id = f"local-{process_result.pid}"
     artifact = {
