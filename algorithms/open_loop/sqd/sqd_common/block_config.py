@@ -36,7 +36,7 @@ _LAYER_TABLES = ("advanced", *SOLVERS)
 # Tables that the solver scripts read as tables.
 _SETTING_TABLES = ("qrmi", "runtime", "environments", "sqd_advanced")
 # Keys that only [qrmi] has. Elsewhere they mean its header line is commented out.
-_QRMI_ONLY_KEYS = ("resource", "python_executable")
+_QRMI_ONLY_KEYS = ("resource",)
 
 
 def read_config_file(path: Path) -> dict[str, Any]:

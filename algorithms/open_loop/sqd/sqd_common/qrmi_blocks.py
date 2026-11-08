@@ -5,6 +5,9 @@
 job in Slurm, and the ``qrmi-runtime`` ``QrmiRuntimeBlock`` that uses them. The DICE
 blocks target Miyabi or Fugaku, so DICE takes ``[runtime]`` only. ``[runtime]``
 saves another ``QrmiRuntimeBlock`` instead, for example for IBM Quantum (IQP).
+
+The QRMI job runs ``python_executable`` from the top level of the config, the
+compute-node Python of the QRMI worker.
 """
 
 from __future__ import annotations
@@ -20,7 +23,6 @@ QRMI_WORKER_ARGS = ["-m", "qcsc_prefect.integrations.qiskit.qrmi.worker"]
 QRMI_KEYS = frozenset(
     {
         "resource",
-        "python_executable",
         "work_dir",
         "queue",
         "project",
@@ -47,14 +49,16 @@ QRMI_RUNTIME_KEYS = ("instance", "service_crn", "endpoint", "iam_endpoint")
 
 
 def add_qrmi_arguments(parser: argparse.ArgumentParser) -> None:
-    """The ``--qrmi-*`` options of a ``create_blocks`` script."""
+    """The QRMI options of a ``create_blocks`` script: the backend and the worker Python."""
     parser.add_argument(
         "--qrmi-resource",
         help="QPU backend; default: the one qcsc-qrmi login chose (Slurm only).",
     )
     parser.add_argument(
+        "--python-executable",
         "--qrmi-python-executable",
-        help="Compute-node Python that runs the QRMI worker.",
+        dest="qrmi_python_executable",
+        help="Compute-node Python that runs the QRMI worker (overrides python_executable).",
     )
 
 
@@ -103,6 +107,11 @@ def resolve_qrmi_settings(
 ) -> dict[str, Any] | None:
     """Resolve the optional ``[qrmi]`` table, or None when QRMI is not configured.
 
+    QRMI is configured by a ``[qrmi]`` table, even an empty one, ``--qrmi-resource`` or
+    ``--python-executable``. The worker Python is the top-level ``python_executable``,
+    which ``--python-executable`` overrides; on its own it configures no QRMI job,
+    since a config with ``[runtime]`` may set it too.
+
     ``solver`` holds the solver blocks' settings: ``hpc_target``, ``queue``,
     ``project``, ``root_dir``, ``ompthreads``, ``modules``, ``pre_commands``,
     ``environments`` and, optionally, ``slurm_memory``. Unset queue, project,
@@ -120,13 +129,19 @@ def resolve_qrmi_settings(
             "Do not write api_key in [qrmi]: Slurm compute nodes read the API key from "
             "qrmi_config.json, and the job environment would store it."
         )
+    if "python_executable" in table:
+        raise RuntimeError(
+            "Set python_executable at the top of the config (the compute-node Python of the "
+            "QRMI worker), not in [qrmi]."
+        )
     unknown = set(table) - QRMI_KEYS
     if unknown:
         raise RuntimeError(f"Unknown [qrmi] settings: {', '.join(sorted(unknown))}")
     resource = _optional_str(
         _pick_value(getattr(args, "qrmi_resource", None), table.get("resource"))
     )
-    if resource is None and not table and not getattr(args, "qrmi_python_executable", None):
+    configured = "qrmi" in config or getattr(args, "qrmi_python_executable", None)
+    if resource is None and not configured:
         return None
     # Without resource, the backend that qcsc-qrmi login saved in the block is kept.
     if resource is not None and any(char.isspace() for char in resource):
@@ -134,8 +149,11 @@ def resolve_qrmi_settings(
     if solver["hpc_target"] != "slurm":
         raise RuntimeError("QRMI sampling needs hpc_target = 'slurm'.")
     python_executable = _require(
-        "qrmi.python_executable",
-        _pick_value(getattr(args, "qrmi_python_executable", None), table.get("python_executable")),
+        "python_executable",
+        _pick_value(
+            _optional_str(getattr(args, "qrmi_python_executable", None)),
+            config.get("python_executable"),
+        ),
     )
 
     def pick(name: str, default: Any = None) -> Any:
