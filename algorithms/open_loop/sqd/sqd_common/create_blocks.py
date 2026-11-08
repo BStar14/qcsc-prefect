@@ -77,7 +77,7 @@ def _record_sbd(argv: list[str]) -> None:
         resolve_qrmi_settings,
         resolve_runtime_settings,
     )
-    from sqd_common.runtime_block import build_runtime_block, describe, runtime_block_name
+    from sqd_common.runtime_block import describe, runtime_block_name, save_runtime_block
 
     config_path = _config_path(argv)
     config = load_block_config(config_path, "sbd") if config_path is not None else {}
@@ -99,7 +99,8 @@ def _record_sbd(argv: list[str]) -> None:
     if qrmi is not None:
         create_qrmi_blocks(qrmi)
     if runtime is not None:
-        build_runtime_block(runtime).save(runtime_name, overwrite=True)
+        for change in save_runtime_block(runtime, runtime_name):
+            print(f"  {change}")
         print(f"QRMI runtime block: {runtime_name} (scheduler={runtime['scheduler']})")
     save_advanced_block(settings, block_name)
     print(f"Advanced SQD Settings block: {block_name} (Solver Block {ref})")

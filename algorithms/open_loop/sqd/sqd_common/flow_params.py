@@ -5,7 +5,6 @@ deployment's run form in the Prefect UI shows every setting of a run in one
 place, grouped by the Qiskit Patterns stage it controls.
 """
 
-import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -29,8 +28,6 @@ MOVED_TO_ADVANCED = {
 }
 # Repository root of a source checkout (algorithms/open_loop/sqd/sqd_common/ is four levels down).
 REPO_ROOT = Path(__file__).resolve().parents[4]
-# One QRMI resource ID, as Slurm's --qpu and the "<resource>_" setting prefix take it.
-_RESOURCE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def _at(position: int) -> dict[str, int]:
@@ -247,7 +244,7 @@ class SamplingParameters(BaseModel):
         description="RNG seed of the random bitstrings when Quantum Source is 'random'.",
         title="Random Seed",
         ge=0,
-        json_schema_extra=_at(4),
+        json_schema_extra=_at(3),
     )
     runtime_block_name: str = Field(
         default=DEFAULT_QRMI_BLOCK_NAME,
@@ -259,16 +256,6 @@ class SamplingParameters(BaseModel):
         title="QRMI Runtime Block",
         json_schema_extra=_at(2),
     )
-    qpu_resource: str | None = Field(
-        default=None,
-        description=(
-            "Backend for this run, for example ibm_kingston, instead of the QRMI Runtime "
-            "Block's resource. For Slurm it is also the --qpu resource and must be in the "
-            "cluster's qrmi_config.json. Empty uses the block's."
-        ),
-        title="QPU Backend",
-        json_schema_extra=_at(3),
-    )
     runner_name: str = Field(
         default=DEFAULT_RUNTIME_BLOCK_NAME,
         description=(
@@ -276,7 +263,7 @@ class SamplingParameters(BaseModel):
             "Runtime Job ID. Not used for sampling."
         ),
         title="Quantum Runtime Block (reload)",
-        json_schema_extra=_at(7),
+        json_schema_extra=_at(6),
     )
     qiskit_runtime_job_id: str | None = Field(
         default=None,
@@ -286,7 +273,7 @@ class SamplingParameters(BaseModel):
             "credentials of the Quantum Runtime Block (reload)."
         ),
         title="Load from Qiskit Runtime Job ID",
-        json_schema_extra=_at(6),
+        json_schema_extra=_at(5),
     )
     qrmi_result_dir: str | None = Field(
         default=None,
@@ -296,7 +283,7 @@ class SamplingParameters(BaseModel):
             "artifact)."
         ),
         title="Load from QRMI Job Directory",
-        json_schema_extra=_at(5),
+        json_schema_extra=_at(4),
     )
 
     @model_validator(mode="after")
@@ -310,25 +297,15 @@ class SamplingParameters(BaseModel):
             raise ValueError("Set at most one of qiskit_runtime_job_id and qrmi_result_dir.")
         if self.quantum_source == "random" and reloads:
             raise ValueError(f"Quantum Source 'random' cannot be combined with {reloads[0]}.")
-        if self.qpu_resource is not None:
-            self.qpu_resource = self.qpu_resource.strip() or None
-        if self.qpu_resource:
-            if not _RESOURCE_NAME.fullmatch(self.qpu_resource):
-                raise ValueError(
-                    "QPU Backend must be one backend name (letters, digits, '_', '.', '-')."
-                )
-            if self.quantum_source == "random" or reloads:
-                raise ValueError(
-                    "QPU Backend selects the backend to sample on; leave it empty with "
-                    f"{reloads[0] if reloads else 'Quantum Source random'}."
-                )
         return self
 
     @model_validator(mode="before")
     @classmethod
     def _reject_removed_fields(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            data = _drop_empty(data, "qrmi_runtime_config", "sampler_options")
+            data = _drop_empty(data, "qrmi_runtime_config", "sampler_options", "qpu_resource")
+            if isinstance(data.get("qpu_resource"), str) and not data["qpu_resource"].strip():
+                data = {key: value for key, value in data.items() if key != "qpu_resource"}
             removed = {
                 "qrmi_runtime_config": "save a QrmiRuntimeBlock and set runtime_block_name",
                 "sampler_options": "QRMI takes only the Shots parameter",
@@ -336,6 +313,11 @@ class SamplingParameters(BaseModel):
             for name, hint in removed.items():
                 if name in data:
                     raise ValueError(f"sampling.{name} was removed in sqd 2.0: {hint}.")
+            if "qpu_resource" in data:
+                raise ValueError(
+                    "sampling.qpu_resource was removed: set QPU Backend in the QRMI Runtime "
+                    "block (sampling.runtime_block_name)."
+                )
         return data
 
 

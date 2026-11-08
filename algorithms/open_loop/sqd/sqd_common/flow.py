@@ -35,6 +35,7 @@ from sqd_common.lucj import get_lucj_params
 from sqd_common.postprocess import SolverBlock, sqd_loop
 from sqd_common.recovery import BatchTransformFn
 from sqd_common.sampling import (
+    check_qrmi_block,
     load_qrmi_result,
     load_runtime_job,
     quantum_sampling,
@@ -164,6 +165,15 @@ async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> floa
     slug, block_name = solver_slug(solver_ref)
     solver = await load_solver_block(solver_class(slug), block_name)
     sampling = parameters.sampling
+    samples_qpu = (
+        sampling.quantum_source == "real-device"
+        and sampling.qrmi_result_dir is None
+        and sampling.qiskit_runtime_job_id is None
+    )
+    # Check the instance and backend before any stage runs.
+    qrmi_block = (
+        await check_qrmi_block(sampling.runtime_block_name, logger) if samples_qpu else None
+    )
 
     # Map
     elec_props = compute_molecular_integrals(parameters, advanced)
@@ -195,6 +205,7 @@ async def run_sqd_pattern(parameters: FlowParameters, artifact_key: str) -> floa
             lucj_params=lucj_params,
             advanced=advanced,
             sampling_params=sampling,
+            qrmi_block=qrmi_block,
         )
 
     # Post-process

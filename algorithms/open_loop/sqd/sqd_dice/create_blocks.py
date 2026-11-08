@@ -18,10 +18,10 @@ from sqd_common.advanced_blocks import advanced_block_name, advanced_settings, s
 from sqd_common.block_config import load_block_config
 from sqd_common.block_names import solver_block_names, solver_ref
 from sqd_common.runtime_block import (
-    build_runtime_block,
     describe,
     runtime_block_name,
     runtime_block_settings,
+    save_runtime_block,
 )
 
 
@@ -283,7 +283,8 @@ def main() -> None:
     print(f"  Work directory: {Path(str(work_dir)).expanduser().resolve()}")
     print(f"  DICE executable: {Path(str(dice_executable)).expanduser().resolve()}")
     if runtime is not None:
-        build_runtime_block(runtime).save(runtime_name, overwrite=True)
+        for change in save_runtime_block(runtime, runtime_name):
+            print(f"  {change}")
         print(f"  QRMI runtime block: {runtime_name} (scheduler={runtime['scheduler']})")
     save_advanced_block(advanced, advanced_name)
     print(f"  Advanced SQD Settings block: {advanced_name} (Solver Block {ref})")

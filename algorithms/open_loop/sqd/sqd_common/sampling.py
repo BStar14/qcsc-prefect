@@ -106,17 +106,47 @@ async def _load_runtime(runner_name: str) -> QuantumRuntime:
         ) from exc
 
 
-async def _load_qrmi_runtime(block_name: str):
+async def load_qrmi_block(block_name: str):
+    """The ``QrmiRuntimeBlock`` named ``block_name``.
+
+    Raises:
+        RuntimeError: If the block cannot be loaded.
+    """
     from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
 
     try:
-        return await QrmiRuntimeBlock.aload_runtime(block_name)
+        return await QrmiRuntimeBlock.aload(block_name)
     except ValueError as exc:
         raise RuntimeError(
             f"Quantum source 'real-device' requested but QrmiRuntimeBlock '{block_name}' "
-            "could not be loaded. Set quantum_source='random' to use deterministic random "
-            "sampling instead."
+            "could not be loaded. Run qcsc-qrmi login and sqd-create-blocks, or set "
+            "quantum_source='random' to use deterministic random sampling instead."
         ) from exc
+
+
+async def check_qrmi_block(block_name: str, logger):
+    """Load the QRMI Runtime block and check that its instance can use its backend.
+
+    The flow calls it before Map, so a backend the instance cannot use fails the run
+    before any stage starts.
+
+    Raises:
+        RuntimeError: If the block cannot be loaded.
+        BackendAccessError: If its instance cannot use its backend.
+    """
+    import asyncio
+
+    block = await load_qrmi_block(block_name)
+    # The live check asks IBM Quantum over the network; keep the event loop free.
+    await asyncio.to_thread(block.check_backend_access, logger=logger)
+    logger.info(
+        "Sampling on %s with instance %s (QRMI Runtime block %s, scheduler=%s).",
+        block.resource,
+        block.instance_label() or "of the Service CRN",
+        block_name,
+        block.scheduler,
+    )
+    return block
 
 
 @task(
@@ -129,6 +159,7 @@ async def quantum_sampling(
     lucj_params: LUCJParameters,
     advanced: AdvancedSettings,
     sampling_params: SamplingParameters,
+    qrmi_block=None,
 ) -> np.ndarray:
     """Build the LUCJ circuit and sample it through the QRMI runtime block.
 
@@ -141,6 +172,8 @@ async def quantum_sampling(
         lucj_params: LUCJ operator parameters, including the system size.
         advanced: Advanced SQD Settings: reset mitigation and the transpiler.
         sampling_params: Shots and the QRMI runtime block.
+        qrmi_block: The ``QrmiRuntimeBlock`` that the flow checked; loaded by
+            ``sampling_params.runtime_block_name`` when not given.
 
     Returns:
         Sampled bitstrings as a 2D bool array.
@@ -150,10 +183,10 @@ async def quantum_sampling(
     logger = get_run_logger()
     rng = np.random.default_rng(TRANSPILER_SEED)
     shots = sampling_params.shots
+    if qrmi_block is None:
+        qrmi_block = await load_qrmi_block(sampling_params.runtime_block_name)
     runtime = make_qrmi_runtime(
-        await _load_qrmi_runtime(sampling_params.runtime_block_name),
-        transpile_config=circuit_transpile_options(advanced, rng),
-        resource=sampling_params.qpu_resource,
+        qrmi_block.get_runtime(), transpile_config=circuit_transpile_options(advanced, rng)
     )
     lucj_circ = build_lucj_circuit(
         lucj_params=lucj_params, use_reset_mitigation=advanced.use_reset_mitigation

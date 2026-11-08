@@ -75,7 +75,7 @@ and fields in this order, following the Qiskit Patterns stages:
 | --- | --- |
 | `molecule` | `{atom, basis, symmetry}` or `{fcidump_file}`, plus `spin_sq` (number or `null`) |
 | `circuit` | `n_lucj_layers` (1), `compress` (on), `compress_maxiter` (20), `qpu_topology` (`heavy-hex`) |
-| `sampling` | `quantum_source`, `shots` (10000), `runtime_block_name`, `qpu_resource` (QPU Backend; empty uses the block's), `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (reload only) |
+| `sampling` | `quantum_source`, `shots` (10000), `runtime_block_name`, `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (reload only) |
 | `sqd` | `subspace_dim` (90000), `num_batches` (4), `max_iterations` (5), `carryover_fraction` (0.5), `checkpoint` (on), `resume_checkpoint` |
 | `advanced_block_name` | Advanced SQD Settings block, default `sqd-advanced-settings` |
 | `solver_block_ref` | Solver Block Override, empty by default: `<block type slug>/<block name>` to run with another solver block than the advanced block names |
@@ -362,31 +362,46 @@ runs depends on the block's scheduler:
   The QPU is held while the node compiles, so give the QRMI execution profile enough
   CPU threads for the layout search.
 
-`sqd-create-blocks` saves the runtime block (name `runtime_block_name`, default
-`qrmi-runtime`) from one of two config tables:
+### IBM Quantum access: `qcsc-qrmi login`
 
-- `[qrmi]` with `resource` and `python_executable` (or `--qrmi-resource` and
-  `--qrmi-python-executable`; fulqrum TOML only): creates the command, execution
-  profile and HPC profile blocks of the QRMI Slurm job, separate from the solver's
-  because they request the QPU (`slurm_qpu`), plus a `scheduler = "slurm"` runtime
-  block that names them. This is the default: `sqd_blocks.example.toml` has the table
-  active, with a placeholder `resource`. `service_crn`, `endpoint` and `iam_endpoint`
-  are optional plain block fields that the job gets in its environment, with priority
-  over `qrmi_config.json`. The API key stays in `qrmi_config.json` on the compute
-  nodes; `[qrmi]` rejects `api_key`. See also the
-  [QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md) for Batch
-  mode and shared storage.
-- `[runtime]`: any `QrmiRuntimeBlock` fields, such as `resource` and `service_crn`.
-  For IQP, `QRMI_IBM_QCS_IAM_APIKEY` is read from the environment into the block's
-  secret API Key; it must not be written in the file. `[runtime.qrmi]` takes other
-  QRMI settings without the `<resource>_` prefix.
+Run `qcsc-qrmi login` once, before `sqd-create-blocks`. It:
 
-The QRMI Runtime block shows the resource, Service CRN and endpoints in Prefect
-Cloud, so they can be edited there; the API key is masked. The run form's QPU
-Backend (`sampling.qpu_resource`) samples one run on another backend than the
-block's. For Slurm it also becomes the job's `--qpu` and must be configured in
-`qrmi_config.json`.
+1. asks for the IBM Cloud API key,
+2. finds the IBM Quantum instances the key can use and their backends,
+3. writes `qrmi_config.json` (default `~/.qiskit/qrmi_config.json`, mode 600), with
+   the key once, one instance list and one backend list, and
+4. saves the `qrmi-runtime` block with an **IBM Quantum Instance** and a **QPU
+   Backend** dropdown.
 
+Choose the instance and the backend in that block (Prefect Cloud); the block is the
+only place they are set. Its **Service CRN** field overrides the instance's CRN. The
+API key is not in the block. For Slurm, install the written file as the
+`qrmi_config.json` of the compute nodes, the path in `plugstack.conf` (on a test
+cluster, pass that path as `--config`). The run checks, before it starts, that the
+instance can use the backend; otherwise it fails at once and names the instances
+that can. `qcsc-qrmi refresh` updates the lists, `qcsc-qrmi list` prints them, and
+`qcsc-qrmi check` runs the check. See the
+[QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md) for the file
+layout.
+
+`sqd-create-blocks` saves the rest of the runtime block (name `runtime_block_name`,
+default `qrmi-runtime`) from one of two config tables, and keeps the instance and the
+backend that `login` saved:
+
+- `[qrmi]` with `python_executable` (or `--qrmi-python-executable`; fulqrum TOML
+  only): creates the command, execution profile and HPC profile blocks of the QRMI
+  Slurm job, separate from the solver's because the job holds the QPU, plus the
+  `scheduler = "slurm"` settings of the runtime block. The job requests the block's
+  backend as `--qpu`. This is the default: `sqd_blocks.example.toml` has the table
+  active. `resource` and `instance` (a name) are optional and replace the block's
+  choice; `service_crn`, `endpoint` and `iam_endpoint` are optional block fields.
+  `[qrmi]` rejects `api_key`.
+- `[runtime]`: any `QrmiRuntimeBlock` fields, such as `scheduler = "iqp"`. For IQP the
+  workflow process reads the API key from its `qrmi_config.json` or the
+  `QRMI_IBM_QCS_IAM_APIKEY` environment variable; it must not be written in the file.
+  `[runtime.qrmi]` takes other QRMI settings without the `<resource>_` prefix.
+
+A change of the backend or the instance is printed.
 Without either table, an existing block is kept.
 
 ## 🔀 Migrating from 1.x
@@ -424,10 +439,10 @@ and `resume_checkpoint` refuses it.
 | DICE solver block `sqd-solver`; QRMI blocks `cmd-sqd-fulqrum-qrmi`, `exec-sqd-fulqrum-qrmi`, `hpc-slurm-sqd-fulqrum-qrmi` | `sqd-dice-solver`; `cmd-sqd-qrmi`, `exec-sqd-qrmi`, `hpc-slurm-sqd-qrmi` |
 | Top-level `fulqrum_executable`, `eigensolver` in `sqd_blocks.toml` | `[fulqrum]` (top-level keys still work) |
 | `carryover_fraction` in `sqd_blocks.toml` | `sqd.carryover_fraction` of each run |
-| IQP CRN and endpoints in `[runtime.qrmi]`, stored in the secret `resource_config` | Plain Service CRN, endpoint and IAM endpoint fields of the QRMI Runtime block; only the API key is secret |
-| Backend only in the QRMI Runtime block | Also `sampling.qpu_resource` (QPU Backend) for one run |
+| Backend in `[qrmi] resource`, the HPC profile's `slurm_qpu` and the QRMI Runtime block | QPU Backend of the QRMI Runtime block only; `qcsc-qrmi login` lists the backends |
+| CRN and API key in `qrmi_config.json` entries or `[runtime.qrmi]` | IBM Quantum Instance (its CRN) in the QRMI Runtime block; the API key once in `qrmi_config.json`, written by `qcsc-qrmi login` |
 
-Re-run `sqd-create-blocks` once: it saves the blocks under the new names and creates
+Run `qcsc-qrmi login`, then re-run `sqd-create-blocks` once: it saves the blocks under the new names and creates
 the Advanced SQD Settings block, and the blocks under the old names can then be
 deleted in Prefect Cloud. To keep using the old blocks instead, name them in
 `[advanced]`. A run form filled before 2.2 keeps the moved fields hidden at their old

@@ -36,20 +36,21 @@ QRMI_KEYS = frozenset(
         "command_block_name",
         "execution_profile_block_name",
         "hpc_profile_block_name",
+        "instance",
         "service_crn",
         "endpoint",
         "iam_endpoint",
     }
 )
 # The QRMI job's settings that its QrmiRuntimeBlock holds, not its job blocks.
-QRMI_RUNTIME_KEYS = ("service_crn", "endpoint", "iam_endpoint")
+QRMI_RUNTIME_KEYS = ("instance", "service_crn", "endpoint", "iam_endpoint")
 
 
 def add_qrmi_arguments(parser: argparse.ArgumentParser) -> None:
     """The ``--qrmi-*`` options of a ``create_blocks`` script."""
     parser.add_argument(
         "--qrmi-resource",
-        help="QRMI resource ID; creates the QRMI sampler blocks (Slurm only).",
+        help="QPU backend; default: the one qcsc-qrmi login chose (Slurm only).",
     )
     parser.add_argument(
         "--qrmi-python-executable",
@@ -125,11 +126,10 @@ def resolve_qrmi_settings(
     resource = _optional_str(
         _pick_value(getattr(args, "qrmi_resource", None), table.get("resource"))
     )
-    if resource is None:
-        if table or getattr(args, "qrmi_python_executable", None):
-            raise RuntimeError("Missing required setting: qrmi.resource")
+    if resource is None and not table and not getattr(args, "qrmi_python_executable", None):
         return None
-    if any(char.isspace() for char in resource):
+    # Without resource, the backend that qcsc-qrmi login saved in the block is kept.
+    if resource is not None and any(char.isspace() for char in resource):
         raise RuntimeError("'qrmi.resource' must not contain whitespace.")
     if solver["hpc_target"] != "slurm":
         raise RuntimeError("QRMI sampling needs hpc_target = 'slurm'.")
@@ -169,16 +169,19 @@ def resolve_qrmi_settings(
 
 
 def qrmi_runtime_settings(qrmi: dict[str, Any]) -> dict[str, Any]:
-    """QrmiRuntimeBlock fields of a ``scheduler="slurm"`` runtime that uses these blocks."""
+    """QrmiRuntimeBlock fields of a ``scheduler="slurm"`` runtime that uses these blocks.
+
+    ``resource`` and ``instance`` are included only when ``[qrmi]`` sets them, so the
+    choices ``qcsc-qrmi login`` saved in the block are kept otherwise.
+    """
     runtime = {
         "scheduler": "slurm",
         "root_dir": qrmi["root_dir"],
         "command_block_name": qrmi["command_block_name"],
         "execution_profile_block_name": qrmi["execution_profile_block_name"],
         "hpc_profile_block_name": qrmi["hpc_profile_block_name"],
-        "resource": qrmi["resource"],
     }
-    for name in ("timeout_seconds", "watch_poll_interval", *QRMI_RUNTIME_KEYS):
+    for name in ("resource", "timeout_seconds", "watch_poll_interval", *QRMI_RUNTIME_KEYS):
         if qrmi.get(name) is not None:
             runtime[name] = qrmi[name]
     return runtime
@@ -187,8 +190,9 @@ def qrmi_runtime_settings(qrmi: dict[str, Any]) -> dict[str, Any]:
 def create_qrmi_blocks(qrmi: dict[str, Any]) -> None:
     """Save the QRMI sampler job's Command, ExecutionProfile and HPCProfile blocks.
 
-    They are shared by every solver and separate from the solver's blocks: their
-    HPC profile requests the QPU (``slurm_qpu``), which a solver job must not hold.
+    They are shared by every solver and separate from the solver's blocks: the QRMI
+    job holds the QPU, which a solver job must not. The job requests the backend of
+    the QRMI Runtime block as ``--qpu``, so the HPC profile names none.
     """
     from qcsc_prefect_blocks.common.blocks import (
         CommandBlock,
@@ -224,7 +228,6 @@ def create_qrmi_blocks(qrmi: dict[str, Any]) -> None:
         project_cpu=qrmi["project"],
         project_gpu=qrmi["project"],
         executable_map={"qrmi_python": qrmi["python_executable"]},
-        slurm_qpu=qrmi["resource"],
         slurm_ntasks=1,
         slurm_memory=qrmi["slurm_memory"],
         slurm_extra_directives=list(qrmi["extra_directives"] or []),

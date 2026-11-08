@@ -30,7 +30,7 @@ from sqd_common.qrmi_blocks import (
     resolve_qrmi_settings,
     resolve_runtime_settings,
 )
-from sqd_common.runtime_block import build_runtime_block, describe, runtime_block_name
+from sqd_common.runtime_block import describe, runtime_block_name, save_runtime_block
 
 HPC_TARGETS = ("slurm", "local", "miyabi", "fugaku")
 BACKENDS = ("cpu", "gpu", "gpu-mpi")
@@ -365,8 +365,7 @@ def main(argv: list[str] | None = None) -> None:
     block_names = create_fulqrum_blocks(**block_kwargs)
     if qrmi is not None:
         create_qrmi_blocks(qrmi)
-    if runtime is not None:
-        build_runtime_block(runtime).save(runtime_name, overwrite=True)
+    changes = save_runtime_block(runtime, runtime_name) if runtime is not None else []
     save_advanced_block(advanced, advanced_name)
 
     print(f"Saved blocks for SQD fulqrum workflow (target={block_kwargs['hpc_target']})")
@@ -380,9 +379,10 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  QRMI command block: {qrmi['command_block_name']}")
         print(f"  QRMI execution profile block: {qrmi['execution_profile_block_name']}")
         print(f"  QRMI HPC profile block: {qrmi['hpc_profile_block_name']}")
-        print(f"  QRMI resource (slurm_qpu): {qrmi['resource']}")
     if runtime is not None:
         print(f"  QRMI runtime block: {runtime_name} (scheduler={runtime['scheduler']})")
+        for change in changes:
+            print(f"    {change}")
         if runtime_name != "qrmi-runtime":
             print(f"Set sampling.runtime_block_name of each run to {runtime_name!r}.")
     print(f"  Advanced SQD Settings block: {advanced_name} (Solver Block {solver_ref})")
