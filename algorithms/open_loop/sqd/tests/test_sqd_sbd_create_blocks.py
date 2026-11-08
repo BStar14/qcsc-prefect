@@ -114,6 +114,7 @@ def _minimal(**overrides):
                 "hpc_target": "fugaku",
                 "launcher": "mpiexec",
                 "mpi_options": ["-n", "2"],
+                "mpi_options_for_pjm": ["max-proc-per-node=2"],
                 "mpiprocs": 2,
                 "resource_class": "cpu",
                 "gpus_per_node": None,

@@ -24,6 +24,7 @@ from sqd_common.advanced_blocks import advanced_block_name, advanced_settings, s
 from sqd_common.block_config import load_block_config
 from sqd_common.block_names import solver_block_names
 from sqd_common.block_names import solver_ref as solver_ref_of
+from sqd_common.mpi_ranks import check_rank_count
 from sqd_common.qrmi_blocks import (
     add_qrmi_arguments,
     create_qrmi_blocks,
@@ -326,6 +327,7 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
             _pick_value(args.fugaku_pjm_resources, config.get("fugaku_pjm_resources"))
         ),
     )
+    check_rank_count(block_kwargs)
     try:
         validate_gpu_request(
             hpc_target=hpc_target,

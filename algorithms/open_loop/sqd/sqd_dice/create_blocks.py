@@ -17,6 +17,7 @@ from qcsc_prefect_dice import create_dice_blocks
 from sqd_common.advanced_blocks import advanced_block_name, advanced_settings, save_advanced_block
 from sqd_common.block_config import load_block_config
 from sqd_common.block_names import solver_block_names, solver_ref
+from sqd_common.mpi_ranks import check_rank_count
 from sqd_common.runtime_block import (
     describe,
     runtime_block_name,
@@ -122,10 +123,10 @@ def _default_names(*, hpc_target: str) -> dict[str, str]:
     return solver_block_names("dice", hpc_target)
 
 
-def _default_mpi_options(*, hpc_target: str, mpiprocs: int) -> list[str]:
+def _default_mpi_options(*, hpc_target: str, ranks: int) -> list[str]:
     if hpc_target == "miyabi":
-        return ["-np", str(mpiprocs)]
-    return ["-n", str(mpiprocs)]
+        return ["-np", str(ranks)]
+    return ["-n", str(ranks)]
 
 
 # Run settings that belong to the flow parameters, not to the blocks.
@@ -177,6 +178,7 @@ def main() -> None:
     mpiprocs = int(
         _pick_value(args.mpiprocs, config.get("mpiprocs"), 4 if hpc_target == "miyabi" else 2)
     )
+    num_nodes = int(_pick_value(args.num_nodes, config.get("num_nodes"), 1))
 
     block_kwargs = dict(
         hpc_target=hpc_target,
@@ -216,7 +218,7 @@ def main() -> None:
         executable_key="sqd_dice_solver",
         profile_name="sqd-dice-mpi",
         launcher=_pick_value(args.launcher, config.get("launcher")),
-        num_nodes=int(_pick_value(args.num_nodes, config.get("num_nodes"), 1)),
+        num_nodes=num_nodes,
         mpiprocs=mpiprocs,
         ompthreads=_pick_value(args.ompthreads, config.get("ompthreads")),
         walltime=str(_pick_value(args.walltime, config.get("walltime"), "01:00:00")).strip(),
@@ -225,7 +227,7 @@ def main() -> None:
             _pick_value(
                 args.mpi_options,
                 config.get("mpi_options"),
-                _default_mpi_options(hpc_target=hpc_target, mpiprocs=mpiprocs),
+                _default_mpi_options(hpc_target=hpc_target, ranks=num_nodes * mpiprocs),
             )
         ),
         pre_commands=_normalize_str_list(
@@ -262,6 +264,7 @@ def main() -> None:
             _pick_value(args.fugaku_pjm_resources, config.get("fugaku_pjm_resources"))
         ),
     )
+    check_rank_count(block_kwargs)
     ref = solver_ref("dice", block_kwargs["solver_block_name"])
     advanced = advanced_settings(config, ref)
     if args.dry_run:
