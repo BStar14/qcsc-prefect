@@ -213,6 +213,26 @@ def test_carryover_of_decodes_sbd_bool_rows_for_both_spins(norb):
     assert got_a.dtype == (np.int64 if norb < 64 else object)
 
 
+@pytest.mark.parametrize("norb", [6, 70])
+def test_carryover_of_reads_the_sbd_beta_rows_of_an_open_shell_run(norb):
+    dets_a, dets_b = [[0, 1, 2], [0, 2, 3]], [[1, norb - 1]]
+    rows_a = _decode_sbd_carryover(_pack_sbd_carryover(dets_a, norb), norb)
+    rows_b = _decode_sbd_carryover(_pack_sbd_carryover(dets_b, norb), norb)
+    result = SimpleNamespace(carryover_bitstrings=rows_a, carryover_bitstrings_b=rows_b)
+    got_a, got_b = recovery.carryover_of(result, 0.5, norb)
+    assert [int(x) for x in got_a] == [_ci(*occ) for occ in dets_a]
+    assert [int(x) for x in got_b] == [_ci(*occ) for occ in dets_b]
+    assert got_b.dtype == (np.int64 if norb < 64 else object)
+
+
+def test_carryover_of_uses_the_alpha_rows_for_both_spins_without_beta_rows():
+    rows = _decode_sbd_carryover(_pack_sbd_carryover([[0, 3]], NORB), NORB)
+    result = SimpleNamespace(carryover_bitstrings=rows, carryover_bitstrings_b=None)
+    got_a, got_b = recovery.carryover_of(result, 0.5, NORB)
+    assert got_a.tolist() == got_b.tolist() == [_ci(0, 3)]
+    assert got_a is not got_b
+
+
 def test_carryover_of_reads_the_real_sbd_result():
     sbd = pytest.importorskip("qcsc_prefect_sbd.solver_job")
     rows = _decode_sbd_carryover(_pack_sbd_carryover([[0, 2], [1, 3]], NORB), NORB)

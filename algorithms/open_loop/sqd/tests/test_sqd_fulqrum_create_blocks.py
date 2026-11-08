@@ -10,6 +10,9 @@ from sqd_common.block_config import load_block_config
 from sqd_fulqrum import create_blocks
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_blocks.example.toml"
+FULQRUM_EXECUTABLE = (
+    "/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve"
+)
 
 
 def _resolve(argv=(), config=None):
@@ -28,7 +31,7 @@ def test_example_toml_resolves_to_expected_settings():
     assert kwargs["queue"] == "normal"
     assert kwargs["project"] == ""
     assert kwargs["root_dir"] == "/data/sqd"
-    assert kwargs["fulqrum_executable"] == "/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve"
+    assert kwargs["fulqrum_executable"] == FULQRUM_EXECUTABLE
     assert kwargs["launcher"] == "single"
     assert (kwargs["num_nodes"], kwargs["mpiprocs"], kwargs["ompthreads"]) == (1, 1, 4)
     assert kwargs["solver_block_name"] == "sqd-fulqrum-solver"
@@ -229,7 +232,7 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
     assert exec_profile.launcher == "single" and exec_profile.ompthreads == 4
     assert exec_profile.environments == {"OMP_NUM_THREADS": "4"}
     assert hpc.hpc_target == "slurm" and hpc.queue_cpu == "normal"
-    assert hpc.executable_map == {"sqd_fulqrum_solver": "/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve"}
+    assert hpc.executable_map == {"sqd_fulqrum_solver": FULQRUM_EXECUTABLE}
     assert solver.root_dir == str(Path("/data/sqd").resolve())
     assert solver.execution_profile_block_name == "exec-sqd-fulqrum-slurm"
     assert solver.hpc_profile_block_name == "hpc-slurm-sqd-fulqrum"

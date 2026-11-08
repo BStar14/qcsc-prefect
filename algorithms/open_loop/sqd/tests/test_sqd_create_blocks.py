@@ -36,28 +36,26 @@ def test_bad_solver_flags_exit_with_a_hint(argv, message):
         create_blocks.main(argv)
 
 
-def test_sbd_records_its_solver_block_without_creating_it(monkeypatch, tmp_path, capsys):
-    from sqd_common import advanced_blocks
+def test_solver_flag_selects_sbd(monkeypatch):
+    seen = []
+    monkeypatch.setattr("sqd_sbd.create_blocks.main", lambda argv: seen.append(("sbd", argv)))
+    create_blocks.main(["--config", "x.toml", "--solver", "sbd", "--dry-run"])
+    assert seen == [("sbd", ["--config", "x.toml", "--dry-run"])]
 
-    saved = []
-    monkeypatch.setattr(
-        advanced_blocks,
-        "save_advanced_block",
-        lambda settings, name: saved.append((name, settings)),
-    )
+
+def test_sbd_dry_run_resolves_its_own_blocks(tmp_path, capsys):
     path = tmp_path / "sqd_blocks.toml"
-    path.write_text('solver = "sbd"\n[sqd_advanced]\nccsd_maxiter = 6\n')
-    create_blocks.main(["--config", str(path)])
-    ((name, settings),) = saved
-    assert name == "sqd-advanced-settings"
-    assert settings.solver_block_ref == "sbd_solver_job/davidson-solver"
-    assert settings.ccsd_maxiter == 6
-    assert "closed_loop/sqd_de/create_blocks.py" in capsys.readouterr().out
-
-    path.write_text('solver = "sbd"\n[sbd]\nsolver_block_name = "my-sbd"\n')
+    path.write_text(
+        'solver = "sbd"\nprofile = "slurm"\nqueue = "normal"\nwork_dir = "/data/sqd"\n'
+        '[sbd]\nsbd_executable = "/opt/sbd/diag"\n[sqd_advanced]\nccsd_maxiter = 6\n'
+    )
     create_blocks.main(["--config", str(path), "--dry-run"])
     printed = json.loads(capsys.readouterr().out)
-    assert printed["advanced_block"]["solver_block_ref"] == "sbd_solver_job/my-sbd"
+    assert printed["blocks"]["solver_block_name"] == "sqd-sbd-solver"
+    assert printed["blocks"]["sbd_executable"] == "/opt/sbd/diag"
+    assert printed["advanced_block"]["solver_block_ref"] == "sbd_solver_job/sqd-sbd-solver"
+    assert printed["advanced_block"]["ccsd_maxiter"] == 6
+    assert "qrmi_blocks" not in printed
 
 
 EXAMPLE = SQD / "sqd_blocks.example.toml"
@@ -170,12 +168,17 @@ def test_dice_runtime_table_rejects_a_key_before_any_block(monkeypatch, tmp_path
         dice.main()
 
 
-def test_the_solver_option_selects_its_table(monkeypatch, tmp_path, capsys):
+def test_the_solver_option_selects_its_table(tmp_path, capsys):
     path = tmp_path / "sqd_blocks.toml"
-    path.write_text('solver = "fulqrum"\n[sbd]\nsolver_block_name = "my-sbd"\n')
+    path.write_text(
+        'solver = "fulqrum"\nprofile = "slurm"\nqueue = "normal"\nwork_dir = "/data/sqd"\n'
+        '[fulqrum]\nfulqrum_executable = "f"\n'
+        '[sbd]\nsbd_executable = "/opt/sbd/diag"\nsolver_block_name = "my-sbd"\n'
+    )
     create_blocks.main(["--config", str(path), "--solver", "sbd", "--dry-run"])
     printed = json.loads(capsys.readouterr().out)
     assert printed["advanced_block"]["solver_block_ref"] == "sbd_solver_job/my-sbd"
+    assert "fulqrum_executable" not in printed["blocks"]
 
 
 def test_sbd_saves_the_shared_qrmi_blocks(tmp_path, capsys):
@@ -183,7 +186,9 @@ def test_sbd_saves_the_shared_qrmi_blocks(tmp_path, capsys):
     config.write_text(EXAMPLE.read_text().replace('solver = "fulqrum"', 'solver = "sbd"'))
     create_blocks.main(["--config", str(config), "--dry-run"])
     printed = json.loads(capsys.readouterr().out)
-    assert printed["advanced_block"]["solver_block_ref"] == "sbd_solver_job/davidson-solver"
+    assert printed["advanced_block"]["solver_block_ref"] == "sbd_solver_job/sqd-sbd-solver"
     assert printed["qrmi_blocks"]["command_block_name"] == "cmd-sqd-qrmi"
     assert printed["qrmi_blocks"]["queue"] == "normal"
+    # The QRMI job runs one process; the SBD ranks and threads stay with the solver job.
+    assert printed["blocks"]["mpiprocs"] == 4 and printed["blocks"]["launcher"] == "srun"
     assert printed["runtime_block"]["scheduler"] == "slurm"

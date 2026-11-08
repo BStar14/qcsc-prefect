@@ -164,6 +164,32 @@ def test_sbd_block_gets_hf_first_closed_shell_subspaces(offline):
     assert np.isfinite(energy)
 
 
+def test_sbd_block_gets_hf_first_open_shell_subspaces(offline, monkeypatch):
+    """LiH+ (the LiH integrals with two alpha and one beta electron) through SBD.
+
+    Needs the per-spin check_sbd_input of qcsc-prefect-sbd, which allows open shells.
+    """
+    sbd = pytest.importorskip("qcsc_prefect_sbd")
+    if not hasattr(sbd, "create_sbd_blocks"):
+        pytest.skip("qcsc-prefect-sbd without open-shell support")
+    integrals = flow.compute_molecular_integrals_from_geometry.fn
+
+    def cation(**kwargs):
+        props = integrals(**kwargs)
+        return props.model_copy(update={"num_electrons": (2, 1), "open_shell": True})
+
+    monkeypatch.setattr(flow, "compute_molecular_integrals_from_geometry", _TaskStub(cation))
+    params = _parameters("sbd_solver_job/my-sbd", spin_sq=None)
+    energy = asyncio.run(main.sqd.fn(parameters=params))
+    assert offline["calls"]
+    for call in offline["calls"]:
+        alpha, beta = call["ci_strings"]
+        assert call["nelec"] == (2, 1)
+        assert alpha[0] == 0b11 and beta[0] == 0b1
+        assert len(alpha) * len(beta) <= 64
+    assert np.isfinite(energy)
+
+
 def test_sbd_with_spin_sq_fails_before_any_solve(offline):
     pytest.importorskip("qcsc_prefect_sbd")
     with pytest.raises(ValueError, match="spin_sq"):

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
+import types
 
 import numpy as np
 import pytest
@@ -259,17 +261,65 @@ def test_sbd_gets_hf_first_batches_and_its_input_is_checked_after_map(stages):
         assert alpha.tolist() == [1, 4]
 
 
-@pytest.mark.parametrize(
-    "props, match",
-    [({"spin_sq": 0.0}, "spin_sq"), ({"spin_sq": None, "num_electrons": (2, 1)}, "closed-shell")],
-)
-def test_sbd_input_it_cannot_solve_fails_before_sampling(stages, props, match):
+def test_sbd_with_spin_sq_fails_before_sampling(stages):
     pytest.importorskip("qcsc_prefect_sbd")
-    for name, value in props.items():
-        setattr(stages["integrals"], name, value)
-    with pytest.raises(ValueError, match=match):
+    stages["integrals"].spin_sq = 0.0
+    with pytest.raises(ValueError, match="spin_sq"):
         _run(stages, _parameters(solver="sbd_solver_job/my-sbd"))
     assert [name for name, _ in stages["log"]] == ["check", "map"]
+
+
+@pytest.fixture
+def sbd_checks(monkeypatch):
+    """A ``qcsc_prefect_sbd.check_sbd_input`` that records its arguments."""
+    calls = []
+    module = types.ModuleType("qcsc_prefect_sbd")
+    module.check_sbd_input = lambda **kwargs: calls.append(kwargs)
+    monkeypatch.setitem(sys.modules, "qcsc_prefect_sbd", module)
+    return calls
+
+
+@pytest.mark.parametrize("nelec", [(1, 1), (2, 1), (3, 1)])
+def test_sbd_input_check_gets_each_spins_hartree_fock(stages, sbd_checks, nelec):
+    stages["integrals"].spin_sq = None
+    stages["integrals"].num_electrons = nelec
+    _run(stages, _parameters(solver="sbd_solver_job/my-sbd"))
+    (call,) = sbd_checks
+    alpha, beta = call["ci_strings"]
+    assert alpha.tolist() == [(1 << nelec[0]) - 1] and beta.tolist() == [(1 << nelec[1]) - 1]
+    assert call["nelec"] == nelec and call["spin_sq"] is None
+    assert [name for name, _ in stages["log"]][-1] == "post-process"
+
+
+def test_sbd_open_shell_batches_get_hf_first_per_spin(stages, sbd_checks):
+    stages["integrals"].spin_sq = None
+    stages["integrals"].num_electrons = (2, 1)
+    _run(stages, _parameters(solver="sbd_solver_job/my-sbd"))
+    transform = dict(stages["log"])["post-process"]["batch_transform"]
+    alpha_in = np.array([0b101, 0b110], dtype=np.int64)
+    beta_in = np.array([0b010, 0b100], dtype=np.int64)
+    # subspace_dim 4: with Hartree-Fock, 3 x 3 strings are cut to 2 x 2.
+    ((alpha, beta),) = list(transform([(alpha_in, beta_in)], np.random.default_rng(0)))
+    assert (alpha[0], beta[0]) == (0b011, 0b001) and len(alpha) * len(beta) == 4
+    assert set(alpha[1:]) <= {0b101, 0b110} and set(beta[1:]) <= {0b010, 0b100}
+    # The carryover string of each spin keeps the slot after Hartree-Fock.
+    carryover = (np.array([0b110], dtype=np.int64), np.array([0b100], dtype=np.int64))
+    for seed in range(10):
+        ((alpha, beta),) = list(
+            transform([(alpha_in, beta_in)], np.random.default_rng(seed), carryover)
+        )
+        assert alpha.tolist() == [0b011, 0b110] and beta.tolist() == [0b001, 0b100]
+
+
+def test_sbd_open_shell_passes_the_new_input_check(stages):
+    """Needs the per-spin check_sbd_input of qcsc-prefect-sbd (open shell allowed)."""
+    sbd = pytest.importorskip("qcsc_prefect_sbd")
+    if not hasattr(sbd, "create_sbd_blocks"):
+        pytest.skip("qcsc-prefect-sbd without open-shell support")
+    stages["integrals"].spin_sq = None
+    stages["integrals"].num_electrons = (2, 1)
+    _run(stages, _parameters(solver="sbd_solver_job/my-sbd"))
+    assert [name for name, _ in stages["log"]][-1] == "post-process"
 
 
 def test_fulqrum_warns_that_spin_sq_is_ignored(stages, caplog):
