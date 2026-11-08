@@ -68,10 +68,10 @@ def _flow_parameters(**sampling_kwargs):
 
 def test_flow_parameters_defaults():
     params = _flow_parameters()
-    assert params.molecule.spin_sq == 0.0
-    assert params.circuit.compress is True and params.circuit.compress_maxiter == 20
+    assert params.molecule.spin_sq is None
+    assert params.circuit.compress is True and params.circuit.compress_maxiter == 50
     assert params.sampling.quantum_source == "real-device"
-    assert params.sampling.shots == 10_000
+    assert params.sampling.shots == 100_000
     assert params.sampling.runtime_block_name == "qrmi-runtime"
     assert params.sampling.runner_name == "ibm-runner"
     assert params.advanced_block_name == "sqd-advanced-settings"
@@ -123,7 +123,7 @@ def test_sampling_parameters_reject_conflicts(kwargs, match):
 def test_only_the_molecule_is_needed():
     params = flow_params.FlowParameters(molecule={"atom": LIH, "basis": "sto-3g"})
     sqd = params.sqd
-    assert (sqd.subspace_dim, sqd.num_batches, sqd.max_iterations) == (90_000, 4, 5)
+    assert (sqd.subspace_dim, sqd.num_batches, sqd.max_iterations) == (1_000_000, 4, 5)
 
 
 def test_transpiler_options_come_from_the_advanced_settings():
@@ -223,7 +223,7 @@ def test_run_form_follows_the_qiskit_patterns_order():
     sqd_schema = schema["definitions"]["SQDParameters"]
     # Defaulted, but marked required so the form highlights them.
     assert {"subspace_dim", "num_batches", "max_iterations"} <= set(sqd_schema["required"])
-    assert sqd_schema["properties"]["subspace_dim"]["default"] == 90_000
+    assert sqd_schema["properties"]["subspace_dim"]["default"] == 1_000_000
 
 
 # ---------------------------------------------------------------- Optimize

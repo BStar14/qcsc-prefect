@@ -373,8 +373,8 @@ def test_pre_init_cannot_run_after_qpy_so_prepare_runs_it_first(h2):
 def test_the_run_form_has_no_qpu_backend():
     assert "qpu_resource" not in SamplingParameters.model_fields
     # A run form saved before keeps the field hidden; empty is ignored, a value fails.
-    assert SamplingParameters(qpu_resource="").shots == 10_000
-    assert SamplingParameters(qpu_resource=None).shots == 10_000
+    assert SamplingParameters(qpu_resource="").shots == 100_000
+    assert SamplingParameters(qpu_resource=None).shots == 100_000
     with pytest.raises(ValueError, match="set QPU Backend in the QRMI Runtime block"):
         SamplingParameters(qpu_resource="ibm_kingston")
 

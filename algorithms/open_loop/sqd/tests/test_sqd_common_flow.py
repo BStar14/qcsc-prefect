@@ -197,7 +197,7 @@ def test_molecule_settings_reach_the_map_stage(stages):
     _run(stages, _parameters(molecule={"fcidump_file": "/data/n2.fcidump"}))
     name, kwargs = stages["log"][1]
     assert name == "map-fcidump"
-    assert kwargs == {"fcidump_file": "/data/n2.fcidump", "spin_sq": 0.0, "ccsd_maxiter": 2}
+    assert kwargs == {"fcidump_file": "/data/n2.fcidump", "spin_sq": None, "ccsd_maxiter": 2}
 
 
 def test_solver_block_is_loaded_before_any_stage(stages):
