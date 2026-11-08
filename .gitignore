@@ -222,8 +222,8 @@ packages/qcsc-prefect-fulqrum/native/fulqrum/
 packages/qcsc-prefect-fulqrum/native/fulqrum-gpu/
 packages/qcsc-prefect-fulqrum/native/external/
 
-# Local fulqrum Docker/Slurm testbed
-packages/qcsc-prefect-fulqrum/native/docker/
+# Local Docker/Slurm testbed
+/docker/
 
 # Copied SQD block configs: user and site paths
 algorithms/open_loop/sqd/sqd_blocks.toml
