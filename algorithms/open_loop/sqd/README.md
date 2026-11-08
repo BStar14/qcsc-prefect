@@ -43,7 +43,7 @@ sqd_loop [post-process] ◄─────────────────�
   restricted to the interactions the QPU implements without SWAP gates. With
   `circuit.qpu_topology` `heavy-hex` (IBM Heron, the default), alpha-beta pairs sit
   on every 4th orbital, at most 5; with `square` (IBM Nighthawk), on every orbital.
-  `compress` (on by default, `compress_maxiter` 20) optimizes the truncated
+  `compress` (on by default, `compress_maxiter` 50) optimizes the truncated
   factorization.
 - **Execute** (`quantum_sampling`): builds the LUCJ circuit and samples it through the
   QRMI runtime block, which compiles it for the backend Target (see
@@ -73,10 +73,10 @@ and fields in this order, following the Qiskit Patterns stages:
 
 | Group | Fields |
 | --- | --- |
-| `molecule` | `{atom, basis, symmetry}` or `{fcidump_file}`, plus `spin_sq` (number or `null`) |
-| `circuit` | `n_lucj_layers` (1), `compress` (on), `compress_maxiter` (20), `qpu_topology` (`heavy-hex`) |
-| `sampling` | `quantum_source`, `shots` (10000), `runtime_block_name`, `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (reload only) |
-| `sqd` | `subspace_dim` (90000), `num_batches` (4), `max_iterations` (5), `carryover_fraction` (0.5), `checkpoint` (on), `resume_checkpoint` |
+| `molecule` | `{atom, basis, symmetry}` or `{fcidump_file}`, plus `spin_sq` (number or `null`, default `null`) |
+| `circuit` | `n_lucj_layers` (1), `compress` (on), `compress_maxiter` (50), `qpu_topology` (`heavy-hex`) |
+| `sampling` | `quantum_source`, `shots` (100000), `runtime_block_name`, `random_seed`, `qrmi_result_dir`, `qiskit_runtime_job_id`, `runner_name` (reload only) |
+| `sqd` | `subspace_dim` (1000000), `num_batches` (4), `max_iterations` (5), `carryover_fraction` (0.5), `checkpoint` (on), `resume_checkpoint` |
 | `advanced_block_name` | Advanced SQD Settings block, default `sqd-advanced-settings` |
 | `solver_block_ref` | Solver Block Override, empty by default: `<block type slug>/<block name>` to run with another solver block than the advanced block names |
 
@@ -113,8 +113,8 @@ from the working directory, then from the repository root.
 | --- | --- | --- |
 | `n2_random.json` | fulqrum | Random bitstrings, no QPU (a first check of the blocks) |
 | `n2.json` | fulqrum | The `qrmi-runtime` block |
-| `n2_reload.json` | fulqrum | Samples of an earlier IBM Quantum job, with a larger subspace |
-| `n2_dice.json` | DICE (with the DICE blocks created) | The `qrmi-runtime` block |
+| `n2_reload.json` | fulqrum | Samples of an earlier IBM Quantum job |
+| `n2_dice.json` | DICE (with the DICE blocks created) | The `qrmi-runtime` block, with `spin_sq = 0.0` as the spin penalty |
 | `n2_sbd.json` | SBD | Random bitstrings, `spin_sq = null` |
 
 ### Solver selection

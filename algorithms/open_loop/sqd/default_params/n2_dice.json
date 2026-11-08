@@ -6,15 +6,15 @@
   "circuit": {
     "n_lucj_layers": 1,
     "compress": true,
-    "compress_maxiter": 20
+    "compress_maxiter": 50
   },
   "sampling": {
     "quantum_source": "real-device",
-    "shots": 10000,
+    "shots": 100000,
     "runtime_block_name": "qrmi-runtime"
   },
   "sqd": {
-    "subspace_dim": 90000,
+    "subspace_dim": 1000000,
     "num_batches": 4,
     "max_iterations": 5
   }

@@ -113,7 +113,7 @@ class MoleculeGeometry(BaseModel):
         json_schema_extra=_at(2),
     )
     spin_sq: float | None = Field(
-        default=0.0,
+        default=None,
         description=(
             "Target value for the total spin squared for the ground state, or null for no "
             "target. DICE uses it as a spin penalty, fulqrum ignores it, and SBD requires null."
@@ -154,7 +154,7 @@ class FCIDumpFile(BaseModel):
         return str(REPO_ROOT / path)
 
     spin_sq: float | None = Field(
-        default=0.0,
+        default=None,
         description=(
             "Target value for the total spin squared for the ground state, or null for no "
             "target. DICE uses it as a spin penalty, fulqrum ignores it, and SBD requires null."
@@ -189,7 +189,7 @@ class CircuitParameters(BaseModel):
         json_schema_extra=_at(1),
     )
     compress_maxiter: int = Field(
-        default=20,
+        default=50,
         description="Maximum number of optimizer iterations when Compress is on.",
         title="Compression Max Iteration",
         ge=1,
@@ -233,7 +233,7 @@ class SamplingParameters(BaseModel):
         json_schema_extra=_at(0),
     )
     shots: int = Field(
-        default=10_000,
+        default=100_000,
         description="Number of shots.",
         title="Shots",
         ge=1,
@@ -329,7 +329,7 @@ class SQDParameters(BaseModel):
     )
 
     subspace_dim: int = Field(
-        default=90_000,
+        default=1_000_000,
         description="Dimension d of subsampled bitstrings for diagonalization.",
         title="Subspace Dimension",
         ge=1,

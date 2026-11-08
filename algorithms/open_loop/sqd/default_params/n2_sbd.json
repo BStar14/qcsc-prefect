@@ -6,7 +6,7 @@
   "circuit": {
     "n_lucj_layers": 1,
     "compress": true,
-    "compress_maxiter": 20
+    "compress_maxiter": 50
   },
   "sampling": {
     "quantum_source": "random",
