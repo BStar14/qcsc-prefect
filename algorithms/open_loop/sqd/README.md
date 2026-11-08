@@ -192,6 +192,9 @@ with the `pip install` command to run.
 
 Before starting, make sure:
 
+- On a Slurm cluster, you have followed
+  [Set up qcsc-prefect on a Slurm cluster](https://quantum.cloud.ibm.com/docs/en/guides/set-up-qcsc-prefect-slurm): the checkout, both Python
+  environments, the Prefect login, `qcsc-qrmi login`, and a shared work directory.
 - For `quantum_source = "real-device"`, you have IBM Quantum credentials for QRMI. See
   the [QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md).
 - You have built the solver for your site (see [Python environments](#python-environments)).
@@ -205,10 +208,10 @@ The workflow uses two Python environments, and the solvers run outside both:
 | `~/venv/prefect` | workflow host | Prefect, the qcsc-prefect packages and this workflow (see [Install](#install)) |
 | `~/venv/sqd-node` | compute nodes, for `scheduler = "slurm"` | the QRMI worker: QRMI with `task_runner`, `qcsc-prefect-qiskit` and `sqd_common` |
 
-Create the workflow host environment as in the
-[Python environment guide](../../../docs/howto/howto_setup_python_env.md)
-(`uv venv ~/venv/prefect -p 3.12`). For QRMI sampling in Slurm, create the compute-node
-environment on a path the compute nodes see, from the repository root:
+The [setup guide](https://quantum.cloud.ibm.com/docs/en/guides/set-up-qcsc-prefect-slurm) creates both. To create the workflow host environment
+yourself, run `uv venv ~/venv/prefect -p 3.12` and install as in [Install](#install). For
+QRMI sampling in Slurm, create the compute-node environment on a path the compute nodes
+see, from the repository root:
 
 ```bash
 uv venv ~/venv/sqd-node -p 3.12
@@ -225,9 +228,9 @@ Each solver is built on its own, and its block points to the built executable:
 
 | Solver | Build | Executable in `sqd_blocks.toml` |
 | --- | --- | --- |
-| fulqrum | `packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`, into its own venv `native/fulqrum` | `[fulqrum] fulqrum_executable`: `/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve` |
-| DICE | the `build_dice*.sh` scripts in `packages/qcsc-prefect-dice/native` | `[dice] dice_executable`: `/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice` |
+| fulqrum | `bash packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`, into its own venv `native/fulqrum` | `[fulqrum] fulqrum_executable`: `/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve` |
 | SBD | `packages/qcsc-prefect-sbd/native/build_sbd_slurm.sh` (or `build_sbd.sh`, `build_sbd_gpu.sh`, `build_sbd_fugaku.sh`) | `[sbd] sbd_executable`: `/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag` |
+| DICE | the `build_dice*.sh` scripts in `packages/qcsc-prefect-dice/native` | `[dice] dice_executable`: `/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice` |
 
 ### Install
 
@@ -244,9 +247,9 @@ uv pip install -e algorithms/qcsc_workflow_utility
 uv pip install -e algorithms/open_loop/sqd          # fulqrum
 ```
 
-For DICE or SBD, also install their packages and the extra, for example
-`uv pip install --no-deps -e packages/qcsc-prefect-dice` and
-`uv pip install -e "algorithms/open_loop/sqd[dice]"` (`[sbd]`, or `[all]` for both).
+For SBD or DICE, also install their packages and the extra, for example
+`uv pip install --no-deps -e packages/qcsc-prefect-sbd` and
+`uv pip install -e "algorithms/open_loop/sqd[sbd]"` (`[dice]`, or `[all]` for both).
 
 ### SQD with the fulqrum eigensolver
 
@@ -254,7 +257,7 @@ Each batch is one scheduler job running `qcsc-fulqrum-solve` (one OpenMP process
 The default target is a generic Slurm cluster; Miyabi and Fugaku also work, given a
 fulqrum build on that system.
 
-1. **Compute nodes:** run `packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`.
+1. **Compute nodes:** run `bash packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`.
    It builds fulqrum into a venv (default `native/fulqrum`), installs
    `qcsc-prefect-fulqrum` there and prints the path of its `qcsc-fulqrum-solve`. The
    compute environment needs no Prefect.
@@ -287,6 +290,38 @@ Each solve leaves a `job_*` directory under `work_dir` with the rendered script,
 `input.npz`, `solver.json`, `output.npz`, `result.json` (or `error.json`) and the
 scheduler output.
 
+### SQD with the SBD eigensolver
+
+Each batch is one MPI job of the SBD `diag` executable.
+
+1. **Compute nodes:** build `diag` with the script for your system under
+   `packages/qcsc-prefect-sbd/native/`: `build_sbd_slurm.sh` (Slurm, MPI and
+   OpenBLAS), `build_sbd.sh` (Miyabi-C), `build_sbd_gpu.sh` (`diag-gpu`, Miyabi-G) or
+   `build_sbd_fugaku.sh`. The CPU scripts write
+   `packages/qcsc-prefect-sbd/native/diag`, the default `sbd_executable` of the
+   example, and `build_sbd_gpu.sh` writes `diag-gpu` beside it.
+2. **Submit host:** install `qcsc-prefect-sbd` and `sqd[sbd]` (see [Install](#install)).
+3. Set `solver = "sbd"` and `[sbd] sbd_executable` in `sqd_blocks.toml`, then create
+   the blocks:
+
+   ```bash
+   sqd-create-blocks --config algorithms/open_loop/sqd/sqd_blocks.toml --dry-run
+   sqd-create-blocks --config algorithms/open_loop/sqd/sqd_blocks.toml
+   ```
+
+   `--solver sbd` selects SBD for a file with another `solver`. The MPI launcher,
+   ranks and threads come from the profile's `[sbd]` table; the `[sbd]` table of your
+   file sets the Davidson tuning (`block`, `iteration`, `tolerance`, `carryover_type`,
+   `solver_mode` and the three comm sizes). The product of `task_comm_size`, `adet_comm_size`
+   and `bdet_comm_size` must divide the MPI ranks, and `solver_mode = "gpu"` needs a
+   GPU profile (`resource_class = "gpu"`); `--dry-run` checks both.
+
+This saves `sqd-sbd-solver` with `cmd-sqd-sbd-solver`, `exec-sqd-sbd-<system>` and
+`hpc-<system>-sqd-sbd`, and records `sbd_solver_job/sqd-sbd-solver` as the Solver
+Block of the Advanced SQD Settings block. Runs need `spin_sq = null`, as in
+`default_params/n2_sbd.json`. The flow puts the Hartree-Fock string of each spin
+first, so closed-shell and open-shell (ROHF) molecules both work.
+
 ### SQD with the DICE eigensolver
 
 Create the DICE blocks for Miyabi or Fugaku from the same example. Set
@@ -299,7 +334,8 @@ export QRMI_IBM_QCS_IAM_APIKEY="<your API key>"  # only with a [runtime] table f
 sqd-create-blocks --config algorithms/open_loop/sqd/sqd_blocks.toml
 ```
 
-The `miyabi` and `fugaku` profiles set the DICE MPI launcher and process count. The
+The `miyabi` and `fugaku` profiles set the DICE MPI launcher and ranks per node, and
+`mpi_options` defaults to `-np` (Miyabi) or `-n` (Fugaku) with `num_nodes x mpiprocs`. The
 `[qrmi]` table is for a Slurm cluster, so on these systems replace it with `[runtime]`
 (IQP from the workflow host), or remove both for random mode. For a Fugaku build, use
 `packages/qcsc-prefect-dice/native/build_dice_fugaku.sh` as the starting point and
@@ -320,9 +356,9 @@ Settings block. Then start a run of the `sqd` deployment with
 
 | Section | Keys |
 | --- | --- |
-| 1. Solver and system | `solver`, `profile`, `python_executable` (the QRMI worker's compute-node Python) |
+| 1. Solver and system | `python_executable` (the QRMI worker's compute-node Python), `profile`, `solver` |
 | 2. Cluster | `queue`, `project`, `work_dir` |
-| 3. Solver | `[fulqrum]` (`fulqrum_executable`, `eigensolver`, the eigensolver tuning), `[dice]` (`dice_executable`, the DICE tuning), `[sbd]` (`sbd_executable`, the SBD tuning); only the selected solver's table is read |
+| 3. Solver | `[fulqrum]` (`fulqrum_executable`, `eigensolver`, the eigensolver tuning), `[sbd]` (`sbd_executable`, the SBD tuning), `[dice]` (`dice_executable`, the DICE tuning); only the selected solver's table is read |
 | 4. Quantum sampling | `[qrmi]` (optional `resource`, `instance`, `queue`) or `[runtime]` |
 | 5. Advanced SQD settings | `[sqd_advanced]`: the Advanced SQD Settings block |
 | 6. Block overrides | `[advanced]`: block names, `runtime_block_name`, `advanced_block_name`, `timeout_seconds` |
@@ -362,41 +398,14 @@ which run one MPI rank per GPU:
 
 On the CPU profiles SBD runs 4 MPI ranks with one thread each (`srun --mpi=pmix` on
 Slurm, Intel MPI `mpiexec.hydra` on Miyabi), or 2 ranks with `mpiexec` on Fugaku.
+On Miyabi and Fugaku, `-n` or `-np` in `mpi_options` must equal `num_nodes x mpiprocs`,
+and on Fugaku `max-proc-per-node` in `fugaku_mpi_options_for_pjm` must equal `mpiprocs`;
+`sqd-create-blocks` stops otherwise. To choose the nodes, ranks, threads and solver grid
+for a subspace size, see
+[Size the SQD diagonalization for your HPC resources](../../../docs/tutorials/configure_sqd_solver_resources.md).
 
 `num_nodes` adds nodes, and with them ranks and GPUs, to each solver job. See
 `packages/qcsc-prefect-fulqrum/native/README.md` for the GPU build.
-
-### SQD with the SBD eigensolver
-
-Each batch is one MPI job of the SBD `diag` executable.
-
-1. **Compute nodes:** build `diag` with the script for your system under
-   `packages/qcsc-prefect-sbd/native/`: `build_sbd_slurm.sh` (Slurm, MPI and
-   OpenBLAS), `build_sbd.sh` (Miyabi-C), `build_sbd_gpu.sh` (`diag-gpu`, Miyabi-G) or
-   `build_sbd_fugaku.sh`. The CPU scripts write
-   `packages/qcsc-prefect-sbd/native/diag`, the default `sbd_executable` of the
-   example, and `build_sbd_gpu.sh` writes `diag-gpu` beside it.
-2. **Submit host:** install `qcsc-prefect-sbd` and `sqd[sbd]` (see [Install](#install)).
-3. Set `solver = "sbd"` and `[sbd] sbd_executable` in `sqd_blocks.toml`, then create
-   the blocks:
-
-   ```bash
-   sqd-create-blocks --config algorithms/open_loop/sqd/sqd_blocks.toml --dry-run
-   sqd-create-blocks --config algorithms/open_loop/sqd/sqd_blocks.toml
-   ```
-
-   `--solver sbd` selects SBD for a file with another `solver`. The MPI launcher,
-   ranks and threads come from the profile's `[sbd]` table; the `[sbd]` table of your
-   file sets the Davidson tuning (`block`, `iteration`, `tolerance`, `carryover_type`,
-   `solver_mode` and the three comm sizes). The product of `task_comm_size`, `adet_comm_size`
-   and `bdet_comm_size` must divide the MPI ranks, and `solver_mode = "gpu"` needs a
-   GPU profile (`resource_class = "gpu"`); `--dry-run` checks both.
-
-This saves `sqd-sbd-solver` with `cmd-sqd-sbd-solver`, `exec-sqd-sbd-<system>` and
-`hpc-<system>-sqd-sbd`, and records `sbd_solver_job/sqd-sbd-solver` as the Solver
-Block of the Advanced SQD Settings block. Runs need `spin_sq = null`, as in
-`default_params/n2_sbd.json`. The flow puts the Hartree-Fock string of each spin
-first, so closed-shell and open-shell (ROHF) molecules both work.
 
 ## Quantum sampling
 

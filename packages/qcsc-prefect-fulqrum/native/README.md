@@ -8,7 +8,7 @@ needs, and then installs this package into the environment with `--no-deps`.
 From the repository root:
 
 ```bash
-packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh
+bash packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh
 ```
 
 The compute node then runs
@@ -53,7 +53,7 @@ determinants are always solved densely on the CPU.
 Needs a C++17 compiler with OpenMP and Python 3.11 or later:
 
 ```bash
-packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh
+bash packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh
 ```
 
 `FULQRUM_WITH_PRIMME=1` also builds PyPI's `primme` for `eigensolver="primme"`.
@@ -83,7 +83,7 @@ make install PREFIX=$HOME/.local/opt/openblas-ilp64 INTERFACE64=1 \
 
 # Then, with the site's CUDA and MPI modules loaded:
 FULQRUM_WITH_GPU=1 FQ_CUDA_ARCH=sm_90 \
-    packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh packages/qcsc-prefect-fulqrum/native/fulqrum-gpu
+    bash packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh packages/qcsc-prefect-fulqrum/native/fulqrum-gpu
 ```
 
 | Variable | Default | Purpose |

@@ -25,8 +25,8 @@ a dedicated virtual environment, `packages/qcsc-prefect-fulqrum/native/fulqrum` 
 checkout, and installs this package into it without dependencies:
 
 ```bash
-cd /path/to/qcsc-prefect
-packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh
+cd "$QCSC_PREFECT"    # The qcsc-prefect checkout
+bash packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh
 ```
 
 The script clones fulqrum at a pinned commit into `native/external/fulqrum`. It takes
@@ -42,7 +42,7 @@ nodes. The compute environment does not need Prefect or qiskit-addon-sqd.
 
 **The workflow host** (where the Prefect process runs and jobs are submitted) installs the
 package with its dependencies, into the `~/venv/prefect` environment of
-[the Python environment setup](howto_setup_python_env.md):
+[Set up qcsc-prefect on a Slurm cluster](https://quantum.cloud.ibm.com/docs/en/guides/set-up-qcsc-prefect-slurm):
 
 ```bash
 source ~/venv/prefect/bin/activate
