@@ -22,3 +22,12 @@ for _path in (
 ):
     if _path.exists() and str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_user_qrmi_config(monkeypatch, tmp_path):
+    """Keep the user's ~/.qiskit/qrmi_config.json, and its API key, out of the tests."""
+    monkeypatch.setenv("QRMI_CONFIG", str(tmp_path / "no-qrmi_config.json"))

@@ -6,7 +6,6 @@ import json
 import sys
 import tomllib
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from sqd_common import create_blocks
@@ -74,14 +73,11 @@ def _dice_config(tmp_path, profile="miyabi", runtime=True):
         # Replace [qrmi] (Slurm only) with the commented IQP [runtime] tables.
         start, end = text.index("\n[qrmi]\n"), text.index("# To sample from the workflow")
         text = text[:start] + "\n" + text[end:]
-        for line in (
-            "[runtime]",
-            'scheduler = "iqp"',
-            'resource = "ibm_kingston"',
-            "[runtime.qrmi]",
-        ):
-            text = text.replace(f"# {line}\n", f"{line}\n", 1)
-        text = text.replace("# QRMI_IBM_QCS_", "QRMI_IBM_QCS_")
+        text = text.replace("# [runtime]\n", "[runtime]\n", 1)
+        text = text.replace('# scheduler = "iqp"\n', 'scheduler = "iqp"\n', 1)
+        text = text.replace(
+            '# resource = "ibm_kingston"       # Optional', 'resource = "ibm_kingston"  #', 1
+        )
     path = tmp_path / "sqd_blocks.toml"
     path.write_text(text)
     return path
@@ -138,10 +134,8 @@ def test_dice_runtime_table_saves_the_block_after_the_solver(monkeypatch, tmp_pa
     )
     monkeypatch.setattr(
         dice,
-        "build_runtime_block",
-        lambda settings: SimpleNamespace(
-            save=lambda name, overwrite: saved.append((name, settings))
-        ),
+        "save_runtime_block",
+        lambda settings, name: saved.append((name, settings)) or [],
     )
     advanced = []
     monkeypatch.setattr(
@@ -151,7 +145,8 @@ def test_dice_runtime_table_saves_the_block_after_the_solver(monkeypatch, tmp_pa
     dice.main()
     ((name, settings),) = saved
     assert name == "qrmi-runtime" and settings["scheduler"] == "iqp"
-    assert settings["api_key"] == "secret-key"
+    # The API key stays in qrmi_config.json or the environment, never in the block.
+    assert "api_key" not in settings and "secret-key" not in str(settings)
     # The runs use the DICE block through the Advanced SQD Settings block.
     ((name, settings),) = advanced
     assert name == "sqd-advanced-settings"
@@ -161,16 +156,17 @@ def test_dice_runtime_table_saves_the_block_after_the_solver(monkeypatch, tmp_pa
     assert "secret-key" not in out
 
 
-def test_dice_runtime_table_needs_the_api_key_before_any_block(monkeypatch, tmp_path):
+def test_dice_runtime_table_rejects_a_key_before_any_block(monkeypatch, tmp_path):
     pytest.importorskip("qcsc_prefect_dice")
     from sqd_dice import create_blocks as dice
 
-    monkeypatch.delenv("QRMI_IBM_QCS_IAM_APIKEY", raising=False)
     monkeypatch.setattr(
         dice, "create_dice_blocks", lambda **kwargs: pytest.fail("no block may be saved")
     )
-    monkeypatch.setattr(sys, "argv", ["sqd-create-blocks", "--config", str(_dice_config(tmp_path))])
-    with pytest.raises(RuntimeError, match="QRMI_IBM_QCS_IAM_APIKEY"):
+    path = _dice_config(tmp_path)
+    path.write_text(path.read_text().replace("[runtime]\n", '[runtime]\napi_key = "x"\n', 1))
+    monkeypatch.setattr(sys, "argv", ["sqd-create-blocks", "--config", str(path)])
+    with pytest.raises(RuntimeError, match="qcsc-qrmi login stores the API key"):
         dice.main()
 
 

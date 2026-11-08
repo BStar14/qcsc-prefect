@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import tomllib
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from sqd_common import qrmi_blocks  # noqa: E402
@@ -28,10 +27,8 @@ def _config(**qrmi):
 def test_example_keeps_the_qrmi_table_active():
     with EXAMPLE.open("rb") as f:
         config = tomllib.load(f)
-    assert config["qrmi"] == {
-        "resource": "YOUR_QRMI_RESOURCE",
-        "python_executable": "/opt/venvs/qrmi/bin/python",
-    }
+    # The backend and instance come from qcsc-qrmi login, so the table names neither.
+    assert config["qrmi"] == {"python_executable": "/opt/venvs/qrmi/bin/python"}
     assert "runtime" not in config
     # The profile adds the QRMI job's walltime, threads and timeout.
     merged = load_block_config(EXAMPLE)["qrmi"]
@@ -98,8 +95,6 @@ def test_qrmi_table_overrides_and_cli():
 @pytest.mark.parametrize(
     ("argv", "config", "message"),
     [
-        ((), _config(python_executable="/p"), "qrmi.resource"),
-        (("--qrmi-python-executable", "/p"), _config(), "qrmi.resource"),
         ((), _config(resource="test_heron"), "qrmi.python_executable"),
         ((), _config(resource="bad id", python_executable="/p"), "whitespace"),
         ((), _config(**QRMI, shots=10), "Unknown \\[qrmi\\] settings: shots"),
@@ -138,7 +133,7 @@ IQP_RUNTIME = {
 }
 
 
-def test_runtime_table_reads_the_api_key_from_the_environment(monkeypatch, tmp_path, capsys):
+def test_runtime_table_never_takes_the_api_key(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("QRMI_IBM_QCS_IAM_APIKEY", "secret-key")
     path = tmp_path / "blocks.json"
     path.write_text(json.dumps({**_config(), "runtime": IQP_RUNTIME, "runtime_block_name": "rt"}))
@@ -147,10 +142,19 @@ def test_runtime_table_reads_the_api_key_from_the_environment(monkeypatch, tmp_p
     assert "secret-key" not in out
     runtime = json.loads(out)["runtime_block"]
     assert runtime["name"] == "rt" and runtime["scheduler"] == "iqp"
-    # The key goes to the block's secret api_key field; the endpoint is a plain field.
-    assert runtime["api_key"] == "set"
+    # IQP reads the key from qrmi_config.json or the environment when it samples.
+    assert "api_key" not in runtime
     assert runtime["endpoint"] == "https://quantum.cloud.ibm.com/api/v1"
     assert "resource_config" not in runtime
+
+
+def test_qrmi_table_without_a_backend_keeps_the_block_choice(tmp_path):
+    qrmi = _resolve(config=_config(python_executable="/p"))
+    runtime = qrmi_blocks.qrmi_runtime_settings(qrmi)
+    assert "resource" not in runtime and "instance" not in runtime
+    qrmi = _resolve(config=_config(python_executable="/p", resource="ibm_fez", instance="main"))
+    runtime = qrmi_blocks.qrmi_runtime_settings(qrmi)
+    assert (runtime["resource"], runtime["instance"]) == ("ibm_fez", "main")
 
 
 def test_qrmi_table_takes_the_crn_and_rejects_an_api_key():
@@ -164,15 +168,15 @@ def test_qrmi_table_takes_the_crn_and_rejects_an_api_key():
 @pytest.mark.parametrize(
     ("runtime", "env", "message"),
     [
-        (IQP_RUNTIME, {}, "QRMI_IBM_QCS_IAM_APIKEY"),
+        ({**IQP_RUNTIME, "api_key": "x"}, {}, "qcsc-qrmi login stores the API key"),
         (
             {**IQP_RUNTIME, "qrmi": {"QRMI_IBM_QCS_IAM_APIKEY": "x"}},
             {"QRMI_IBM_QCS_IAM_APIKEY": "k"},
-            "set it in the environment",
+            "Do not write QRMI_IBM_QCS_IAM_APIKEY",
         ),
+        ({**IQP_RUNTIME, "instances": {"a": "b"}}, {}, "must not set instances"),
         ({**IQP_RUNTIME, "transpiler": "m:f"}, {"QRMI_IBM_QCS_IAM_APIKEY": "k"}, "must not set"),
         ({"scheduler": "slurm", "resource": "r", "qrmi": {"A": "b"}}, {}, "only used by"),
-        ({"scheduler": "iqp"}, {}, "runtime.resource"),
     ],
 )
 def test_invalid_runtime_table(monkeypatch, runtime, env, message):
@@ -210,10 +214,8 @@ def test_main_saves_separate_qrmi_blocks(tmp_path, monkeypatch, capsys):
     runtime_blocks = []
     monkeypatch.setattr(
         create_blocks,
-        "build_runtime_block",
-        lambda settings: SimpleNamespace(
-            save=lambda name, overwrite: runtime_blocks.append((name, settings))
-        ),
+        "save_runtime_block",
+        lambda settings, name: runtime_blocks.append((name, settings)) or [],
     )
     monkeypatch.setattr(create_blocks, "save_advanced_block", lambda settings, name: None)
     path = tmp_path / "blocks.json"
@@ -228,7 +230,8 @@ def test_main_saves_separate_qrmi_blocks(tmp_path, monkeypatch, capsys):
     assert cmd.default_args == ["-m", "qcsc_prefect.integrations.qiskit.qrmi.worker"]
     assert exec_profile.launcher == "single" and exec_profile.ompthreads == 4
     assert exec_profile.environments == {"OMP_NUM_THREADS": "4"}
-    assert hpc.hpc_target == "slurm" and hpc.slurm_qpu == "test_heron"
+    # The job requests the QRMI Runtime block's backend; the profile names none.
+    assert hpc.hpc_target == "slurm" and hpc.slurm_qpu is None
     assert hpc.slurm_ntasks == 1
     assert hpc.executable_map == {cmd.executable_key: "/opt/venvs/qrmi/bin/python"}
     # The solver's HPC profile never requests the QPU.
@@ -246,7 +249,7 @@ def test_qrmi_keys_without_their_header_get_a_hint(tmp_path):
     text = EXAMPLE.read_text().replace("\n[qrmi]\n", "\n# [qrmi]\n")
     path = tmp_path / "blocks.toml"
     path.write_text(text)
-    with pytest.raises(RuntimeError, match=r"python_executable, resource in \[dice\].*header"):
+    with pytest.raises(RuntimeError, match=r"python_executable in \[dice\].*header"):
         create_blocks.main(["--config", str(path), "--dry-run"])
 
 

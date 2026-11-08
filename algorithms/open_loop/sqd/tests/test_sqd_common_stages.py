@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from qrmi_stubs import QrmiBlockStub
 
 for _mod in ("ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
     pytest.importorskip(_mod)
@@ -394,9 +395,9 @@ def test_sampling_uses_the_qrmi_block_with_the_sqd_hooks(monkeypatch, lih, offli
 
     async def load(name):
         calls["block"] = name
-        return runtime
+        return QrmiBlockStub(runtime)
 
-    monkeypatch.setattr(sampling, "_load_qrmi_runtime", load)
+    monkeypatch.setattr(sampling, "load_qrmi_block", load)
     monkeypatch.setattr(qrmi.dataclasses, "replace", lambda obj, **changes: obj.replace(**changes))
     monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
     advanced = advanced_mod.AdvancedSettings(sabre_layout_trials=7)
@@ -426,7 +427,7 @@ def test_missing_runtime_block_explains_random_fallback(monkeypatch, lih):
     async def missing(name, prepare=None):
         raise ValueError(f"Unable to find block document named {name}")
 
-    monkeypatch.setattr(QrmiRuntimeBlock, "aload_runtime", staticmethod(missing))
+    monkeypatch.setattr(QrmiRuntimeBlock, "aload", staticmethod(missing))
     params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "heavy-hex")
     with pytest.raises(RuntimeError, match="quantum_source='random'"):
         asyncio.run(

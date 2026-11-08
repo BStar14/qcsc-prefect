@@ -4,7 +4,6 @@ import inspect
 import json
 import tomllib
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from sqd_common.block_config import load_block_config
@@ -171,7 +170,7 @@ def test_dry_run_prints_settings_without_prefect(capsys):
     assert printed["advanced_block"]["solver_block_ref"] == "fulqrum_solver_job/sqd-fulqrum-solver"
     assert printed["advanced_block"]["ccsd_maxiter"] == 10
     assert printed["blocks"]["solver_block_name"] == "sqd-fulqrum-solver"
-    assert printed["qrmi_blocks"]["resource"] == "YOUR_QRMI_RESOURCE"
+    assert printed["qrmi_blocks"]["resource"] is None  # kept from qcsc-qrmi login
     assert printed["runtime_block"]["name"] == "qrmi-runtime"
     assert printed["runtime_block"]["scheduler"] == "slurm"
 
@@ -205,8 +204,8 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
     monkeypatch.setattr(create_blocks, "create_qrmi_blocks", qrmi_saved.append)
     monkeypatch.setattr(
         create_blocks,
-        "build_runtime_block",
-        lambda settings: SimpleNamespace(save=lambda name, overwrite: qrmi_saved.append(name)),
+        "save_runtime_block",
+        lambda settings, name: qrmi_saved.append(name) or [],
     )
 
     advanced_saved = []
@@ -235,7 +234,7 @@ def test_resolved_kwargs_build_the_block_set(monkeypatch, capsys):
     assert solver.execution_profile_block_name == "exec-sqd-fulqrum-slurm"
     assert solver.hpc_profile_block_name == "hpc-slurm-sqd-fulqrum"
     assert solver.return_sci_state is False
-    assert qrmi_saved[0]["resource"] == "YOUR_QRMI_RESOURCE" and qrmi_saved[1] == "qrmi-runtime"
+    assert qrmi_saved[0]["resource"] is None and qrmi_saved[1] == "qrmi-runtime"
     assert "Saved blocks for SQD fulqrum workflow" in capsys.readouterr().out
 
 

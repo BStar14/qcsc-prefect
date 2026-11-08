@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from qrmi_stubs import QrmiBlockStub
 
 np = pytest.importorskip("numpy")
 pytest.importorskip("ffsim")
@@ -248,7 +249,7 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
 
     async def load_block(name):
         assert name == "qrmi-runtime"
-        return slurm_runtime(tmp_path)
+        return QrmiBlockStub(slurm_runtime(tmp_path))
 
     artifacts = []
 
@@ -264,7 +265,7 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     monkeypatch.setattr(sampling, "create_table_artifact", artifact)
     monkeypatch.setattr(postprocess, "create_table_artifact", artifact)
     monkeypatch.setattr(sampling.QuantumRuntime, "load", reject_ibm)
-    monkeypatch.setattr(sampling, "_load_qrmi_runtime", load_block)
+    monkeypatch.setattr(sampling, "load_qrmi_block", load_block)
     monkeypatch.setattr(postprocess.flow_run, "get_id", lambda: "run")
     sampling_params = SamplingParameters(shots=4)
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
@@ -369,28 +370,13 @@ def test_pre_init_cannot_run_after_qpy_so_prepare_runs_it_first(h2):
     ]
 
 
-def test_a_per_run_backend_replaces_the_resource(tmp_path):
-    block_runtime = slurm_runtime(tmp_path)
-    other = make_qrmi_runtime(block_runtime, transpile_config={}, resource="ibm_kingston")
-    assert other.resource == "ibm_kingston"
-    unset = make_qrmi_runtime(block_runtime, transpile_config={})
-    assert unset.resource == "test_heron"
-
-
-@pytest.mark.parametrize("value", ["a,b", "a b", "ibm/x"])
-def test_the_qpu_backend_is_one_resource_name(value):
-    with pytest.raises(ValueError, match="one backend name"):
-        SamplingParameters(qpu_resource=value)
-    assert SamplingParameters(qpu_resource=" ibm_kingston ").qpu_resource == "ibm_kingston"
-    assert SamplingParameters(qpu_resource="  ").qpu_resource is None
-
-
-@pytest.mark.parametrize(
-    "other", [dict(quantum_source="random"), dict(qrmi_result_dir="/data/sqd/qrmi/x")]
-)
-def test_the_qpu_backend_needs_a_sampling_run(other):
-    with pytest.raises(ValueError, match="leave it empty"):
-        SamplingParameters(qpu_resource="ibm_kingston", **other)
+def test_the_run_form_has_no_qpu_backend():
+    assert "qpu_resource" not in SamplingParameters.model_fields
+    # A run form saved before keeps the field hidden; empty is ignored, a value fails.
+    assert SamplingParameters(qpu_resource="").shots == 10_000
+    assert SamplingParameters(qpu_resource=None).shots == 10_000
+    with pytest.raises(ValueError, match="set QPU Backend in the QRMI Runtime block"):
+        SamplingParameters(qpu_resource="ibm_kingston")
 
 
 def test_runtime_table_rejects_a_secret_conflicts_and_typos(monkeypatch):
@@ -406,3 +392,81 @@ def test_runtime_table_rejects_a_secret_conflicts_and_typos(monkeypatch):
         )
     with pytest.raises(RuntimeError, match="Unknown \\[runtime\\] settings: service_cr"):
         runtime_block.build_runtime_block({**base, "service_cr": "a"})
+
+
+LOGIN_BLOCK = dict(
+    scheduler="slurm",
+    resource="ibm_kingston",
+    instance="open-instance (open)",
+    instances={"main-instance (premium)": "crn:v1:main", "open-instance (open)": "crn:v1:open"},
+    instance_backends={
+        "main-instance (premium)": ["ibm_fez", "ibm_kingston"],
+        "open-instance (open)": ["ibm_kingston"],
+    },
+    root_dir="/data/sqd/qrmi",
+    command_block_name="cmd-sqd-qrmi",
+    execution_profile_block_name="exec-sqd-qrmi",
+    hpc_profile_block_name="hpc-slurm-sqd-qrmi",
+)
+
+
+def _saved_runtime(monkeypatch, saved_block):
+    from sqd_common import runtime_block
+
+    saved = {}
+    monkeypatch.setattr(runtime_block, "_saved_block", lambda name: saved_block)
+
+    def capture(self, name, overwrite=False):
+        saved[name] = self
+
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    monkeypatch.setattr(QrmiRuntimeBlock, "save", capture)
+    return runtime_block, saved
+
+
+def test_create_blocks_keeps_the_login_choice_and_dropdowns(monkeypatch):
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    runtime_block, saved = _saved_runtime(monkeypatch, QrmiRuntimeBlock(**LOGIN_BLOCK))
+    # A [qrmi] table that sets no backend or instance, with a new work directory.
+    settings = {
+        "scheduler": "slurm",
+        "root_dir": "/data/new/qrmi",
+        "command_block_name": "cmd-sqd-qrmi",
+        "execution_profile_block_name": "exec-sqd-qrmi",
+        "hpc_profile_block_name": "hpc-slurm-sqd-qrmi",
+    }
+    assert runtime_block.save_runtime_block(settings, "qrmi-runtime") == []
+    block = saved["qrmi-runtime"]
+    assert (block.instance, block.resource, block.root_dir) == (
+        "open-instance (open)",
+        "ibm_kingston",
+        "/data/new/qrmi",
+    )
+    schema = type(block).model_json_schema()["properties"]
+    assert schema["resource"]["enum"] == ["ibm_fez", "ibm_kingston"]
+    assert schema["instance"]["enum"] == list(LOGIN_BLOCK["instances"])
+
+
+def test_create_blocks_prints_a_changed_backend_or_instance(monkeypatch):
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    runtime_block, saved = _saved_runtime(monkeypatch, QrmiRuntimeBlock(**LOGIN_BLOCK))
+    changes = runtime_block.save_runtime_block(
+        {"scheduler": "slurm", "resource": "ibm_fez", "instance": "main-instance"}, "qrmi-runtime"
+    )
+    assert changes == [
+        "QPU Backend: ibm_kingston -> ibm_fez",
+        "IBM Quantum Instance: open-instance (open) -> main-instance",
+    ]
+    # The bare instance name selects its 'name (plan)' label.
+    assert saved["qrmi-runtime"].instance == "main-instance (premium)"
+    with pytest.raises(RuntimeError, match="is not one of"):
+        runtime_block.save_runtime_block({"instance": "elsewhere"}, "qrmi-runtime")
+
+
+def test_a_first_block_needs_a_backend(monkeypatch):
+    runtime_block, _ = _saved_runtime(monkeypatch, None)
+    with pytest.raises(RuntimeError, match="Run qcsc-qrmi login, or set resource"):
+        runtime_block.save_runtime_block({"scheduler": "slurm", "root_dir": "/x"}, "qrmi-runtime")

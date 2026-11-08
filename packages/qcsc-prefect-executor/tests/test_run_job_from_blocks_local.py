@@ -435,8 +435,8 @@ def test_run_job_from_blocks_dispatches_to_slurm(monkeypatch, tmp_path: Path):
             slurm_qpu="h100",
         )
     )
-    # A profile without a QPU requests none, whatever the runtime's resource.
-    assert captured["req"].qpu is None
+    # The job's QPU comes from the caller even when the profile names none.
+    assert captured["req"].qpu == "h100"
 
 
 def _capture_slurm_run(monkeypatch) -> dict[str, object]:

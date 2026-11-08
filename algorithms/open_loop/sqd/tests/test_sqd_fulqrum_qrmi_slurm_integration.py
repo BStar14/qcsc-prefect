@@ -31,6 +31,7 @@ Environment:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -227,22 +228,36 @@ def qrmi_runtime(monkeypatch):
     qrmi = qrmi_blocks.resolve_qrmi_settings(args, config, block_kwargs)
     qrmi_blocks.create_qrmi_blocks(qrmi)
 
-    # The fakes stand in for the QPU: request no QPU and run the fake task_runner.
-    assert blocks[qrmi["hpc_profile_block_name"]].slurm_qpu == RESOURCE
-    blocks[qrmi["hpc_profile_block_name"]].slurm_qpu = None
+    # The QRMI job requests the block's backend; its HPC profile names no QPU.
+    assert blocks[qrmi["hpc_profile_block_name"]].slurm_qpu is None
     blocks[qrmi["command_block_name"]].default_args += ["--task-runner", str(runner)]
-    # The QrmiRuntimeBlock that create_blocks saves for [qrmi], loaded as the flow does, with
-    # a plain CRN that the job must see and no API key.
+    # The QrmiRuntimeBlock that create_blocks and qcsc-qrmi login save, loaded as the flow
+    # does: the instance's CRN must reach the job, and no API key.
     from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
 
-    settings = {**qrmi_blocks.qrmi_runtime_settings(qrmi), "service_crn": "crn:v1:testbed"}
-    block_runtime = QrmiRuntimeBlock(**settings).get_runtime()
+    settings = {
+        **qrmi_blocks.qrmi_runtime_settings(qrmi),
+        "resource": RESOURCE,
+        "instance": "testbed (open)",
+        "instances": {"testbed (open)": "crn:v1:testbed"},
+        "instance_backends": {"testbed (open)": [RESOURCE]},
+    }
+    block = QrmiRuntimeBlock(**settings)
+    block.check_backend_access(live=False)
+    # The fakes stand in for the QPU: request no QPU and run the fake task_runner.
+    block_runtime = dataclasses.replace(block.get_runtime(), request_qpu=False)
+
+    class Loaded:
+        resource = block.resource
+
+        def get_runtime(self, prepare=None):
+            return block_runtime
 
     async def load(name):
         assert name == "qrmi-runtime"
-        return block_runtime
+        return Loaded()
 
-    monkeypatch.setattr(sampling, "_load_qrmi_runtime", load)
+    monkeypatch.setattr(sampling, "load_qrmi_block", load)
     return block_runtime
 
 

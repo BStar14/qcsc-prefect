@@ -12,6 +12,7 @@ import logging
 
 import numpy as np
 import pytest
+from qrmi_stubs import QrmiBlockStub
 
 for _mod in ("ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
     pytest.importorskip(_mod)
@@ -72,6 +73,14 @@ def stages(monkeypatch):
         return advanced["settings"]
 
     monkeypatch.setattr(flow, "load_advanced_settings", load_advanced)
+    checked = []
+
+    async def check(name, logger):
+        log.append(("check", name))
+        checked.append(name)
+        return QrmiBlockStub(None, resource="test_heron")
+
+    monkeypatch.setattr(flow, "check_qrmi_block", check)
     for module in (flow, sampling, topology):
         monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
 
@@ -98,6 +107,7 @@ def stages(monkeypatch):
         loaded=loaded,
         selected=selected,
         advanced=advanced,
+        checked=checked,
     )
     monkeypatch.setattr(flow, "solver_class", solver_class)
     stages_state.update(sentinels)
@@ -122,7 +132,8 @@ def test_patterns_stages_hand_results_on_unchanged(stages):
     energy = _run(stages, _parameters())
     assert energy == stages["energy"]
     calls = dict(stages["log"])
-    assert [name for name, _ in stages["log"]] == ["map", "optimize", "execute", "post-process"]
+    names = [name for name, _ in stages["log"]]
+    assert names == ["check", "map", "optimize", "execute", "post-process"]
     # Map → Optimize
     assert calls["optimize"]["elec_props"] is stages["integrals"]
     # Optimize → Execute
@@ -139,6 +150,37 @@ def test_patterns_stages_hand_results_on_unchanged(stages):
     ]
 
 
+def test_the_qpu_backend_is_checked_before_map_and_fails_the_run(stages, monkeypatch):
+    _run(stages, _parameters(runtime_block_name="my-qrmi"))
+    assert stages["checked"] == ["my-qrmi"]
+    # The checked block is the one sampling uses.
+    assert dict(stages["log"])["execute"]["qrmi_block"].resource == "test_heron"
+
+    from qcsc_prefect.integrations.qiskit.qrmi.block import BackendAccessError
+
+    async def refuse(name, logger):
+        raise BackendAccessError("ibm_fez is not available to open (open)")
+
+    monkeypatch.setattr(flow, "check_qrmi_block", refuse)
+    stages["log"].clear()
+    with pytest.raises(BackendAccessError, match="not available"):
+        _run(stages, _parameters())
+    assert stages["log"] == []
+
+
+@pytest.mark.parametrize(
+    "sampling",
+    [
+        {"quantum_source": "random"},
+        {"qrmi_result_dir": "/data/sqd/qrmi/x"},
+        {"qiskit_runtime_job_id": "d7"},
+    ],
+)
+def test_no_qpu_check_without_qpu_sampling(stages, sampling):
+    _run(stages, _parameters(**sampling))
+    assert stages["checked"] == []
+
+
 @pytest.mark.parametrize("qpu_topology", [None, "heavy-hex", "square"])
 def test_optimize_gets_the_qpu_topology(stages, caplog, qpu_topology):
     circuit = {} if qpu_topology is None else {"qpu_topology": qpu_topology}
@@ -153,7 +195,7 @@ def test_optimize_gets_the_qpu_topology(stages, caplog, qpu_topology):
 def test_molecule_settings_reach_the_map_stage(stages):
     stages["advanced"]["settings"] = AdvancedSettings(ccsd_maxiter=2)
     _run(stages, _parameters(molecule={"fcidump_file": "/data/n2.fcidump"}))
-    name, kwargs = stages["log"][0]
+    name, kwargs = stages["log"][1]
     assert name == "map-fcidump"
     assert kwargs == {"fcidump_file": "/data/n2.fcidump", "spin_sq": 0.0, "ccsd_maxiter": 2}
 
@@ -227,7 +269,7 @@ def test_sbd_input_it_cannot_solve_fails_before_sampling(stages, props, match):
         setattr(stages["integrals"], name, value)
     with pytest.raises(ValueError, match=match):
         _run(stages, _parameters(solver="sbd_solver_job/my-sbd"))
-    assert [name for name, _ in stages["log"]] == ["map"]
+    assert [name for name, _ in stages["log"]] == ["check", "map"]
 
 
 def test_fulqrum_warns_that_spin_sq_is_ignored(stages, caplog):
