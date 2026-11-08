@@ -26,3 +26,15 @@ FQ_DIST_BACKEND = "auto"            # Distributed fulqrum transport; "auto" pick
 # CuPy compiles kernels on first use. Point its cache at shared storage under your
 # work_dir so the ranks and later jobs reuse it, for example:
 # CUPY_CACHE_DIR = "/work/gXXXX/sqd-fulqrum/.cupy"
+
+# SBD: GPU build (diag-gpu), one rank per node. Used with solver = "sbd".
+[sbd]
+solver_mode = "gpu"
+launcher = "mpirun"
+mpiprocs = 1
+mpi_options = ["-n", "1"]
+modules = []                        # diag-gpu needs no module loads on Miyabi-G
+pre_commands = ["unset OMPI_MCA_mca_base_env_list"]
+
+[sbd.environments]                  # Replaces the fulqrum variables above
+MIYABI = "G"

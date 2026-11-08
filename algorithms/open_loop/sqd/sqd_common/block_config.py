@@ -2,7 +2,7 @@
 
 ``sqd_blocks.example.toml`` holds the settings each user edits. Its ``profile`` names
 a bundled system profile (``slurm``, ``miyabi``, ``fugaku``, or the GPU profiles
-``slurm-gpu`` and ``miyabi-gpu`` for fulqrum, under ``sqd_common/profiles/``) with the
+``slurm-gpu`` and ``miyabi-gpu``, under ``sqd_common/profiles/``) with the
 scheduler and resource settings of that system, or gives a path to your own profile
 file. Rarely changed settings (block names, timeouts,
 solver tuning) go in an optional ``[advanced]`` table.
@@ -10,11 +10,14 @@ solver tuning) go in an optional ``[advanced]`` table.
 ``load_block_config`` merges these into the flat settings the solver scripts read.
 Later layers win:
 
-1. the profile, then its ``[<solver>]`` table (``[dice]`` with ``solver = "dice"``)
+1. the profile, then its ``[<solver>]`` table (``[dice]`` with ``solver = "dice"``,
+   ``[sbd]`` with ``solver = "sbd"``)
 2. ``[advanced]``
 3. the top level of your file, then its ``[<solver>]`` table
 
-``[qrmi]`` merges the profile's QRMI job defaults under your keys, and only when your
+``[environments]`` merges your table over the profile's, or over the profile's
+``[<solver>.environments]`` when it has one. ``[qrmi]`` merges the profile's QRMI
+job defaults under your keys, and only when your
 file has a ``[qrmi]`` table. ``[runtime]`` is taken from your file as it is. A config
 without ``profile``, ``solver`` or these layer tables is used unchanged, so flat
 configs keep working.
@@ -113,9 +116,13 @@ def merge_layers(
         _table(config, solver),
     ):
         merged.update(_flat(layer))
-    if "environments" in profile or "environments" in config:
+    # A profile's [<solver>.environments] replaces its [environments], so the fulqrum
+    # variables of a GPU profile do not reach the other solvers' jobs.
+    solver_profile = _table(profile, solver)
+    profile_env = solver_profile if "environments" in solver_profile else profile
+    if "environments" in profile_env or "environments" in config:
         merged["environments"] = {
-            **_table(profile, "environments"),
+            **_table(profile_env, "environments"),
             **_table(config, "environments"),
         }
     if "qrmi" in config:

@@ -21,3 +21,9 @@ ompthreads = 4
 launcher = "mpiexec"
 mpiprocs = 2
 mpi_options = ["-n", "2"]
+
+# SBD: MPI. Used with solver = "sbd".
+[sbd]
+launcher = "mpiexec"
+mpiprocs = 2
+mpi_options = ["-n", "2"]

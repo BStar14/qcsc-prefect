@@ -18,3 +18,11 @@ launcher = "mpiexec.hydra"
 mpiprocs = 4
 ompthreads = 1
 mpi_options = ["-np", "4"]
+
+# SBD: MPI with Intel MPI. Used with solver = "sbd".
+[sbd]
+launcher = "mpiexec.hydra"
+mpiprocs = 4
+ompthreads = 1
+mpi_options = ["-np", "4"]
+modules = ["intel/2023.2.0", "impi/2021.10.0"]

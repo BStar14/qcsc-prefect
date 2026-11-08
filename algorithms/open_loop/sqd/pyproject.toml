@@ -51,7 +51,7 @@ qcsc-prefect-sbd = { path = "../../../packages/qcsc-prefect-sbd", editable = tru
 qcsc_workflow_utility = { path = "../../qcsc_workflow_utility", editable = true }
 
 [tool.setuptools]
-packages = ["sqd_common", "sqd_dice", "sqd_fulqrum"]
+packages = ["sqd_common", "sqd_dice", "sqd_fulqrum", "sqd_sbd"]
 include-package-data = true
 zip-safe = false
 

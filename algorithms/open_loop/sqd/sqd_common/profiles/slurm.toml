@@ -13,6 +13,14 @@ modules = []
 pre_commands = []
 # slurm_memory = "8G"               # Optional: #SBATCH --mem
 
+# SBD: MPI. Used with solver = "sbd".
+[sbd]
+launcher = "srun"
+mpi_options = ["--mpi=pmix"]        # Match the PMI plugin of your Slurm and MPI
+num_nodes = 1
+mpiprocs = 4                        # --ntasks-per-node
+ompthreads = 1
+
 # The QRMI sampler job. It holds the QPU while the node compiles the circuit.
 [qrmi]
 walltime = "00:30:00"
