@@ -54,7 +54,9 @@ def carryover_of(result: SCIResult, fraction: float, norb: int) -> tuple[np.ndar
 
     1. ``result.carryover``, which the fulqrum solver block sets.
     2. ``carryover_bitstrings`` of an SBD result, one bool row per alpha string
-       (column ``p`` is orbital ``norb - 1 - p``), used for both spins.
+       (column ``p`` is orbital ``norb - 1 - p``). The beta strings come from its
+       ``carryover_bitstrings_b`` rows, of the same layout, when an open-shell run
+       set them; otherwise the alpha strings are used for both spins.
     3. The heaviest ``fraction`` of each spin's strings in ``result.sci_state``
        (DICE, ``solve_fermion``), by marginal weight.
 
@@ -74,7 +76,11 @@ def _carryover_and_source(
     rows = getattr(result, "carryover_bitstrings", None)
     if rows is not None:
         strings = _bool_rows_to_ints(np.asarray(rows, dtype=bool), norb)
-        return (strings, strings.copy()), "carryover_bitstrings"
+        rows_b = getattr(result, "carryover_bitstrings_b", None)
+        if rows_b is None:
+            return (strings, strings.copy()), "carryover_bitstrings"
+        strings_b = _bool_rows_to_ints(np.asarray(rows_b, dtype=bool), norb)
+        return (strings, strings_b), "carryover_bitstrings"
     try:
         state = getattr(result, "sci_state", None)
     except NotImplementedError:

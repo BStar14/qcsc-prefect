@@ -26,8 +26,8 @@ from qcsc_workflow_utility import (
     ElectronicProperties,
     compute_molecular_integrals_from_fcidump,
     compute_molecular_integrals_from_geometry,
-    to_sbd_closed_shell,
 )
+from qcsc_workflow_utility.solvers import to_sbd_subspace
 
 from sqd_common.advanced import AdvancedSettings, load_advanced_settings
 from sqd_common.flow_params import FCIDumpFile, FlowParameters, MoleculeGeometry
@@ -73,15 +73,20 @@ async def load_solver_block(solver_cls: type, name: str) -> SolverBlock:
 def check_solver_input(slug: str, elec_props: ElectronicProperties) -> None:
     """Reject a molecule the selected solver cannot solve, before any quantum job.
 
-    SBD takes closed-shell systems with ``spin_sq`` None only. fulqrum has no spin
-    penalty, so it ignores ``spin_sq``.
+    SBD has no spin target, so it needs ``spin_sq`` None, and it needs the
+    Hartree-Fock string of each spin first; closed and open shells (ROHF) both work.
+    The check gets each spin's Hartree-Fock string, as :func:`batch_transform` puts
+    it first. fulqrum has no spin penalty, so it ignores ``spin_sq``.
     """
     if slug == SBD_SLUG:
         from qcsc_prefect_sbd import check_sbd_input
 
-        hartree_fock = np.array([(1 << elec_props.num_electrons[0]) - 1], dtype=np.int64)
+        n_alpha, n_beta = elec_props.num_electrons
         check_sbd_input(
-            ci_strings=(hartree_fock, hartree_fock),
+            ci_strings=(
+                np.array([(1 << n_alpha) - 1], dtype=np.int64),
+                np.array([(1 << n_beta) - 1], dtype=np.int64),
+            ),
             nelec=elec_props.num_electrons,
             spin_sq=elec_props.spin_sq,
         )
@@ -94,22 +99,27 @@ def check_solver_input(slug: str, elec_props: ElectronicProperties) -> None:
 def batch_transform(
     slug: str, subspace_dim: int, elec_props: ElectronicProperties
 ) -> BatchTransformFn | None:
-    """SBD needs the Hartree-Fock determinant first and one set for alpha and beta.
+    """SBD needs the Hartree-Fock string of each spin first in its subspaces.
 
-    Adding Hartree-Fock can push a batch over its size, and then the carryover strings
-    of the round are kept and another string is dropped.
+    A closed-shell batch keeps one list for both spins; an open-shell batch gets an
+    alpha and a beta list, each with its own Hartree-Fock string (see
+    ``to_sbd_subspace``). Adding Hartree-Fock can push a batch over its size, and
+    then the round's carryover strings of each spin are kept and other strings are
+    dropped.
     """
     if slug != SBD_SLUG:
         return None
+    n_alpha, n_beta = elec_props.num_electrons
 
     def to_sbd(batches, rng, carryover=None):
         keep = None
         if carryover is not None:
-            keep = [int(ci) for strings in carryover for ci in np.asarray(strings).reshape(-1)]
-        return to_sbd_closed_shell(
+            keep = tuple(np.asarray(strings).reshape(-1) for strings in carryover)
+        return to_sbd_subspace(
             batches,
             subspace_dim=subspace_dim,
-            num_elec_a=elec_props.num_electrons[0],
+            num_elec_a=n_alpha,
+            num_elec_b=n_beta,
             rng=rng,
             keep=keep,
         )

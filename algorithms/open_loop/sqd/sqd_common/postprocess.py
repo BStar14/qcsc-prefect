@@ -160,7 +160,7 @@ async def sqd_loop(
     spin's CI strings in the best ground state of a round is kept in every subspace
     of the next round, within ``subspace_dim``. The fraction is set on the solver
     block with :func:`with_carryover_fraction`, and the strings are read from its
-    results with :func:`carryover_of`. SBD then puts Hartree-Fock first. A
+    results with :func:`carryover_of`. SBD then puts each spin's Hartree-Fock first. A
     fraction of 0 uses no carryover, even if the solver returns some.
 
     The task is never cached: a retried flow run reuses the persisted samples
