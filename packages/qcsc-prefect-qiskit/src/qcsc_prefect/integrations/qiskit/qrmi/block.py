@@ -15,11 +15,25 @@ from pydantic import ConfigDict, Field, ValidationInfo, create_model, field_vali
 
 from qiskit import QuantumCircuit
 
-from .config_file import API_KEY_SETTING, config_path, read_config
+from .config_file import API_KEY_SETTING, config_path, crn_region, read_config
 from .runtime import DEFAULT_TRANSPILER, PreparedCircuit, QrmiRuntime
 
 DEFAULT_ENDPOINT = "https://quantum.cloud.ibm.com/api/v1"
 DEFAULT_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
+
+
+def regional_endpoint(crn: str) -> str:
+    """The IBM Quantum API endpoint of the CRN's region, as qiskit-ibm-runtime builds it.
+
+    ``us-east`` uses ``quantum.cloud.ibm.com``; another region, for example ``eu-de``,
+    uses ``eu-de.quantum.cloud.ibm.com``.
+    """
+    region = crn_region(crn)
+    if not region or region == "us-east":
+        return DEFAULT_ENDPOINT
+    return f"https://{region}.quantum.cloud.ibm.com/api/v1"
+
+
 SESSION_MODES = ("batch", "dedicated")
 _DEFAULTS = {
     "instance": "",
@@ -76,7 +90,7 @@ class QrmiRuntimeBlock(Block):
         default="",
         title="IBM Quantum Instance",
         description=(
-            "Instance to run on, as 'name (plan)' from Instances. qcsc-qrmi login lists "
+            "Instance to run on, as 'name (plan, region)' from Instances. qcsc-qrmi login lists "
             "them; its CRN is used unless Service CRN is set."
         ),
     )
@@ -96,12 +110,17 @@ class QrmiRuntimeBlock(Block):
     instances: dict[str, str] = Field(
         default_factory=dict,
         title="Instances",
-        description="IBM Quantum instances, 'name (plan)' -> CRN. qcsc-qrmi login fills it.",
+        description=(
+            "IBM Quantum instances, 'name (plan, region)' -> CRN. qcsc-qrmi login fills it."
+        ),
     )
     endpoint: str = Field(
         default=DEFAULT_ENDPOINT,
         title="IBM Quantum Endpoint",
-        description="IBM Quantum API endpoint (QRMI_IBM_QCS_ENDPOINT).",
+        description=(
+            "IBM Quantum API endpoint (QRMI_IBM_QCS_ENDPOINT). The default follows the "
+            "instance's region: eu-de instances use https://eu-de.quantum.cloud.ibm.com/api/v1."
+        ),
     )
     iam_endpoint: str = Field(
         default=DEFAULT_IAM_ENDPOINT,
@@ -120,7 +139,7 @@ class QrmiRuntimeBlock(Block):
         default_factory=dict,
         title="Backend Access",
         description=(
-            "Backends each instance can use, 'name (plan)' -> backends; checked before a "
+            "Backends each instance can use, 'name (plan, region)' -> backends; checked before a "
             "run. qcsc-qrmi login and refresh fill it."
         ),
     )
@@ -163,7 +182,7 @@ class QrmiRuntimeBlock(Block):
             return _DEFAULTS.get(info.field_name, value)
         if isinstance(value, str):
             value = value.strip()
-            # An instance label is 'name (plan)'; the other fields are single values.
+            # An instance label is 'name (plan, region)'; the other fields are single values.
             if info.field_name != "instance" and any(char.isspace() for char in value):
                 raise ValueError("must be one value without spaces")
             if not value and info.field_name == "resource":
@@ -205,10 +224,16 @@ class QrmiRuntimeBlock(Block):
         """Service CRN, else the CRN of IBM Quantum Instance, else ``""``."""
         return self.service_crn or self.instances.get(self.instance_label(), "")
 
+    def api_endpoint(self) -> str:
+        """IBM Quantum Endpoint, or the regional one of the CRN while it is the default."""
+        if self.endpoint != DEFAULT_ENDPOINT:
+            return self.endpoint
+        return regional_endpoint(self.crn())
+
     def qrmi_settings(self) -> dict[str, str]:
         """The QRMI settings of the fields, without the API key."""
         settings = {
-            "QRMI_IBM_QCS_ENDPOINT": self.endpoint,
+            "QRMI_IBM_QCS_ENDPOINT": self.api_endpoint(),
             "QRMI_IBM_QCS_IAM_ENDPOINT": self.iam_endpoint,
             "QRMI_IBM_QCS_SESSION_MODE": self.session_mode,
         }
@@ -252,7 +277,8 @@ class QrmiRuntimeBlock(Block):
                 "qcsc-qrmi login, or choose an IBM Quantum Instance in the block."
             )
         listed = self.instance_backends.get(label)
-        if live and self.endpoint == DEFAULT_ENDPOINT:
+        # qiskit-ibm-runtime reaches the instance's regional endpoint from its CRN.
+        if live and self.api_endpoint() == regional_endpoint(crn):
             key = self.api_key()
             if key:
                 try:
@@ -295,12 +321,10 @@ class QrmiRuntimeBlock(Block):
             # A legacy block's resource_config keeps its endpoints and key; a changed
             # field still wins.
             config = {**self.qrmi_settings(), **extra}
-            for name, key in (
-                ("endpoint", "QRMI_IBM_QCS_ENDPOINT"),
-                ("iam_endpoint", "QRMI_IBM_QCS_IAM_ENDPOINT"),
-            ):
-                if getattr(self, name) != _DEFAULTS[name]:
-                    config[key] = getattr(self, name)
+            if self.endpoint != DEFAULT_ENDPOINT or self.instance or self.service_crn:
+                config["QRMI_IBM_QCS_ENDPOINT"] = self.api_endpoint()
+            if self.iam_endpoint != DEFAULT_IAM_ENDPOINT:
+                config["QRMI_IBM_QCS_IAM_ENDPOINT"] = self.iam_endpoint
             if self.crn():
                 config["QRMI_IBM_QCS_SERVICE_CRN"] = self.crn()
             # qrmi_config.json, then the environment, then a legacy resource_config.
@@ -354,11 +378,14 @@ def _live_backend_names(api_key: str, crn: str, backend: str) -> set[str]:
     from qiskit_ibm_runtime import QiskitRuntimeService
     from qiskit_ibm_runtime.exceptions import QiskitBackendNotFoundError
 
-    service = QiskitRuntimeService(channel="ibm_quantum_platform", token=api_key, instance=crn)
-    try:
-        return {item.name for item in service.backends(name=backend, instance=crn)}
-    except QiskitBackendNotFoundError:
-        return set()
+    from .cli import quiet_ibm_runtime
+
+    with quiet_ibm_runtime():
+        service = QiskitRuntimeService(channel="ibm_quantum_platform", token=api_key, instance=crn)
+        try:
+            return {item.name for item in service.backends(name=backend, instance=crn)}
+        except QiskitBackendNotFoundError:
+            return set()
 
 
 def qrmi_runtime_block_class(

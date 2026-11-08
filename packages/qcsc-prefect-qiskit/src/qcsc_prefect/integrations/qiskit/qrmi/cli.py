@@ -19,11 +19,13 @@ that the block's instance can use its backend.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import getpass
 import json
+import logging
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 from .config_file import Instance as Instance
@@ -47,19 +49,73 @@ NEW_BLOCK_SLURM_DEFAULTS = {
 }
 
 
-def discover_instances(api_key: str) -> list[Instance]:
-    """The instances ``api_key`` can use on IBM Quantum, with their backends."""
+class DiscoveryError(RuntimeError):
+    """IBM Quantum could not list the instances or backends of an API key."""
+
+
+@contextlib.contextmanager
+def quiet_ibm_runtime() -> Iterator[None]:
+    """Hide qiskit-ibm-runtime's own warnings, such as "Loading instance ...".
+
+    They describe its account selection, which this command does on its own. Set
+    ``QISKIT_IBM_RUNTIME_LOG_LEVEL`` to see them.
+    """
+    if os.environ.get("QISKIT_IBM_RUNTIME_LOG_LEVEL"):
+        yield
+        return
+    logger = logging.getLogger("qiskit_ibm_runtime")
+    level = logger.level
+    logger.setLevel(logging.ERROR)
+    try:
+        yield
+    finally:
+        logger.setLevel(level)
+
+
+def discover_instances(api_key: str, out: Callable[[str], None] = print) -> list[Instance]:
+    """The instances ``api_key`` can use on IBM Quantum, with their backends.
+
+    Each instance is opened by its CRN, so instances with the same name in different
+    regions stay apart.
+
+    Raises:
+        DiscoveryError: If IBM Quantum rejects the key or cannot be reached.
+    """
     from qiskit_ibm_runtime import QiskitRuntimeService
 
-    service = QiskitRuntimeService(channel="ibm_quantum_platform", token=api_key)
     found = []
-    for item in service.instances():
-        crn = item["crn"]
-        backends = sorted({backend.name for backend in service.backends(instance=crn)})
-        found.append(
-            Instance(name=item["name"], crn=crn, plan=item.get("plan") or "", backends=backends)
-        )
+    with quiet_ibm_runtime():
+        try:
+            service = QiskitRuntimeService(channel="ibm_quantum_platform", token=api_key)
+            items = service.instances()
+        except Exception as exc:  # noqa: BLE001 - reported as one readable line
+            raise DiscoveryError(_discovery_message(exc)) from exc
+        for item in items:
+            instance = Instance(name=item["name"], crn=item["crn"], plan=item.get("plan") or "")
+            try:
+                # By CRN: the service talks to the instance's regional endpoint.
+                backends = service.backends(instance=instance.crn)
+            except Exception as exc:  # noqa: BLE001 - one instance does not stop the rest
+                out(f"  Skipped {instance.label}: {_discovery_message(exc)}")
+                continue
+            instance.backends = sorted({backend.name for backend in backends})
+            found.append(instance)
     return found
+
+
+def _discovery_message(exc: Exception) -> str:
+    """One readable line for a failed IBM Quantum request."""
+    text = str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__
+    lowered = text.lower()
+    if any(word in lowered for word in ("token", "api key", "unauthorized", "401", "403")):
+        return "IBM Quantum rejected the API key. Check it, or create a new one on IBM Cloud."
+    if any(
+        word in lowered for word in ("connection", "timed out", "timeout", "resolve", "network")
+    ):
+        return "IBM Quantum could not be reached. Check the network connection of this host."
+    if len(text) > 160:
+        text = text[:157] + "..."
+    return f"IBM Quantum request failed ({type(exc).__name__}): {text}"
 
 
 def load_block(name: str):
@@ -135,33 +191,83 @@ def _api_key(args: argparse.Namespace, prompt: _Prompt, stored: str | None) -> s
     return key
 
 
+def _unique_labels(instances: list[Instance]) -> list[Instance]:
+    """``instances``, with a CRN suffix on labels that would still be equal."""
+    seen: dict[str, int] = {}
+    for instance in instances:
+        seen[instance.label] = seen.get(instance.label, 0) + 1
+    result = []
+    for instance in instances:
+        if seen[instance.label] > 1:
+            # Same name, plan and region: tell them apart by the end of the CRN.
+            tail = instance.crn.rstrip(":").rsplit(":", 1)[-1][-6:]
+            instance = Instance(
+                name=f"{instance.name} [{tail}]",
+                crn=instance.crn,
+                plan=instance.plan,
+                backends=instance.backends,
+            )
+        result.append(instance)
+    return result
+
+
+def _pick(prompt: _Prompt, question: str, count: int, default: int) -> int:
+    """Ask for one number from 1 to ``count``; return its index."""
+    while True:
+        answer = prompt.ask(f"{question} [{default + 1}]: ").strip()
+        if not answer:
+            return default
+        if answer.isdigit() and 1 <= int(answer) <= count:
+            return int(answer) - 1
+        prompt.out(f"  Enter a number from 1 to {count}.")
+
+
 def _select(
     prompt: _Prompt, instances: list[Instance], current: QrmiConfig
 ) -> tuple[list[Instance], Instance, str]:
-    """Ask which instances to keep, the default instance and the default backend."""
-    labels = [instance.label for instance in instances]
+    """Ask which instances to keep, the default instance and the default backend.
+
+    Instances are chosen by number, so two with the same name are never confused.
+    """
+    instances = _unique_labels(instances)
     prompt.out(f"Found {len(instances)} instance(s):")
-    for instance in instances:
-        prompt.out(f"  {instance.label}  {len(instance.backends)} backend(s)")
-    keep = prompt.ask("Use which instances? Numbers or names, comma separated [all]: ").strip()
-    if keep:
-        chosen = []
-        for token in (item.strip() for item in keep.split(",")):
-            if token.isdigit() and 1 <= int(token) <= len(instances):
-                chosen.append(instances[int(token) - 1])
-            elif token in labels or any(token == i.name for i in instances):
-                chosen.extend(i for i in instances if token in (i.label, i.name))
-        instances = list({instance.name: instance for instance in chosen}.values()) or instances
-    labels = [instance.label for instance in instances]
+    for index, instance in enumerate(instances, start=1):
+        prompt.out(f"  {index}. {instance.label}  {len(instance.backends)} backend(s)")
+    while True:
+        keep = prompt.ask("Use which instances? Numbers, comma separated [all]: ").strip()
+        tokens = [token.strip() for token in keep.split(",") if token.strip()]
+        if all(t.isdigit() and 1 <= int(t) <= len(instances) for t in tokens):
+            break
+        prompt.out(f"  Enter numbers from 1 to {len(instances)}, or nothing for all.")
+    if tokens:
+        instances = [instances[i] for i in sorted({int(t) - 1 for t in tokens})]
+    if len(instances) > 1:
+        prompt.out("Default instance:")
+        for index, instance in enumerate(instances, start=1):
+            prompt.out(f"  {index}. {instance.label}")
     previous = current.instance(current.default_instance or "")
-    default_label = previous.label if previous and previous.label in labels else labels[0]
-    label = prompt.choose("Default instance", labels, default_label)
-    default = next(instance for instance in instances if instance.label == label)
+    crns = [instance.crn for instance in instances]
+    start = crns.index(previous.crn) if previous and previous.crn in crns else 0
+    default = instances[_pick(prompt, "Default instance", len(instances), start)]
+    if len(instances) == 1:
+        prompt.out(f"Default instance: {default.label}")
     if not default.backends:
         raise SystemExit(f"{default.label} has no backends; choose another default instance.")
     names = sorted(set(default.backends))
-    backend = prompt.choose("Default backend", names, names[0])
-    return instances, default, backend
+    prompt.out(f"Backends of {default.label}:")
+    for index, name in enumerate(names, start=1):
+        prompt.out(f"  {index}. {name}")
+    while True:
+        answer = prompt.ask(f"Default backend [{names[0]}]: ").strip()
+        if not answer:
+            return instances, default, names[0]
+        if answer.isdigit() and 1 <= int(answer) <= len(names):
+            return instances, default, names[int(answer) - 1]
+        if answer in names:
+            return instances, default, answer
+        others = [i.label for i in instances if answer in i.backends]
+        hint = f" It is available to: {', '.join(others)}." if others else ""
+        prompt.out(f"  {answer} is not available to {default.label}.{hint}")
 
 
 def _block_settings(block_name: str, config: QrmiConfig, label: str, backend: str) -> dict:
@@ -208,13 +314,13 @@ def cmd_login(args: argparse.Namespace, prompt: _Prompt | None = None) -> int:
         instances = _manual_instances(prompt)
     else:
         prompt.out("Finding your IBM Quantum instances and backends...")
-        instances = discover_instances(key)
+        instances = discover_instances(key, prompt.out)
     if not instances:
         raise SystemExit("No instances: check the API key, or add them with --no-discover.")
     instances, default, backend = _select(prompt, instances, current)
     config = merge_instances(current, instances)
     config.api_key = key
-    config.default_instance = default.name
+    config.default_instance = default.crn
     write_config(config, path)
     new_block = load_block(args.block) is None
     save_block(
@@ -223,7 +329,9 @@ def cmd_login(args: argparse.Namespace, prompt: _Prompt | None = None) -> int:
         [instance.label for instance in config.instances],
         config.backends,
     )
-    _print_next_steps(prompt.out, path, args.block, default.label, backend, default.name, new_block)
+    _print_next_steps(
+        prompt.out, path, args.block, default.label, backend, default.label, new_block
+    )
     return 0
 
 
@@ -233,22 +341,26 @@ def cmd_refresh(args: argparse.Namespace, prompt: _Prompt | None = None) -> int:
     current = read_config(path)
     if not current.api_key:
         raise SystemExit(f"No API key in {path}; run qcsc-qrmi login first.")
-    kept = {instance.name for instance in current.instances}
-    found = discover_instances(current.api_key)
-    instances = [instance for instance in found if not kept or instance.name in kept]
+    kept = {instance.crn for instance in current.instances}
+    found = discover_instances(current.api_key, prompt.out)
+    labels = {instance.crn: instance.name for instance in current.instances}
+    instances = [instance for instance in found if not kept or instance.crn in kept]
+    for instance in instances:
+        # Keep a name made unique at login, such as 'name [abc123]'.
+        instance.name = labels.get(instance.crn, instance.name)
     if not instances:
         raise SystemExit("IBM Quantum returned none of the stored instances.")
     config = merge_instances(current, instances)
     if not config.instance(config.default_instance or ""):
-        config.default_instance = instances[0].name
+        config.default_instance = instances[0].crn
     write_config(config, path)
 
     block = load_block(args.block)
     if block is None:
         prompt.out(f"Wrote {path}; there is no block {args.block} to update (run login).")
         return 0
-    label = block.instance_label()
-    chosen = config.instance(label) or config.instance(config.default_instance)
+    crn = block.instances.get(block.instance_label(), "")
+    chosen = config.instance(crn) or config.instance(config.default_instance)
     backend = block.resource
     if backend not in chosen.backends:
         prompt.out(f"{backend} is no longer available to {chosen.label}.")
@@ -273,7 +385,7 @@ def cmd_list(args: argparse.Namespace, prompt: _Prompt | None = None) -> int:
         return 0
     prompt.out(f"API key: {'set' if config.api_key else 'unset'}")
     for instance in config.instances:
-        mark = " (default)" if instance.name == config.default_instance else ""
+        mark = " (default)" if instance.crn == config.default_instance else ""
         prompt.out(f"{instance.label}{mark}: {', '.join(instance.backends)}")
     return 0
 
@@ -321,9 +433,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, DiscoveryError) as exc:
         print(f"qcsc-qrmi {args.command}: {exc}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print(f"\nqcsc-qrmi {args.command}: cancelled; nothing was changed.", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 
     {
       "environment": {"QRMI_IBM_QCS_IAM_APIKEY": "..."},
-      "default_instance": "main-instance",
+      "default_instance": "crn:v1:...",
       "instances": [
         {"name": "main-instance", "plan": "premium", "crn": "crn:v1:...",
          "backends": ["ibm_fez", "ibm_kingston"]}
@@ -17,9 +17,10 @@
 
 - ``environment`` holds the API key, once. The workflow reads it for IQP and for the
   backend check.
-- ``instances`` lists each IBM Quantum instance with its CRN and backends. Only this
-  package reads it; QRMI and the Slurm SPANK plugin ignore keys other than
-  ``resources``.
+- ``instances`` lists each IBM Quantum instance with its CRN and backends. The CRN
+  identifies an instance (``default_instance`` is one): instances in different
+  regions may share a name and a plan. Only this package reads it; QRMI and the
+  Slurm SPANK plugin ignore keys other than ``resources``.
 - ``resources`` is what QRMI and SPANK read: one entry per backend, whichever
   instances can use it. SPANK reads only an entry's own ``environment``, so each IBM
   entry carries a copy of the key, which ``write_config`` keeps equal to the one above.
@@ -50,9 +51,19 @@ def config_path(path: str | os.PathLike | None = None) -> Path:
     return Path(chosen).expanduser()
 
 
+def crn_region(crn: str) -> str:
+    """The region of an IBM Cloud CRN (its 6th field), for example ``us-east``; or ``""``."""
+    parts = crn.split(":")
+    return parts[5] if len(parts) > 5 else ""
+
+
 @dataclass
 class Instance:
-    """One IBM Quantum instance: its name, plan, CRN and the backends it can use."""
+    """One IBM Quantum instance: its name, plan, CRN and the backends it can use.
+
+    The CRN identifies the instance. The name does not: instances in different
+    regions (``us-east``, ``eu-de``) may share a name and a plan.
+    """
 
     name: str
     crn: str
@@ -60,9 +71,14 @@ class Instance:
     backends: list[str] = field(default_factory=list)
 
     @property
+    def region(self) -> str:
+        return crn_region(self.crn)
+
+    @property
     def label(self) -> str:
-        """The name shown in the block form, ``name (plan)``."""
-        return f"{self.name} ({self.plan})" if self.plan else self.name
+        """The name shown in the block form, ``name (plan, region)``."""
+        details = ", ".join(item for item in (self.plan, self.region) if item)
+        return f"{self.name} ({details})" if details else self.name
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -89,12 +105,13 @@ class QrmiConfig:
         """Every backend of every instance, once each, sorted."""
         return sorted({name for instance in self.instances for name in instance.backends})
 
-    def instance(self, name_or_label: str) -> Instance | None:
-        """The instance named ``name_or_label`` (its name or its ``name (plan)`` label)."""
+    def instance(self, key: str) -> Instance | None:
+        """The instance with CRN, label or (when unique) name ``key``."""
         for instance in self.instances:
-            if name_or_label in (instance.name, instance.label):
+            if key in (instance.crn, instance.label):
                 return instance
-        return None
+        named = [instance for instance in self.instances if instance.name == key]
+        return named[0] if len(named) == 1 else None
 
 
 def read_config(path: str | os.PathLike | None = None) -> QrmiConfig:
@@ -183,9 +200,9 @@ def write_config(config: QrmiConfig, path: str | os.PathLike | None = None) -> P
 def merge_instances(
     config: QrmiConfig, instances: Iterable[Instance], *, replace: bool = True
 ) -> QrmiConfig:
-    """``config`` with ``instances`` added, or replacing the instances of the same name."""
-    found = {instance.name: instance for instance in instances}
-    kept = [] if replace else [i for i in config.instances if i.name not in found]
+    """``config`` with ``instances`` added, or replacing the instances of the same CRN."""
+    found = {instance.crn: instance for instance in instances}
+    kept = [] if replace else [i for i in config.instances if i.crn not in found]
     return QrmiConfig(
         api_key=config.api_key,
         instances=[*kept, *found.values()],

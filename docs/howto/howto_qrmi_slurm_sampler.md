@@ -100,14 +100,20 @@ environment is removed from the `sbatch` environment.
 `qcsc-qrmi login` asks for the IBM Cloud API key, finds the IBM Quantum instances
 it can use and their backends (through qiskit-ibm-runtime), and writes
 `qrmi_config.json`: `--config PATH`, else `$QRMI_CONFIG`, else
-`~/.qiskit/qrmi_config.json`, with mode 600. `--no-discover` asks for each
+`~/.qiskit/qrmi_config.json`, with mode 600. Instances are shown as
+`name (plan, region)`, chosen by number and stored by CRN, so instances with the
+same name in `us-east` and `eu-de` stay apart. The backend prompt lists only the
+default instance's backends and names the instances that have a backend it does
+not. qiskit-ibm-runtime's own warnings are hidden (set
+`QISKIT_IBM_RUNTIME_LOG_LEVEL=WARNING` to see them), and a failed request is
+reported in one line. `--no-discover` asks for each
 instance's name, plan, CRN and backends instead; `--api-key-env VAR` reads the key
 from an environment variable instead of the prompt.
 
 ```json
 {
   "environment": {"QRMI_IBM_QCS_IAM_APIKEY": "..."},
-  "default_instance": "main-instance",
+  "default_instance": "crn:v1:...:main::",
   "instances": [
     {"name": "main-instance", "plan": "premium", "crn": "crn:v1:...",
      "backends": ["ibm_fez", "ibm_kingston"]},
@@ -430,11 +436,11 @@ time, final status, Target width and the per-PUB compilation report.
 | Field | Meaning |
 | --- | --- |
 | Scheduler | `slurm` or `iqp` |
-| IBM Quantum Instance | the instance, as `name (plan)`; a dropdown after `qcsc-qrmi login` |
+| IBM Quantum Instance | the instance, as `name (plan, region)`; a dropdown after `qcsc-qrmi login` |
 | QPU Backend (`resource`) | the backend; a dropdown of every instance's backends, each once |
 | Service CRN | empty: the instance's CRN; set it to use another |
-| Instances | `name (plan)` → CRN, filled by `login` |
-| IBM Quantum Endpoint, IAM Endpoint, Session Mode | IBM Quantum's URLs and `batch` by default |
+| Instances | `name (plan, region)` → CRN, filled by `login` |
+| IBM Quantum Endpoint, IAM Endpoint, Session Mode | IBM Quantum's URLs and `batch` by default; the API endpoint follows the instance's region (`eu-de.quantum.cloud.ibm.com` for `eu-de`) |
 | Backend Access | the backends each instance can use, filled by `login` and `refresh` |
 
 The block holds no API key. `check_backend_access()` raises `BackendAccessError`
