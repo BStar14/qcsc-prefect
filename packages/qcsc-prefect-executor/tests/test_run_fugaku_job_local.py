@@ -117,9 +117,9 @@ def test_run_fugaku_job_local_mock(tmp_path: Path, monkeypatch):
         ("43607196",),
         {"watch_poll_interval": 0.01, "timeout_seconds": 5},
     )
-    assert logger.info_lines == ["hello from fugaku stdout"]
-    # A successful job's stderr is progress or warnings, not an error.
-    assert logger.warning_lines == ["hello from fugaku stderr"]
+    # A successful job's stderr is progress, logged at info level.
+    assert logger.info_lines == ["hello from fugaku stdout", "hello from fugaku stderr"]
+    assert logger.warning_lines == []
     assert logger.error_lines == []
     assert len(artifact_calls) == 1
     assert artifact_calls[0]["key"] == "fugaku-metrics-test"

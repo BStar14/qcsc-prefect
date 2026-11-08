@@ -114,9 +114,9 @@ def test_run_slurm_job_local_mock(tmp_path: Path, monkeypatch):
         ("12345",),
         {"watch_poll_interval": 0.01, "timeout_seconds": 5},
     )
-    assert logger.info_lines == ["hello from slurm stdout"]
-    # A successful job's stderr is progress or warnings, not an error.
-    assert logger.warning_lines == ["hello from slurm stderr"]
+    # A successful job's stderr is progress, logged at info level.
+    assert logger.info_lines == ["hello from slurm stdout", "hello from slurm stderr"]
+    assert logger.warning_lines == []
     assert logger.error_lines == []
     assert len(artifact_calls) == 1
     assert artifact_calls[0]["key"] == "slurm-metrics-test"

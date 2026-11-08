@@ -134,6 +134,7 @@ assert resource == "fake_qpu"
 payload = json.loads(Path(source).read_text())
 assert payload["program_id"] == "sampler"
 shots = payload["parameters"]["shots"]
+print("2026-01-01 00:00:00,000 INFO Task ID: fake-task-1", flush=True)
 with open("isa.qpy", "rb") as stream:
     (isa,) = qpy.load(stream)
 result = StatevectorSampler(seed=7).run([(isa,)], shots=shots).result()
@@ -307,3 +308,6 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_runtime, caplog):
     assert "sqd_common" in loaded
     assert loaded.isdisjoint(HEAVY), sorted(loaded & set(HEAVY))
     assert "Compiled on the compute node:" in caplog.text
+    # task_runner's log reaches the job's output through the worker.
+    assert "Task ID: fake-task-1" in (job_dir / "output.out").read_text()
+    assert not (job_dir / "task_ended.txt").exists()

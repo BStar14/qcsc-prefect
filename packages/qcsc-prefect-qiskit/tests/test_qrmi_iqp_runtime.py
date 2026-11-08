@@ -959,6 +959,7 @@ def test_a_failed_live_check_falls_back_to_the_list(monkeypatch, caplog):
     monkeypatch.setattr(block_mod, "_live_backend_names", offline)
     _access_block(instance="main").check_backend_access()
     assert "Could not ask IBM Quantum" in caplog.text
+    assert "could not be reached. Check the network connection" in caplog.text
     with pytest.raises(block_mod.BackendAccessError):
         _access_block().check_backend_access()
 
@@ -989,3 +990,27 @@ def test_runtime_block_round_trip_keeps_the_settings(monkeypatch, no_api_key):
     restored = QrmiRuntimeBlock._from_block_document(doc)
     assert restored.instances == CRNS and restored.instance_backends == ACCESS
     assert restored.get_runtime().job_settings["QRMI_IBM_QCS_SERVICE_CRN"] == "crn:v1:main"
+
+
+def test_the_live_check_runs_its_real_imports(monkeypatch):
+    """Only the service is fake: the exception import and the regional CRN are real."""
+    import qiskit_ibm_runtime
+    from qcsc_prefect.integrations.qiskit.qrmi import block as block_mod
+    from qiskit.providers.exceptions import QiskitBackendNotFoundError
+
+    eu = "crn:v1:bluemix:public:quantum-computing:eu-de:a/acct:2222bbbb::"
+    opened = []
+
+    class Service:
+        def __init__(self, **kwargs):
+            opened.append(kwargs)
+
+        def backends(self, name, instance):
+            if name == "ibm_berlin":
+                return [SimpleNamespace(name=name)]
+            raise QiskitBackendNotFoundError("No backend matches the criteria.")
+
+    monkeypatch.setattr(qiskit_ibm_runtime, "QiskitRuntimeService", Service)
+    assert block_mod._live_backend_names("k", eu, "ibm_berlin") == {"ibm_berlin"}
+    assert block_mod._live_backend_names("k", eu, "ibm_kingston") == set()
+    assert opened[0] == {"channel": "ibm_quantum_platform", "token": "k", "instance": eu}

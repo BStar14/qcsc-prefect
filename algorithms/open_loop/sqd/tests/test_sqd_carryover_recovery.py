@@ -345,3 +345,24 @@ def test_sbd_rows_of_another_width_are_rejected():
     with pytest.raises(ValueError, match=r"shape \(n, 6\)"):
         recovery._bool_rows_to_ints(np.zeros((2, 5), dtype=bool), 6)
     assert recovery._bool_rows_to_ints(np.zeros((0, 6), dtype=bool), 6).dtype == np.int64
+
+
+def test_each_iteration_logs_its_best_and_the_overall_best(caplog):
+    # Iteration bests -1.0, -3.0, -2.0 (two batches each): the last is not a new best.
+    solver = _FakeSolver([-1.0, -0.5, -3.0, -2.5, -2.0, -1.5], [None] * 6)
+    with caplog.at_level(logging.INFO):
+        outcome = _run(solver, logger=logging.getLogger("sqd.test"))
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("SQD iteration")]
+    assert lines == [
+        "SQD iteration 1/3: iteration best -1.0 Ha; new overall best -1.0 Ha.",
+        "SQD iteration 2/3: iteration best -3.0 Ha; new overall best -3.0 Ha.",
+        "SQD iteration 3/3: iteration best -2.0 Ha; overall best -3.0 Ha.",
+    ]
+    assert outcome.best_energy == -3.0
+
+
+def test_a_resumed_loop_reports_the_overall_best_of_the_earlier_run(caplog):
+    solver = _FakeSolver([-1.0, -0.5], [None] * 2)
+    with caplog.at_level(logging.INFO):
+        _run(solver, logger=logging.getLogger("sqd.test"), start_round=2, best_energy=-4.0)
+    assert "SQD iteration 3/3: iteration best -1.0 Ha; overall best -4.0 Ha." in caplog.text

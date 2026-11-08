@@ -273,6 +273,25 @@ def test_lucj_parameters_round_trip_through_pickle(lih):
     assert restored.qpu_topology == "square"
 
 
+def test_lucj_parameters_keep_the_imaginary_parts_in_json(lih):
+    """The JSON form, which Prefect hashes for cache keys, keeps complex values exactly."""
+    import warnings
+
+    from prefect.utilities.hashing import hash_objects
+
+    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "square")
+    assert np.abs(params.orbital_rotations.imag).max() > 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # no ComplexWarning
+        text = params.model_dump_json()
+    restored = lucj.LUCJParameters.model_validate_json(text)
+    np.testing.assert_array_equal(restored.orbital_rotations, params.orbital_rotations)
+    assert restored.orbital_rotations.dtype == np.complex128
+    conjugate = params.model_copy(update={"orbital_rotations": params.orbital_rotations.conj()})
+    assert params.model_dump(mode="json") != conjugate.model_dump(mode="json")
+    assert hash_objects(params) != hash_objects(conjugate)
+
+
 def test_get_lucj_params_cache_key_depends_on_the_topology(lih):
     """The persisted Optimize result of one topology is never reused for another."""
     from prefect.cache_policies import DEFAULT
