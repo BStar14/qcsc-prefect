@@ -1,6 +1,6 @@
 # Sample-based Quantum Diagonalization
 
-This package (`sqd` 2.1) implements the QCSC algorithm demonstrated in the paper [Chemistry Beyond the Scale of Exact Diagonalization on a Quantum-Centric Supercomputer](https://arxiv.org/abs/2405.05068).
+This package (`sqd` 2.0) implements the QCSC algorithm demonstrated in the paper [Chemistry Beyond the Scale of Exact Diagonalization on a Quantum-Centric Supercomputer](https://arxiv.org/abs/2405.05068).
 
 It provides one Prefect flow, `sqd` (deploy with `sqd-deploy`). The solver that
 diagonalizes each subspace is chosen once, with `solver` in `sqd_blocks.toml`:
