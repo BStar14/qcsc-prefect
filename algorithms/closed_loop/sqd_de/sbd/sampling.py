@@ -19,7 +19,6 @@ RUNTIME_BLOCK_NAME = "qrmi-runtime"
 QFW_BLOCK_NAME = "qfw-runner"
 # Formerly passed to QuantumRuntime.sampler; Prefect concurrency limits can use it.
 QUANTUM_TAG = "res: quantum"
-QUANTUM_SOURCES = ("random", "real-device", "qfw")
 # The node-side QFw-SLURM sampler; QFwSource passes this path to the launcher.
 QFW_SAMPLER = Path(__file__).with_name("qfw_slurm_sqd_sampler.py")
 

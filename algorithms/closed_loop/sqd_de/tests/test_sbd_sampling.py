@@ -25,6 +25,7 @@ from sbd.transpilation import TRANSPILER
 from sbd_helpers import NORB, line_target, lucj_circuit, ucj_parameters
 
 SHOTS = 8
+UNSET = object()  # no saved sqd_options Variable
 OPTIONS = {"params": {"shots": SHOTS}}
 WIDTH = 2 * NORB
 CIRCUIT_PARAMS = CircuitParameters(
@@ -208,7 +209,13 @@ def walker(monkeypatch, tmp_path):
         ),
     )
     monkeypatch.setattr(sqd.SBDSolverJob, "load", classmethod(lambda cls, name: solver))
-    monkeypatch.setattr(sqd.Variable, "get", staticmethod(lambda name, default=None: run.options))
+
+    # Like Variable.get: the stored value, even None, or default when there is none.
+    def get(name, default=None):
+        assert name == "sqd_options"
+        return default if run.options is UNSET else run.options
+
+    monkeypatch.setattr(sqd.Variable, "get", staticmethod(get))
     monkeypatch.setattr(sqd, "save_ndarray", lambda **arrays: f"file://{tmp_path}/data.npz")
     for name in ("create_lucj_circuit", "recover_configurations", "postselect_bitstrings"):
         monkeypatch.setattr(sqd, name, getattr(sqd, name).fn)
@@ -442,3 +449,82 @@ def test_walker_rejects_an_unknown_solver_slug(walker):
     walker.solver_block_ref = "other_solver/x"
     with pytest.raises(ValueError, match="solver_block_ref"):
         walker("random")
+
+
+# --- sqd_options: the same rules for every quantum_source -----------------------------
+
+
+@pytest.mark.parametrize(
+    "options,shots",
+    [
+        (UNSET, 100_000),
+        ({}, 100_000),
+        ({"params": {}}, 100_000),
+        ({"params": {"shots": 5}}, 5),
+        ({"params": {"shots": np.int64(7)}}, 7),
+    ],
+)
+def test_sqd_options_give_the_shots(options, shots):
+    value = {} if options is UNSET else options
+    assert sqd.resolve_sqd_shots(value) == shots
+    assert type(sqd.resolve_sqd_shots(value)) is int
+
+
+@pytest.mark.parametrize(
+    "options,error,message",
+    [
+        ({"params": {"shots": None}}, ValueError, "positive integer"),
+        ({"params": {"shots": 4.9}}, ValueError, "positive integer"),
+        ({"params": {"shots": 0}}, ValueError, "positive integer"),
+        ({"params": {"shots": -3}}, ValueError, "positive integer"),
+        ({"params": {"shots": True}}, ValueError, "positive integer"),
+        ({"params": {"shots": "8"}}, ValueError, "positive integer"),
+        (None, TypeError, "sqd_options must be a mapping"),
+        ([], TypeError, "sqd_options must be a mapping"),
+        ("x", TypeError, "sqd_options must be a mapping"),
+        ({"params": None}, TypeError, "must be a mapping"),
+        ({"params": []}, TypeError, "must be a mapping"),
+        ({"params": {"shots": SHOTS, "seed": 1}}, ValueError, "Only options"),
+        (
+            {"params": {"shots": SHOTS}, "twirling": {"enable_gates": True}},
+            ValueError,
+            "Only options",
+        ),
+        ({"twirling": {}}, ValueError, "Only options"),
+    ],
+)
+@pytest.mark.parametrize("quantum_source", ["random", "real-device", "qfw"])
+def test_every_source_rejects_bad_sqd_options_before_loading_blocks(
+    walker, monkeypatch, fake_iqp, quantum_source, options, error, message
+):
+    loaded = []
+    monkeypatch.setattr(
+        sqd.SBDSolverJob, "load", classmethod(lambda cls, name: loaded.append(name))
+    )
+    monkeypatch.setattr(sqd, "load_quantum_source", lambda *a, **k: loaded.append("source"))
+    walker.options = options
+    with pytest.raises(error, match=message):
+        walker(quantum_source)
+    assert loaded == []  # neither the solver block nor the quantum source
+    assert fake_iqp.calls == []
+
+
+@pytest.mark.parametrize("quantum_source", ["random", "real-device", "qfw"])
+def test_every_source_samples_the_default_shots_when_omitted(
+    walker, monkeypatch, saved_runtime, fake_iqp, quantum_source
+):
+    requested = []
+
+    class Source:
+        backend_name = "fake"
+        requires_circuit = False
+
+        def sample(self, circuit=None, *, shots):
+            requested.append(shots)
+            return RandomSource(num_bits=WIDTH, seed=1).sample(shots=SHOTS)
+
+    monkeypatch.setattr(sqd, "load_quantum_source", lambda *a, **k: Source())
+    for options in (UNSET, {}, {"params": {}}):
+        walker.options = options
+        walker(quantum_source)
+    assert requested == [100_000] * 3

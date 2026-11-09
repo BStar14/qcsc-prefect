@@ -1,6 +1,7 @@
 # Workflow for observability demo
 
 import asyncio
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any
@@ -29,7 +30,7 @@ from .np_type_extension import (
     NpStrict1DArrayLL,
     NpStrict2DArrayBool,
 )
-from .sampling import QUANTUM_SOURCES, load_quantum_source
+from .sampling import load_quantum_source
 
 # Convert Addon function into Prefect Task
 recover_configurations = task(_recover_configurations)
@@ -55,6 +56,9 @@ def walker_sqd(
     random_seed: int,
 ) -> tuple[tuple[float, NpStrict2DArrayBool], dict[str, Any]]:
     logger = get_run_logger()
+    # Before any block is loaded, so that a bad Variable fails the walker first.
+    shots = resolve_sqd_shots(Variable.get("sqd_options", default={}))
+
     solver_cls, solver_block_name = load_solver_class(solver_block_ref)
     davidson_solver = solver_cls.load(solver_block_name)
 
@@ -63,9 +67,6 @@ def walker_sqd(
         "walker_index": walker_index,
         **solver_record(solver_cls),
     }
-
-    options = Variable.get("sqd_options", default={"params": {"shots": 100_000}})
-    shots = _legacy_shots(quantum_source, options)
 
     source = load_quantum_source(
         quantum_source,
@@ -174,16 +175,21 @@ def walker_sqd(
     return ((energy, next_carryover), telemetry)
 
 
-def _legacy_shots(quantum_source: str, options) -> int:
-    """Shots as before: QrmiRuntime's rules for real-device, otherwise only the shots."""
-    if quantum_source not in QUANTUM_SOURCES:
-        raise ValueError(
-            f"Unsupported quantum_source: {quantum_source!r}. "
-            "Expected 'random', 'real-device' or 'qfw'."
-        )
-    if quantum_source == "real-device":
-        return resolve_shots(None, options)
-    return int(options.get("params", {}).get("shots") or 100_000)
+DEFAULT_SHOTS = 100_000
+
+
+def resolve_sqd_shots(options) -> int:
+    """Shots from the ``sqd_options`` Variable, with the same rules for every source.
+
+    Only ``{"params": {"shots": <positive integer>}}`` is accepted; without shots it is
+    ``DEFAULT_SHOTS``. ``null`` shots, floats, booleans, strings and other options are
+    rejected rather than replaced or ignored.
+    """
+    if not isinstance(options, Mapping):
+        raise TypeError("sqd_options must be a mapping")
+    params = options.get("params", {})
+    has_shots = isinstance(params, Mapping) and "shots" in params
+    return resolve_shots(None if has_shots else DEFAULT_SHOTS, options)
 
 
 def mitigate_reset_errors(data, *, use_reset_mitigation: bool) -> tuple[BitArray, float]:

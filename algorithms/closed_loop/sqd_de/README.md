@@ -208,10 +208,43 @@ block's scheduler:
   [QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md) in `[runtime]`, and
   leave out `[runtime.qrmi]`.
 
-The `sqd_options` variable is passed to `QrmiRuntime` unchanged. On the `real-device`
-path it may contain only `{"params": {"shots": <positive integer>}}`; other primitive
-options (for example twirling) and non-integer shots are rejected before submission
-instead of being ignored. The `random` and `qfw` paths read only the shots, as before.
+The `sqd_options` variable sets the shots of every walker, with the same rules for
+every `quantum_source`. Each walker reads it before loading any block:
+
+| `sqd_options` | Result |
+| --- | --- |
+| not saved, `{}` or `{"params": {}}` | 100,000 shots |
+| `{"params": {"shots": <positive integer>}}` | that many shots |
+| `shots` is `null`, a float, `0`, negative, a boolean or a string | `ValueError` |
+| the value, or `params`, is not a mapping (also a saved `null`) | `TypeError` |
+| any other option, for example `twirling` or `params.seed` | `ValueError` |
+
+The walker reads the Variable named `sqd_options`. `create_blocks.py` can save it
+under another name (`options_variable_name`), but the walker does not read that name:
+with another name, the walker samples the default 100,000 shots.
+
+### Behavior changes
+
+Sampling through quantum sources changes these cases. Check saved `sqd_options` values
+and QFw results before upgrading:
+
+- `random` and `qfw` now reject options other than `params.shots`, as `real-device`
+  already did. Before, they ignored them.
+- Invalid shots are rejected in every mode. Before, `random` and `qfw` truncated floats
+  (`4.9` became `4`) and replaced `0` and `null` with 100,000.
+- A saved `{}` or `{"params": {}}` gives 100,000 shots in every mode. Before,
+  `real-device` sampled 100 shots then; a Variable that was not saved already gave
+  100,000.
+- A saved `null` Variable raises `TypeError`, and the Variable is checked before the
+  solver block is loaded.
+- `qfw` keeps leading zeros. Before, when every kept bitstring started with `0`, the
+  bitstrings were shorter than `2 * num_orbitals`.
+- `qfw` rejects counts that do not add up to the shots. Its `shot_retention_rate` is the
+  fraction of the shots returned, as for `real-device`.
+- When reset mitigation keeps no shot, `real-device` and `qfw` both raise
+  `RuntimeError("Reset mitigation removed all samples.")`.
+- `qfw` reports a missing QFw-SLURM launcher when it samples, not when it loads the
+  `QFwResource` block, which no longer imports QFw.
 
 Each walker searches the layout for its own circuit and submits its own job, so a run
 submits (iterations x walkers) jobs. With `iqp`, each job waits in the IBM Quantum queue
