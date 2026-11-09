@@ -26,16 +26,20 @@ For Prefect server setup in the QFw-SLURM environment, see [How to Run and Acces
 
 The `QFwResource` block contains the information needed to locate and access a QFw device resource.
 
-The block implementation is located at:
+The block is part of the `qcsc-prefect-qiskit` package:
 
 ```text
-/path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd/qfw_resource.py
+/path/to/qcsc-prefect/packages/qcsc-prefect-qiskit/src/qcsc_prefect/integrations/qiskit/sources/qfw_resource.py
 ```
-Register the block type with Prefect from the `qcsc-prefect` repository root:
+
+The former import path `sbd.qfw_resource.QFwResource` still works and gives the same
+class, so saved `qfwresource` blocks keep loading.
+
+Register the block type with Prefect:
 
 ```bash
 python - <<'PY'
-from sbd.qfw_resource import QFwResource
+from qcsc_prefect.integrations.qiskit.sources import QFwResource
 
 QFwResource.register_type_and_schema()
 print("QFwResource registered")
@@ -58,8 +62,17 @@ The output should include `QFwResource`.
 
 > **Note**
 >
-> Do not use `prefect block register -f` for `qfw_resource.py`. Prefect loads block files in a worker thread, while QFw initializes DEFw during import. DEFw installs signal handlers, which Python only permits from the main interpreter thread. Registering the block type through Python, as shown above, ensures that the QFw module is imported from the main thread.
-
+> Importing or loading `QFwResource` does not import QFw or DEFw: they are imported only
+> by the block's QFw methods, such as `run_circuit`. This matters because DEFw installs
+> signal handlers on import, which Python allows only in the main thread, while Prefect
+> loads block files and runs tasks in worker threads. The block can therefore be
+> registered with `prefect block register -m qcsc_prefect.integrations.qiskit.sources`
+> as well as with the Python snippet above. Do not call its QFw methods from a worker
+> thread; the SQD workflow uses only the saved `device_id`, through `QFwSource`.
+>
+> `QFwResource.run_sampler` is deprecated: it filters the shots inside the block and
+> loses leading zeros. Use `QFwSource`, which returns every register, and filter in the
+> application. See [Quantum Sources](howto_use_quantum_source.md).
 
 ## 3. Create the QFw Resource Block Instance
 

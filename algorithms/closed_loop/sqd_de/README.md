@@ -170,13 +170,27 @@ sbd-deploy
 
 ## Quantum sampling
 
-`quantum_source` selects how each walker obtains bitstrings:
+`quantum_source` selects the
+[quantum source](../../../docs/howto/howto_use_quantum_source.md) of each walker.
+`sbd.sampling.load_quantum_source` builds it inside the walker, and the walker calls
+`source.sample(circuit, shots=shots)` the same way for every source:
 
-- `real-device`: sample through `QrmiRuntime`, using the `QrmiRuntimeBlock` named
+- `real-device`: `QrmiSource` over `QrmiRuntime`, using the `QrmiRuntimeBlock` named
   `qrmi-runtime`. The block's `scheduler` selects where QRMI runs (see below).
-- `random`: deterministic pseudo-random bitstrings from `random_seed`.
-- `qfw`: the QFw-SLURM path through the `QFwResource` block `qfw-runner`, unchanged. See
+- `random`: `RandomSource`, deterministic pseudo-random bitstrings of
+  `2 * num_orbitals` bits. Each walker's seed is `random_seed` plus a pairing of the
+  trial and walker indices. No circuit is built and no block is loaded.
+- `qfw`: `QFwSource` over the QFw-SLURM launcher, using the `QFwResource` block
+  `qfw-runner`. The ffsim pre-init stage runs in the walker, and the sampler script
+  `sbd/qfw_slurm_sqd_sampler.py` searches the SABRE layout on the node with the same
+  `circ_params` settings as `real-device`. See
   [the QFw-SLURM tutorial](../../../docs/tutorials/run_sbd_closed_loop_workflow_qfw-slurm.md).
+
+For `real-device` and `qfw`, the walker applies reset mitigation itself, the same way
+for both: when `circ_params.use_reset_mitigation` is set, it keeps the shots whose
+`test` register is all zeros, and records the fraction kept as `shot_retention_rate`.
+A result without a `test` register, or with no shot left, is an error. `random` has no
+`test` register and records no `shot_retention_rate`.
 
 With `real-device`, each walker sends its LUCJ circuit untranspiled in one `sampler()`
 call. The ffsim pre-init stage runs in the workflow process. The runtime then searches

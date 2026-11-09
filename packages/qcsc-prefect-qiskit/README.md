@@ -12,6 +12,12 @@ saved as a `QrmiRuntimeBlock`.
 - `scheduler="iqp"` runs in the workflow process, without Slurm or a session.
   Install `qrmi[ibm]` on that host.
 
+`qcsc_prefect.integrations.qiskit.sources` gives applications one synchronous
+`source.sample(circuit, shots=shots)` call over `RandomSource` (uniform random bits,
+no circuit), `QrmiSource` (an existing `QrmiRuntime`) and `QFwSource` (the QFw-SLURM
+launcher, with the `QFwResource` block). See
+[Quantum Sources](../../docs/howto/howto_use_quantum_source.md).
+
 See [QRMI Sampler](../../docs/howto/howto_qrmi_slurm_sampler.md) for configuration,
 supported calls, optional compilation hooks, diagnostics and offline tests.
 The [Slurm Bell example](../../examples/qrmi_slurm_bell/README.md) provides a minimal
