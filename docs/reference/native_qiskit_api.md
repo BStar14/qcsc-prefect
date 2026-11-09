@@ -3,6 +3,20 @@
 This page is generated from Python docstrings in
 `qcsc_prefect.integrations.qiskit`.
 
+## Quantum Sources
+
+::: qcsc_prefect.integrations.qiskit.sources.block.QuantumSourceBlock
+    options:
+      show_source: false
+
+::: qcsc_prefect.integrations.qiskit.sources.factory.QuantumSourceConfig
+    options:
+      show_source: false
+
+::: qcsc_prefect.integrations.qiskit.sources.factory.load_quantum_source
+    options:
+      show_source: false
+
 ## Configuration
 
 ::: qcsc_prefect.integrations.qiskit.blocks.QiskitRuntimeConfig

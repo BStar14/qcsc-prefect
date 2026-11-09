@@ -2,8 +2,6 @@
 #
 # Author: Naoki Kanazawa (knzwnao@jp.ibm.com)
 
-from typing import Literal
-
 from pydantic import BaseModel, Field
 
 
@@ -121,18 +119,19 @@ class FlowParameters(BaseModel):
         ge=1,
     )
 
-    quantum_source: Literal["real-device", "random", "qfw"] = Field(
-        default="real-device",
+    quantum_source: str = Field(
+        default="quantum-source",
         description=(
-            "Select whether SQD sampling uses IBM Quantum Runtime "
-            "or deterministic random bitstrings."
+            "Name of a saved QuantumSourceBlock. Its settings select the sampling "
+            "platform; changing this name does not change the algorithm."
         ),
-        title="Quantum Source",
+        title="Quantum Source Block",
+        min_length=1,
     )
 
     random_seed: int = Field(
         default=24,
-        description="Base RNG seed used when Quantum Source is 'random'.",
+        description="Base seed for deterministic random samples, if the source uses them.",
         title="Random Seed",
         ge=0,
     )

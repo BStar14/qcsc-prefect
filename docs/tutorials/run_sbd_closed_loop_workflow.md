@@ -1,5 +1,14 @@
 # Run SBD Closed-loop Workflow on Miyabi (qcsc-prefect)
 
+> **Quantum source configuration:** `quantum_source` now names a saved
+> `QuantumSourceBlock`; its default is `quantum-source`. The block generator saves
+> this Block from the `[source]` table. Set the Block's `config.kind` to `random`,
+> `qrmi` or `qfw` to choose the platform, or pass another saved source Block name.
+> Older values `random`, `real-device` and `qfw` work only after source Blocks with
+> those names are saved. See [Quantum Sources](../howto/howto_use_quantum_source.md)
+> and the [SQD source configuration](https://github.com/qiskit-community/qcsc-prefect/tree/main/algorithms/closed_loop/sqd_de#quantum-sampling).
+
+
 This tutorial walks us through reproducing a Sample-based Quantum Diagonalization (SQD) experiment using the `qcsc-prefect` architecture.
 We will run a hybrid quantum-classical workflow using the [SBD](https://github.com/r-ccs-cms/sbd) solver to diagonalize a sparse chemistry Hamiltonian on the Miyabi-C environment, orchestrated via Prefect.
 
@@ -322,7 +331,7 @@ In the Prefect console, click **Run** → **Custom run** and set as following. A
 | FCIDump File | `/work/gz00/z12345/qcsc-prefect/algorithms/closed_loop/sqd_de/data/fcidump_N2_MO.txt` |
 | SQD Subspace Dimension (Optional) | `1000000` (start small for testing) |
 | Differential Evolution Iterations (Optional)| `1` (start small for testing) |
-| Quantum Source (Optional) | `real-device` or `random` |
+| Quantum Source Block (Optional) | `quantum-source` |
 | Random Seed (Optional) | `24` |
 | Solver Block Ref | `sbd_solver_job/davidson-solver` |
 
@@ -330,9 +339,10 @@ In the Prefect console, click **Run** → **Custom run** and set as following. A
 - It is a stable entry point for users.
 - HPC details are still resolved through the underlying 3 blocks.
 
-`Quantum Source` controls how SQD obtains bitstrings:
-- `real-device`: use the `QuantumRuntime` block (`ibm-runner`) and submit to IBM Quantum Runtime
-- `random`: skip IBM Quantum and generate deterministic pseudo-random bitstrings with `Random Seed`
+`Quantum Source Block` selects a saved `QuantumSourceBlock`. The Miyabi example
+configures it for QRMI through `qrmi-runtime`. For synthetic samples, set
+`[source.config].kind = "random"` and omit the `[runtime]` tables before generating
+the Blocks. `Random Seed` controls the generated bitstrings.
 
 > [!NOTE]
 > For this tutorial, the number of iterations is set to 1 for a quick test, but feel free to increase it as needed.
