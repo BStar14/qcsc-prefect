@@ -1,6 +1,6 @@
 # Fulqrum Integration
 
-`qcsc-prefect-fulqrum` runs the [fulqrum](https://github.com/Qiskit/fulqrum)
+`qcsc-prefect-fulqrum` runs the [fulqrum](https://github.com/Qiskit/qiskit-fulqrum)
 subspace eigensolver as a qcsc-prefect job. It is a drop-in alternative to the DICE SHCI
 solver for SQD:
 

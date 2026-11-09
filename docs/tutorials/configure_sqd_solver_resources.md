@@ -1,7 +1,7 @@
 # Size the SQD diagonalization for your HPC resources
 
 The open-loop SQD workflow (`algorithms/open_loop/sqd`) diagonalizes each subspace with one of
-three solvers: [Fulqrum](https://github.com/Qiskit/fulqrum), [SBD](https://github.com/r-ccs-cms/sbd),
+three solvers: [Fulqrum](https://github.com/Qiskit/qiskit-fulqrum), [SBD](https://github.com/r-ccs-cms/sbd),
 or [DICE](https://github.com/caleb-johnson/Dice). Each solver splits the work across processes,
 threads, and GPUs in its own way. This tutorial links the hardware of a node to the memory that a
 subspace needs, and then to the values in `sqd_blocks.toml` that request the resources.
@@ -476,7 +476,7 @@ one SQD iteration at a smaller `subspace_dim`. Then check the following items.
 
 ## References
 
-- Fulqrum: <https://github.com/Qiskit/fulqrum>
+- Fulqrum: <https://github.com/Qiskit/qiskit-fulqrum>
 - SBD, selected basis diagonalization: <https://github.com/r-ccs-cms/sbd>
 - DICE, as built by `packages/qcsc-prefect-dice/native/build_dice.sh`:
   <https://github.com/caleb-johnson/Dice>

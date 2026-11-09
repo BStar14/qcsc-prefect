@@ -1,6 +1,6 @@
 # QCSC Prefect Fulqrum
 
-[Fulqrum](https://github.com/Qiskit/fulqrum) subspace eigensolver
+[Fulqrum](https://github.com/Qiskit/qiskit-fulqrum) subspace eigensolver
 integration for qcsc-prefect workflows. It is a drop-in alternative to the DICE
 SHCI solver for SQD.
 

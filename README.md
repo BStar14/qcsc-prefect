@@ -162,7 +162,7 @@ See [DICE Integration](./docs/howto/howto_use_dice_prefect.md) for a longer setu
 
 ## Fulqrum Integration
 
-`qcsc-prefect-fulqrum` runs the [fulqrum](https://github.com/Qiskit/fulqrum)
+`qcsc-prefect-fulqrum` runs the [fulqrum](https://github.com/Qiskit/qiskit-fulqrum)
 subspace eigensolver through the same block model. Its `FulqrumSolverJob` has the same `run()`
 signature and `SCIResult` return type as `DiceSHCISolverJob`, so SQD workflows can switch
 solvers by changing the solver block.

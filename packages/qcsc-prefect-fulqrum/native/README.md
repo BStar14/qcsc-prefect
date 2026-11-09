@@ -1,6 +1,6 @@
 # Building fulqrum for `qcsc-fulqrum-solve`
 
-`build_fulqrum.sh` builds [fulqrum](https://github.com/Qiskit/fulqrum) into a
+`build_fulqrum.sh` builds [fulqrum](https://github.com/Qiskit/qiskit-fulqrum) into a
 dedicated virtual environment on the target system, `native/fulqrum` next to
 the script by default. It clones the pinned commit `2e2d66e` (fulqrum 1.0.0,
 branch `v1.0.0-rc`) into `native/external/fulqrum` with the submodules the build

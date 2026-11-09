@@ -46,7 +46,7 @@ VENV_DIR=${1:-$SCRIPT_DIR/fulqrum}
 case "$VENV_DIR" in /*) ;; *) VENV_DIR="$(pwd)/$VENV_DIR" ;; esac
 SRC_DIR=${2:-}
 PYTHON=${PYTHON:-python3}
-FULQRUM_REPO=${FULQRUM_REPO:-https://github.com/Qiskit/fulqrum.git}
+FULQRUM_REPO=${FULQRUM_REPO:-https://github.com/Qiskit/qiskit-fulqrum.git}
 FULQRUM_REF=${FULQRUM_REF:-2e2d66e6bafb617e7c685b3591b0a0018202d2cd}
 FULQRUM_WITH_GPU=${FULQRUM_WITH_GPU:-0}
 FULQRUM_CUPY=${FULQRUM_CUPY:-cupy-cuda13x>=14,<15}
