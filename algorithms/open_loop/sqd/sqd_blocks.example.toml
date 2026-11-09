@@ -1,6 +1,6 @@
 # Prefect blocks of the SQD workflow. Copy this file to sqd_blocks.toml, edit it, and run:
 #   sqd-create-blocks --config sqd_blocks.toml [--dry-run]
-# Settings: docs/tutorials/manage-qcsc-workflow-with-qcsc-prefect.ipynb
+# Settings: https://quantum.cloud.ibm.com/docs/en/tutorials/manage-qcsc-workflow-with-qcsc-prefect
 # Nodes, ranks and threads: docs/tutorials/configure_sqd_solver_resources.md
 # Paths are not expanded from environment variables; write them out ("~" works).
 
