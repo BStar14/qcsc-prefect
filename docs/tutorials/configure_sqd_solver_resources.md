@@ -318,7 +318,7 @@ Jobs get less than the full 32 GiB, so plan with about 20 GB per node. Fugaku ha
 
 | Solver | Ranks per node x threads | `D = 1e8` | `D = 9e8` |
 | --- | --- | --- | --- |
-| Fulqrum `cpu` | 1 x 48 | `matrix_free` needs about 19 GB on one node, which is tight | Does not fit |
+| Fulqrum `cpu` | 1 x 48 | `matrix_free` needs about 19 GB on one node, which is tight | Does not fit (MPI for `cpu` is planned in a coming Fulqrum release) |
 | SBD CPU | 4 x 12 (one rank per CMG) or 1 x 48 | 2 nodes, grid 2 x 4 (10.4 GB per node) | 10 nodes minimum, 16 nodes with grid 8 x 8 (11.7 GB per node) |
 | DICE | 1 x 1 or 2 x 1 | 5 nodes (1 rank each) or 6 nodes (2 ranks each), extrapolated | Does not fit: one rank needs about 34 GB |
 
@@ -425,7 +425,7 @@ memory per CPU of your site is too small for the job.
 
 | Node type | Solver | Settings |
 | --- | --- | --- |
-| CPU | Fulqrum `cpu` | `num_nodes = 1`, `ompthreads` = cores of the node |
+| CPU | Fulqrum `cpu` | `num_nodes = 1`, `ompthreads` = cores of the node. `D = 9e8` does not fit one node; MPI for `cpu` is planned in a coming Fulqrum release |
 | CPU | SBD | `mpiprocs x ompthreads` = cores, `num_nodes` from the [grid steps](#choose-the-grid), `adet_comm_size x bdet_comm_size = num_nodes x mpiprocs` |
 | GPU | Fulqrum `gpu-mpi` | `gpus_per_node` = GPUs of the node, `ompthreads` = cores / GPUs, `process_grid` product = total GPUs |
 | GPU | SBD GPU | Same as Fulqrum `gpu-mpi`, with the SBD grid in place of `process_grid` |
