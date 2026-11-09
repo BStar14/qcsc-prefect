@@ -25,8 +25,9 @@ pytest.importorskip("qcsc_prefect.integrations.qiskit.qrmi")
 from pyscf import lib  # noqa: E402
 from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod  # noqa: E402
 from qcsc_prefect.integrations.qiskit.qrmi.worker import validate_isa  # noqa: E402
+from qcsc_prefect_executor import from_blocks  # noqa: E402
 from qcsc_workflow_utility import chem  # noqa: E402
-from qiskit import qpy  # noqa: E402
+from qiskit import QuantumCircuit, qpy  # noqa: E402
 from qiskit.primitives import PrimitiveResult, SamplerPubResult  # noqa: E402
 from qiskit.primitives.containers import BitArray, DataBin  # noqa: E402
 from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
@@ -41,7 +42,7 @@ from sqd_common.flow_params import (  # noqa: E402
 )
 from sqd_common.main import ARTIFACT_KEY, sqd  # noqa: E402
 from sqd_common.qrmi import TRANSPILER, make_qrmi_runtime, prepare_sampler_circuit  # noqa: E402
-from sqd_common.transpile import transpile_for_target  # noqa: E402
+from sqd_common.transpile import transpile_for_target, two_qubit_depth  # noqa: E402
 
 LOGGER = logging.getLogger(__name__)
 
@@ -183,6 +184,20 @@ def test_node_hook_matches_host_transpile(h2, reset, with_rzz):
     assert node.layout.final_index_layout() == host.layout.final_index_layout()
 
 
+def test_two_qubit_depth_counts_only_two_qubit_gates():
+    circuit = QuantumCircuit(3, 3)
+    circuit.h(0)
+    circuit.cz(0, 1)
+    circuit.sx(1)
+    circuit.rz(0.1, 2)
+    circuit.cz(1, 2)
+    circuit.cz(0, 2)
+    circuit.barrier()
+    circuit.measure(range(3), range(3))
+    # The single-qubit gates, the 3-qubit barrier and the measurements do not count.
+    assert (two_qubit_depth(circuit), circuit.depth()) == (3, 6)
+
+
 def test_node_hook_rejects_unexpected_config():
     with pytest.raises(ValueError, match="unknown=\\['circuit_parameters'\\]"):
         transpile_for_target(None, target(), {"circuit_parameters": {}})
@@ -259,6 +274,12 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     monkeypatch.setattr(runtime_mod, "_sample_on_slurm", runtime_mod._sample_on_slurm.fn)
     monkeypatch.setattr(runtime_mod, "get_run_logger", lambda: LOGGER)
     monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
+
+    async def load_profile(block_cls, name):
+        assert name == "qrmi-execution"
+        return SimpleNamespace(walltime="12:00:00")
+
+    monkeypatch.setattr(from_blocks, "_load_block", load_profile)
     for module in (lucj, sampling, postprocess, flow, topology):
         monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
     monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
@@ -278,7 +299,10 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     assert len(calls) == 1
     assert calls[0]["command_block_name"] == "qrmi-command"
     assert f"Instruction counts = {dict(compiled[0].count_ops())}" in caplog.text
+    assert f"Two-qubit depth = {two_qubit_depth(compiled[0])}\n" in caplog.text
     assert "Compiled on the compute node:" in caplog.text
+    assert "shots=4, walltime=12:00:00)." in caplog.text
+    assert "Quantum sampling completed on test_heron (Slurm job 73)." in caplog.text
     ((source),) = artifacts
     assert source["key"] == sampling.SAMPLING_ARTIFACT_KEY
     row = source["table"][0]

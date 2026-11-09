@@ -390,6 +390,7 @@ class _FakeQrmiRuntime:
 
     def __init__(self, scheduler, calls):
         self.scheduler, self.resource, self.calls = scheduler, "test_heron", calls
+        self.execution_profile_block_name = "exec-sqd-qrmi" if scheduler == "slurm" else None
 
     def replace(self, **changes):
         self.calls["hooks"] = changes
@@ -398,33 +399,67 @@ class _FakeQrmiRuntime:
     async def sampler(self, *, sampler_pubs, shots):
         self.calls["pubs"], self.calls["shots"] = sampler_pubs, shots
         result = sample_result(False)
+        result.metadata["execution"] = {"execution_spans": EXECUTION_SPANS}
         if self.scheduler == "iqp":
             result.metadata["qcsc_qrmi"] = {"job_id": "d7", "pubs": [{"isa_ops": {"cz": 3}}]}
         else:
-            result.metadata["qcsc_slurm"] = {"job_id": "41", "work_dir": "/jobs/abc"}
+            work_dir = self.calls["work_dir"]
+            (work_dir / "output.out").write_text("INFO Task ID: d8slurm\n")
+            result.metadata["qcsc_slurm"] = {"job_id": "41", "work_dir": str(work_dir)}
         return result
 
 
+def _execution_spans():
+    from datetime import datetime
+
+    from qiskit_ibm_runtime.execution_span import DoubleSliceSpan, ExecutionSpans
+
+    start, stop = datetime(2026, 11, 8, 4, 43, 28), datetime(2026, 11, 8, 4, 50, 10)
+    return ExecutionSpans([DoubleSliceSpan(start, stop, {0: ((4,), 0, 1, 0, 4)})])
+
+
+EXECUTION_SPANS = _execution_spans()
+
+
 @pytest.mark.parametrize("scheduler", ["iqp", "slurm"])
-def test_sampling_uses_the_qrmi_block_with_the_sqd_hooks(monkeypatch, lih, offline, scheduler):
+def test_sampling_uses_the_qrmi_block_with_the_sqd_hooks(
+    monkeypatch, tmp_path, caplog, lih, offline, scheduler
+):
+    from qcsc_prefect_executor import from_blocks
     from sqd_common import qrmi
 
-    calls = {}
+    calls = {"work_dir": tmp_path}
     runtime = _FakeQrmiRuntime(scheduler, calls)
 
     async def load(name):
         calls["block"] = name
         return QrmiBlockStub(runtime)
 
+    async def load_profile(block_cls, name):
+        assert name == "exec-sqd-qrmi"
+        return SimpleNamespace(walltime="12:00:00")
+
     monkeypatch.setattr(sampling, "load_qrmi_block", load)
+    monkeypatch.setattr(from_blocks, "_load_block", load_profile)
     monkeypatch.setattr(qrmi.dataclasses, "replace", lambda obj, **changes: obj.replace(**changes))
     monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
     advanced = advanced_mod.AdvancedSettings(sabre_layout_trials=7)
     params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "square")
     sampling_params = flow_params.SamplingParameters(shots=4, runtime_block_name="my-qrmi")
-    bool_array = asyncio.run(sampling.quantum_sampling.fn(params, advanced, sampling_params))
+    with caplog.at_level(logging.INFO, logger=LOGGER.name):
+        bool_array = asyncio.run(sampling.quantum_sampling.fn(params, advanced, sampling_params))
 
     assert calls["block"] == "my-qrmi" and calls["shots"] == 4
+    # The Slurm job's walltime is logged at submission; IQP has none.
+    submitting = next(r.getMessage() for r in caplog.records if "Submitting" in r.getMessage())
+    assert submitting.endswith(
+        "shots=4, walltime=12:00:00)." if scheduler == "slurm" else "shots=4)."
+    )
+    # One line on completion, with the IBM Quantum job and the QPU execution window.
+    ids = "Slurm job 41, IBM Quantum job d8slurm" if scheduler == "slurm" else "IBM Quantum job d7"
+    assert f"Quantum sampling completed on test_heron ({ids})." in caplog.text
+    assert "QPU execution = 402 s, 2026-11-08 04:43:28 to 04:50:10 UTC" in caplog.text
+    assert "excludes the queue time and may differ from the billed usage" in caplog.text
     hooks = calls["hooks"]
     assert hooks["transpiler"] == qrmi.TRANSPILER and hooks["transpile_config"] == {}
     expected = lucj.circuit_transpile_options(advanced, np.random.default_rng(24))
@@ -437,7 +472,29 @@ def test_sampling_uses_the_qrmi_block_with_the_sqd_hooks(monkeypatch, lih, offli
     if scheduler == "iqp":
         assert row["qiskit_runtime_job_id"] == "d7" and row["qrmi_result_dir"] is None
     else:
-        assert row["qrmi_result_dir"] == "/jobs/abc" and row["slurm_job_id"] == "41"
+        assert row["qrmi_result_dir"] == str(tmp_path) and row["slurm_job_id"] == "41"
+
+
+def test_sampling_summary_without_spans_or_job_output():
+    from sqd_common.qrmi import sampling_summary
+
+    result = sample_result(False)
+    result.metadata["qcsc_slurm"] = {"job_id": "41", "work_dir": "/no/such/dir"}
+    assert sampling_summary(result, "test_heron", 4) == (
+        "Quantum sampling completed on test_heron (Slurm job 41).\nShots = 4"
+    )
+
+
+def test_walltime_is_not_logged_when_the_profile_does_not_load(monkeypatch):
+    from qcsc_prefect_executor import from_blocks
+
+    async def missing(block_cls, name):
+        raise ValueError(f"Unable to find block document named {name}")
+
+    monkeypatch.setattr(from_blocks, "_load_block", missing)
+    runtime = SimpleNamespace(scheduler="slurm", execution_profile_block_name="exec-sqd-qrmi")
+    assert asyncio.run(sampling.slurm_walltime(runtime)) is None
+    assert asyncio.run(sampling.slurm_walltime(SimpleNamespace(scheduler="iqp"))) is None
 
 
 def test_missing_runtime_block_explains_random_fallback(monkeypatch, lih):
