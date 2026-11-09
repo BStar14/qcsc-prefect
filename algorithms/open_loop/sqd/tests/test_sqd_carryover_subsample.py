@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -10,6 +12,7 @@ pytest.importorskip("qiskit_addon_sqd")
 from sqd_common.subsample import (  # noqa: E402
     _Draw,
     _unique_and_accumulate_probs,
+    batch_sizes,
     bitstrings_to_ci_strs,
     subsample,
 )
@@ -34,7 +37,9 @@ def _samples(seed=0, num=300, norb=8, nelec=(3, 3)):
     return bs, probs / probs.sum()
 
 
-def _plain_subsample(bitstring_matrix, probabilities, subspace_dim, num_batches, rng, open_shell):
+def _plain_subsample(
+    bitstring_matrix, probabilities, subspace_dim, num_batches, rng, open_shell, nelec=None
+):
     """The subsampling without carryover, as a reference for the RNG parity."""
     ci_strs_a, ci_strs_b = bitstrings_to_ci_strs(bitstring_matrix)
     if not open_shell:
@@ -53,11 +58,13 @@ def _plain_subsample(bitstring_matrix, probabilities, subspace_dim, num_batches,
     net_dim = len(sa) * len(sb)
     if net_dim <= subspace_dim:
         return [(sa, sb)]
-    rate = np.sqrt(subspace_dim / net_dim)
+    norb = bitstring_matrix.shape[1] // 2
+    full = (math.comb(norb, nelec[0]), math.comb(norb, nelec[1]))
+    size_a, size_b = batch_sizes(subspace_dim, (len(sa), len(sb)), full)
     return [
         (
-            rng.choice(sa, size=max(1, int(len(sa) * rate)), replace=False, p=pa),
-            rng.choice(sb, size=max(1, int(len(sb) * rate)), replace=False, p=pb),
+            rng.choice(sa, size=size_a, replace=False, p=pa),
+            rng.choice(sb, size=size_b, replace=False, p=pb),
         )
         for _ in range(num_batches)
     ]
@@ -73,7 +80,7 @@ def test_no_carryover_draws_the_same_batches_and_rng_stream(open_shell, carryove
     bs, probs = _samples(nelec=nelec)
     rng, ref_rng = np.random.default_rng(7), np.random.default_rng(7)
     got = list(subsample(bs, probs, subspace_dim, 3, rng, open_shell, carryover=carryover))
-    ref = _plain_subsample(bs, probs, subspace_dim, 3, ref_rng, open_shell)
+    ref = _plain_subsample(bs, probs, subspace_dim, 3, ref_rng, open_shell, nelec)
     assert len(got) == len(ref)
     for (a, b), (ra, rb) in zip(got, ref, strict=True):
         assert a.dtype == ra.dtype and b.dtype == rb.dtype
@@ -303,3 +310,34 @@ def test_object_strings_use_the_same_pool_without_the_forced_ones():
     for seed in range(10):
         got = _Draw(pool, probs, np.array([5], dtype=object), 3, 1.0)(np.random.default_rng(seed))
         assert got[0] == 5 and len(set(got.tolist())) == 3 and 5 not in got[1:].tolist()
+
+
+@pytest.mark.parametrize(
+    ("dim", "available", "full", "expected"),
+    [
+        # Balanced spins: the square root of the subspace dimension each.
+        (10**6, (5000, 5000), (10**8, 10**8), (1000, 1000)),
+        # Sizes follow C(norb, n): 70 alpha and 28 beta strings in all.
+        (60, (56, 28), (70, 28), (12, 5)),
+        # A capped spin gives the rest of the subspace to the other spin.
+        (900, (200, 8), (700, 8), (200, 4)),
+        (10**6, (20, 5000), (70, 10**8), (20, 5000)),
+        # At least one string per spin.
+        (1, (9, 9), (9, 9), (1, 1)),
+    ],
+)
+def test_batch_sizes_follow_the_full_ci_space(dim, available, full, expected):
+    size_a, size_b = batch_sizes(dim, available, full)
+    assert (size_a, size_b) == expected
+    assert size_a * size_b <= dim or (size_a, size_b) == (1, 1)
+    assert size_a <= available[0] and size_b <= available[1]
+
+
+def test_open_shell_batches_follow_the_full_ci_space():
+    # 8 orbitals with 1 alpha and 4 beta electrons: 8 alpha and 70 beta strings, so
+    # beta gets most of the subspace instead of the same share as alpha.
+    bs, probs = _samples(num=400, nelec=(1, 4))
+    batches = list(subsample(bs, probs, 200, 2, np.random.default_rng(3), True))
+    for a, b in batches:
+        assert (len(a), len(b)) == (4, 50)
+        assert len(np.unique(a)) == 4 and len(np.unique(b)) == 50
