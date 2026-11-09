@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -232,3 +233,13 @@ def test_the_tuning_fields_are_editable_in_the_block_form():
     assert titles["process_grid"] == "Process Grid"
     assert titles["comm_backend"] == "Communication Backend"
     assert properties["convergence"]["enum"] == ["abs", "rel", "norm", "energy"]
+
+
+def test_solver_waits_an_hour_past_the_default_walltime():
+    """The flow waits up to 13 hours: the 12-hour walltime of the blocks plus one."""
+    from qcsc_prefect_fulqrum import block_utils
+
+    assert FulqrumSolverJob.model_fields["timeout_seconds"].default == 46800.0
+    defaults = inspect.signature(block_utils.create_fulqrum_blocks).parameters
+    assert defaults["walltime"].default == "12:00:00"
+    assert defaults["timeout_seconds"].default == 46800.0

@@ -42,9 +42,9 @@ def test_example_keeps_the_qrmi_table_active():
     # The profile adds the QRMI job's walltime, threads and timeout.
     merged = load_block_config(EXAMPLE)["qrmi"]
     assert (merged["walltime"], merged["ompthreads"], merged["timeout_seconds"]) == (
-        "00:30:00",
+        "12:00:00",
         4,
-        3600,
+        46800,
     )
 
 
@@ -77,7 +77,7 @@ def test_qrmi_table_inherits_solver_settings():
     assert qrmi["python_executable"] == str(Path(NODE_PYTHON).expanduser())
     assert qrmi["root_dir"] == "/shared/work/sqd/qrmi"
     assert (qrmi["queue"], qrmi["project"]) == ("normal", "")
-    assert qrmi["ompthreads"] == 4 and qrmi["walltime"] == "00:30:00"
+    assert qrmi["ompthreads"] == 4 and qrmi["walltime"] == "12:00:00"
     assert qrmi["command_block_name"] == "cmd-sqd-qrmi"
     assert qrmi["execution_profile_block_name"] == "exec-sqd-qrmi"
     assert qrmi["hpc_profile_block_name"] == "hpc-slurm-sqd-qrmi"

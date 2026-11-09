@@ -174,6 +174,7 @@ def test_the_example_defaults_reach_the_solver_block():
         "carryover_type": 1,
         "solver_mode": "cpu",
         "timeout_seconds": 7200.0,
+        # The profile's [sbd] table keeps one hour under the 12 hours of fulqrum.
         "walltime": "01:00:00",
     }
     # The block keeps its carryover_ratio default; each run sets it.

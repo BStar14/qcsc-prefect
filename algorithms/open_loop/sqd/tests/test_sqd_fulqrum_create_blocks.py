@@ -39,6 +39,8 @@ def test_example_toml_resolves_to_expected_settings():
     assert kwargs["hpc_profile_block_name"] == "hpc-slurm-sqd-fulqrum"
     assert kwargs["script_filename"] == "fulqrum_solver.slurm"
     assert kwargs["metrics_artifact_key"] == "slurm-sqd-fulqrum-metrics"
+    # A solver job may run up to 12 hours; the flow waits one hour longer.
+    assert (kwargs["walltime"], kwargs["timeout_seconds"]) == ("12:00:00", 46800.0)
     assert kwargs["eigensolver"] == "scipy" and kwargs["tol"] == 1e-8
     assert kwargs["max_iter"] is None and kwargs["return_sci_state"] is False
     assert kwargs["modules"] == [] and kwargs["environments"] is None
@@ -418,7 +420,7 @@ def test_dry_run_of_the_gpu_profiles(tmp_path, capsys, profile, qrmi):
     if profile == "slurm-gpu":
         assert (blocks["gpus_per_node"], blocks["mpiprocs"], blocks["launcher"]) == (4, 4, "srun")
         assert blocks["script_filename"] == "fulqrum_solver.slurm"
-        assert printed["qrmi_blocks"]["walltime"] == "00:30:00"
+        assert printed["qrmi_blocks"]["walltime"] == "12:00:00"
     else:
         assert (blocks["gpus_per_node"], blocks["mpiprocs"], blocks["launcher"]) == (1, 1, "mpirun")
         assert blocks["script_filename"] == "fulqrum_solver.pbs"
