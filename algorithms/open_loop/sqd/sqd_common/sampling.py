@@ -124,6 +124,25 @@ async def load_qrmi_block(block_name: str):
         ) from exc
 
 
+async def slurm_walltime(runtime) -> str | None:
+    """Walltime of the QRMI Slurm job, from its execution profile block; None for IQP.
+
+    Only for the log: a block that does not load fails the submission right after,
+    with the executor's message.
+    """
+    name = getattr(runtime, "execution_profile_block_name", None)
+    if runtime.scheduler != "slurm" or not name:
+        return None
+    # The executor's loader, so the walltime is that of the block the job is built from.
+    from qcsc_prefect_executor import from_blocks
+
+    try:
+        block = await from_blocks._load_block(from_blocks.ExecutionProfileBlock, name)
+    except Exception:  # noqa: BLE001 - the submission reports the error
+        return None
+    return block.walltime
+
+
 async def check_qrmi_block(block_name: str, logger):
     """Load the QRMI Runtime block and check that its instance can use its backend.
 
@@ -178,7 +197,7 @@ async def quantum_sampling(
     Returns:
         Sampled bitstrings as a 2D bool array.
     """
-    from sqd_common.qrmi import compiled_circuit_summary, make_qrmi_runtime
+    from sqd_common.qrmi import compiled_circuit_summary, make_qrmi_runtime, sampling_summary
 
     logger = get_run_logger()
     rng = np.random.default_rng(TRANSPILER_SEED)
@@ -191,13 +210,16 @@ async def quantum_sampling(
     lucj_circ = build_lucj_circuit(
         lucj_params=lucj_params, use_reset_mitigation=advanced.use_reset_mitigation
     )
+    walltime = await slurm_walltime(runtime)
     logger.info(
-        "Submitting sampler workload to QRMI resource %s (scheduler=%s, shots=%s).",
+        "Submitting sampler workload to QRMI resource %s (scheduler=%s, shots=%s%s).",
         runtime.resource,
         runtime.scheduler,
         shots,
+        f", walltime={walltime}" if walltime else "",
     )
     pub_result = await runtime.sampler(sampler_pubs=[(lucj_circ,)], shots=shots)
+    logger.info(sampling_summary(pub_result, runtime.resource, shots))
     bool_array, num_shots = extract_bool_array(pub_result, advanced.use_reset_mitigation)
 
     slurm = pub_result.metadata.get("qcsc_slurm")

@@ -17,7 +17,12 @@ from sqd_common.advanced import TRANSPILER_KEYS, AdvancedSettings
 from sqd_common.flow_params import CircuitParameters
 from sqd_common.topology import MAX_AB_PAIRS as MAX_AB_PAIRS
 from sqd_common.topology import Topology, interaction_pairs
-from sqd_common.transpile import build_pass_manager, derive_seed, isa_gate_depth
+from sqd_common.transpile import (
+    build_pass_manager,
+    derive_seed,
+    isa_gate_depth,
+    two_qubit_depth,
+)
 
 
 def _complex_array_to_data_dict(array_like) -> dict:
@@ -199,6 +204,7 @@ def transpile_lucj_circuit(
     isa_circuit = passmanager.run(circuit)
     logger.info(
         f"Circuit depth = {isa_gate_depth(isa_circuit)}\n"
+        f"Two-qubit depth = {two_qubit_depth(isa_circuit)}\n"
         f"Instruction counts = {dict(isa_circuit.count_ops())}\n"
     )
     return isa_circuit

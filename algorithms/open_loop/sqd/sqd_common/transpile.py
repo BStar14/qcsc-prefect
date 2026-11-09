@@ -109,6 +109,11 @@ def isa_gate_depth(circuit: QuantumCircuit) -> int:
     return circuit.depth(lambda inst: inst.operation.name not in ("rz", "barrier", "measure"))
 
 
+def two_qubit_depth(circuit: QuantumCircuit) -> int:
+    """Depth over two-qubit gates only."""
+    return circuit.depth(lambda inst: inst.operation.num_qubits == 2)
+
+
 def transpile_for_target(
     circuit: QuantumCircuit, target: Target, config: Mapping[str, Any]
 ) -> QuantumCircuit:

@@ -9,6 +9,7 @@ imports neither ffsim nor Prefect.
 from __future__ import annotations
 
 import dataclasses
+import re
 from functools import partial
 from pathlib import Path
 
@@ -17,9 +18,11 @@ from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiRuntime
 from qiskit import qpy
 from qiskit.primitives import PrimitiveResult
 
-from sqd_common.transpile import isa_gate_depth
+from sqd_common.transpile import isa_gate_depth, two_qubit_depth
 
 TRANSPILER = "sqd_common.transpile:transpile_for_target"
+# task_runner prints the IBM Quantum job ID in the QRMI job's output.out.
+_TASK_ID = re.compile(r"Task ID: (\S+)")
 
 
 def prepare_sampler_circuit(circuit, *, transpile_config: dict) -> PreparedCircuit:
@@ -68,6 +71,44 @@ def compiled_circuit_summary(result: PrimitiveResult) -> str | None:
         (isa_circuit,) = qpy.load(stream)
     return (
         f"Circuit depth = {isa_gate_depth(isa_circuit)}\n"
+        f"Two-qubit depth = {two_qubit_depth(isa_circuit)}\n"
         f"Instruction counts = {dict(isa_circuit.count_ops())}\n"
         f"Compiled on the compute node: {path}"
     )
+
+
+def _slurm_task_id(work_dir: str | None) -> str | None:
+    """The IBM Quantum job ID that task_runner printed, if the job output is readable."""
+    path = Path(work_dir) / "output.out" if work_dir else None
+    if path is None or not path.is_file():
+        return None
+    task_ids = _TASK_ID.findall(path.read_text(encoding="utf-8", errors="replace"))
+    return task_ids[-1] if task_ids else None
+
+
+def sampling_summary(result: PrimitiveResult, resource: str, shots: int) -> str:
+    """One log line on a finished sampling job: where it ran, its IDs, shots and QPU time.
+
+    The QPU time is the result's execution spans: the window in which the QPU took the
+    data. It excludes the time the job waited in the IBM Quantum queue, and may differ
+    from the usage that IBM Quantum bills.
+    """
+    slurm = result.metadata.get("qcsc_slurm")
+    if slurm is not None:
+        ids = [f"Slurm job {slurm.get('job_id')}"]
+        task_id = _slurm_task_id(slurm.get("work_dir"))
+    else:
+        ids = []
+        task_id = (result.metadata.get("qcsc_qrmi") or {}).get("job_id")
+    if task_id:
+        ids.append(f"IBM Quantum job {task_id}")
+    where = f"{resource} ({', '.join(ids)})" if ids else resource
+    lines = [f"Quantum sampling completed on {where}.", f"Shots = {shots}"]
+    spans = (result.metadata.get("execution") or {}).get("execution_spans")
+    if spans:
+        lines.append(
+            f"QPU execution = {spans.duration:.0f} s, {spans.start:%Y-%m-%d %H:%M:%S} to "
+            f"{spans.stop:%H:%M:%S} UTC (execution spans; excludes the queue time and may "
+            "differ from the billed usage)"
+        )
+    return "\n".join(lines)
