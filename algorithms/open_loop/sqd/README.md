@@ -94,6 +94,14 @@ block, a run uses its defaults:
 | Reset Mitigation | off | Execute, and reloads of earlier samples |
 | Optimization Level, SABRE Layout Trials, SABRE SWAP Trials, SABRE Max Iteration | 3, 10000, 10, 8 | Execute (the transpiler) |
 
+Each subspace has at most `subspace_dim` determinants. A closed-shell batch takes
+`int(sqrt(subspace_dim))` strings for both spins. An open-shell batch splits
+`subspace_dim` between the spins in proportion to their full CI string counts,
+`C(norb, n_alpha)` and `C(norb, n_beta)`. A spin cannot take more strings than were
+sampled for it, and the other spin then takes the rest of `subspace_dim`. When all
+sampled strings fit, a round solves one subspace that holds them all. Carryover
+strings, sampled strings, and repeats among them count once.
+
 `sqd.carryover_fraction` sets how many CI strings carry over: of the best ground
 state of a round, each spin's `int(fraction × n)` strings with the largest marginal
 weight are kept in every subspace of the next round. They count toward
