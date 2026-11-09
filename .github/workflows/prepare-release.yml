@@ -54,6 +54,13 @@ jobs:
           "${RUNNER_TEMP}/qcsc-smoke-qiskit/bin/python" -m pip install --find-links dist "qcsc-prefect[qiskit]==${{ inputs.new_version }}"
           "${RUNNER_TEMP}/qcsc-smoke-qiskit/bin/python" scripts/smoke-test-packages.py
 
+      - name: Smoke test fulqrum extra installation
+        run: |
+          python -m venv "${RUNNER_TEMP}/qcsc-smoke-fulqrum"
+          "${RUNNER_TEMP}/qcsc-smoke-fulqrum/bin/python" -m pip install --upgrade pip
+          "${RUNNER_TEMP}/qcsc-smoke-fulqrum/bin/python" -m pip install --find-links dist "qcsc-prefect[fulqrum]==${{ inputs.new_version }}"
+          "${RUNNER_TEMP}/qcsc-smoke-fulqrum/bin/python" scripts/smoke-test-packages.py
+
       - name: Create release branch
         env:
           NEW_VERSION: ${{ inputs.new_version }}

@@ -18,43 +18,30 @@ import json
 from pathlib import Path
 from typing import Any
 
+from qcsc_prefect_core.models.gpu_request import validate_gpu_request
+from qcsc_prefect_fulqrum.solver import FulqrumSolverOptions
+from sqd_common.advanced_blocks import advanced_block_name, advanced_settings, save_advanced_block
 from sqd_common.block_config import load_block_config
-from sqd_common.runtime_block import (
-    build_runtime_block,
-    describe,
-    runtime_block_name,
-    runtime_block_settings,
+from sqd_common.block_names import solver_block_names
+from sqd_common.block_names import solver_ref as solver_ref_of
+from sqd_common.mpi_ranks import check_rank_count
+from sqd_common.qrmi_blocks import (
+    add_qrmi_arguments,
+    create_qrmi_blocks,
+    resolve_qrmi_settings,
+    resolve_runtime_settings,
 )
+from sqd_common.runtime_block import describe, runtime_block_name, save_runtime_block
 
 HPC_TARGETS = ("slurm", "local", "miyabi", "fugaku")
-QRMI_WORKER_ARGS = ["-m", "qcsc_prefect.integrations.qiskit.qrmi.worker"]
+BACKENDS = ("cpu", "gpu", "gpu-mpi")
 # Run settings that belong to the flow parameters, not to the blocks.
 FLOW_PARAMETER_KEYS = {
     "shots": "sampling.shots",
     "sampler_options_json": "sampling.shots",
     "options_variable_name": "sampling.shots",
+    "carryover_fraction": "sqd.carryover_fraction",
 }
-QRMI_KEYS = frozenset(
-    {
-        "resource",
-        "python_executable",
-        "work_dir",
-        "queue",
-        "project",
-        "walltime",
-        "ompthreads",
-        "slurm_memory",
-        "modules",
-        "pre_commands",
-        "environments",
-        "extra_directives",
-        "timeout_seconds",
-        "watch_poll_interval",
-        "command_block_name",
-        "execution_profile_block_name",
-        "hpc_profile_block_name",
-    }
-)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -77,6 +64,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mpiprocs", type=int)
     parser.add_argument("--ompthreads", type=int)
     parser.add_argument("--resource-class", choices=["cpu", "gpu"])
+    parser.add_argument("--gpus-per-node", type=int)
     parser.add_argument("--modules", nargs="+")
     parser.add_argument("--mpi-options", nargs="*")
     parser.add_argument("--pre-commands", nargs="*")
@@ -96,25 +84,33 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--hpc-profile-block-name")
     parser.add_argument("--solver-block-name")
 
+    parser.add_argument("--backend", choices=BACKENDS)
     parser.add_argument("--eigensolver", choices=["scipy", "primme"])
     parser.add_argument("--hamiltonian-format", choices=["csr", "matrix_free"])
     parser.add_argument("--tol", type=float)
     parser.add_argument("--max-iter", type=int)
     parser.add_argument("--dense-max-dim", type=int)
+    parser.add_argument("--max-basis-size", type=int)
+    parser.add_argument("--block-size", type=int)
+    parser.add_argument("--min-restart-size", type=int)
+    parser.add_argument("--primme-method")
+    parser.add_argument("--convergence", choices=["abs", "rel", "norm", "energy"])
+    parser.add_argument("--energy-tol", type=float)
+    parser.add_argument(
+        "--process-grid",
+        type=int,
+        nargs=2,
+        metavar=("P_ALPHA", "P_BETA"),
+        help="gpu-mpi: ranks over the alpha and beta strings; their product is the rank count.",
+    )
+    parser.add_argument("--comm-backend", choices=["auto", "nccl", "host_mpi", "cuda_mpi"])
     parser.add_argument(
         "--return-sci-state",
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Whether to return the ground-state amplitudes as an SCIState.",
     )
-    parser.add_argument(
-        "--qrmi-resource",
-        help="QRMI resource ID; creates the QRMI sampler blocks (Slurm only).",
-    )
-    parser.add_argument(
-        "--qrmi-python-executable",
-        help="Compute-node Python that runs the QRMI worker.",
-    )
+    add_qrmi_arguments(parser)
     parser.add_argument(
         "--runtime-block-name",
         help="Name of the QrmiRuntimeBlock to save (default: qrmi-runtime).",
@@ -128,8 +124,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _load_config_file(path: Path | None) -> dict[str, Any]:
-    """The config file with its profile and ``[advanced]`` merged in."""
-    return load_block_config(path)
+    """The config file with its profile, ``[advanced]`` and ``[fulqrum]`` merged in."""
+    return load_block_config(path, "fulqrum")
 
 
 def _pick_value(*values: Any) -> Any:
@@ -172,16 +168,55 @@ def _optional_str(value: Any) -> str | None:
     return str(value).strip()
 
 
-def _default_names(*, hpc_target: str) -> dict[str, str]:
-    suffix = {"local": "", "slurm": ".slurm", "miyabi": ".pbs", "fugaku": ".pjm"}[hpc_target]
-    return {
-        "command_block_name": "cmd-sqd-fulqrum-solver",
-        "execution_profile_block_name": f"exec-sqd-fulqrum-{hpc_target}",
-        "hpc_profile_block_name": f"hpc-{hpc_target}-sqd-fulqrum",
-        "solver_block_name": "sqd-fulqrum-solver",
-        "script_filename": f"fulqrum_solver{suffix}",
-        "metrics_artifact_key": f"{hpc_target}-sqd-fulqrum-metrics",
-    }
+# create_fulqrum_blocks keywords that are FulqrumSolverOptions fields too.
+_SOLVER_OPTION_KEYS = (
+    "eigensolver",
+    "hamiltonian_format",
+    "tol",
+    "max_iter",
+    "dense_max_dim",
+    "backend",
+    "max_basis_size",
+    "block_size",
+    "min_restart_size",
+    "primme_method",
+    "convergence",
+    "energy_tol",
+    "process_grid",
+    "comm_backend",
+)
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
+def _tuning_settings(pick, backend: str, cli_energy_tol: float | None) -> dict[str, Any]:
+    """The eigensolver tuning keys; unset ones keep the solver block defaults.
+
+    ``energy_tol`` is a DICE setting too, and configs from before the ``[dice]``
+    table keep it in ``[advanced]``, which every solver reads. So a config value
+    applies only to ``backend = "gpu-mpi"``, the one fulqrum backend that uses it;
+    ``--energy-tol`` always applies, and fails for other backends.
+    """
+    grid = pick("process_grid")
+    if grid is not None:
+        grid = tuple(int(p) for p in grid)
+        if len(grid) != 2:
+            raise RuntimeError(f"'process_grid' must be [alpha ranks, beta ranks]; got {grid}.")
+    method = pick("primme_method")
+    return dict(
+        max_basis_size=_optional_int(pick("max_basis_size")),
+        block_size=_optional_int(pick("block_size")),
+        min_restart_size=_optional_int(pick("min_restart_size")),
+        primme_method=None if method is None else str(method).strip(),
+        convergence=str(pick("convergence", "abs")).strip(),
+        energy_tol=float(
+            pick("energy_tol", 1e-6) if backend == "gpu-mpi" or cli_energy_tol is not None else 1e-6
+        ),
+        process_grid=grid,
+        comm_backend=str(pick("comm_backend", "auto")).strip(),
+    )
 
 
 def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[str, Any]:
@@ -203,7 +238,7 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
     hpc_target = str(pick("hpc_target", "slurm")).strip().lower()
     if hpc_target not in HPC_TARGETS:
         raise RuntimeError(f"'hpc_target' must be one of {', '.join(HPC_TARGETS)}.")
-    defaults = _default_names(hpc_target=hpc_target)
+    defaults = solver_block_names("fulqrum", hpc_target)
 
     project = _pick_value(args.project, config.get("project"), args.group, config.get("group"))
     if hpc_target in {"miyabi", "fugaku"}:
@@ -216,6 +251,27 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
 
     max_iter = pick("max_iter")
     ompthreads = pick("ompthreads")
+    gpus_per_node = pick("gpus_per_node")
+    gpus_per_node = None if gpus_per_node is None else int(gpus_per_node)
+    backend = str(pick("backend", "cpu")).strip().lower()
+    if backend not in BACKENDS:
+        raise RuntimeError(f"'backend' must be one of {', '.join(BACKENDS)}; got {backend!r}.")
+    launcher = str(pick("launcher", "single")).strip()
+    if backend == "gpu-mpi" and launcher == "single":
+        raise RuntimeError(
+            "backend = 'gpu-mpi' runs one MPI rank per GPU; set launcher to an MPI launcher "
+            "such as 'srun' or 'mpirun'."
+        )
+    mpiprocs = pick("mpiprocs", 1)
+    if backend == "gpu-mpi" and gpus_per_node is not None:
+        # One rank per GPU. A profile's mpiprocs (1 for the CPU profiles) gives way to
+        # gpus_per_node; only an explicit --mpiprocs that differs is an error.
+        if args.mpiprocs is not None and int(args.mpiprocs) != gpus_per_node:
+            raise RuntimeError(
+                f"backend = 'gpu-mpi' runs one MPI rank per GPU, but --mpiprocs "
+                f"{args.mpiprocs} differs from gpus_per_node = {gpus_per_node}."
+            )
+        mpiprocs = gpus_per_node
     block_kwargs: dict[str, Any] = dict(
         hpc_target=hpc_target,
         project=str(project or "").strip(),
@@ -235,12 +291,13 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         command_name="sqd-fulqrum",
         executable_key="sqd_fulqrum_solver",
         profile_name="sqd-fulqrum-omp",
-        launcher=str(pick("launcher", "single")).strip(),
+        launcher=launcher,
         num_nodes=int(pick("num_nodes", 1)),
-        mpiprocs=int(pick("mpiprocs", 1)),
+        mpiprocs=int(mpiprocs),
         ompthreads=None if ompthreads is None else int(ompthreads),
         walltime=str(pick("walltime", "01:00:00")).strip(),
         resource_class=str(pick("resource_class", "cpu")).strip(),
+        gpus_per_node=gpus_per_node,
         modules=_normalize_str_list(pick("modules")),
         mpi_options=_normalize_str_list(pick("mpi_options")),
         pre_commands=_normalize_str_list(pick("pre_commands")),
@@ -256,6 +313,8 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         max_iter=None if max_iter is None else int(max_iter),
         dense_max_dim=int(pick("dense_max_dim", 64)),
         return_sci_state=bool(pick("return_sci_state", False)),
+        **_tuning_settings(pick, backend, args.energy_tol),
+        backend=backend,
         slurm_memory=_optional_str(pick("slurm_memory")),
         gfscache=_optional_str(_pick_value(args.fugaku_gfscache, config.get("fugaku_gfscache"))),
         spack_modules=_normalize_str_list(
@@ -268,154 +327,18 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
             _pick_value(args.fugaku_pjm_resources, config.get("fugaku_pjm_resources"))
         ),
     )
-    return block_kwargs
-
-
-def resolve_qrmi_settings(
-    args: argparse.Namespace, config: dict[str, Any], block_kwargs: dict[str, Any]
-) -> dict[str, Any] | None:
-    """Resolve the optional ``[qrmi]`` table, or None when QRMI is not configured.
-
-    Unset queue, project, work_dir, modules, pre_commands and environments
-    inherit the solver settings. The QRMI work directory defaults to a ``qrmi``
-    subdirectory of the solver's, and the job holds the QPU while it compiles,
-    so ``ompthreads`` defaults to the solver's thread count.
-    """
-    table = config.get("qrmi")
-    if table is None:
-        table = {}
-    if not isinstance(table, dict):
-        raise RuntimeError("'qrmi' must be a table.")
-    unknown = set(table) - QRMI_KEYS
-    if unknown:
-        raise RuntimeError(f"Unknown [qrmi] settings: {', '.join(sorted(unknown))}")
-    resource = _optional_str(_pick_value(args.qrmi_resource, table.get("resource")))
-    if resource is None:
-        if table or args.qrmi_python_executable:
-            raise RuntimeError("Missing required setting: qrmi.resource")
-        return None
-    if any(char.isspace() for char in resource):
-        raise RuntimeError("'qrmi.resource' must not contain whitespace.")
-    if block_kwargs["hpc_target"] != "slurm":
-        raise RuntimeError("QRMI sampling needs hpc_target = 'slurm'.")
-    python_executable = _require(
-        "qrmi.python_executable",
-        _pick_value(args.qrmi_python_executable, table.get("python_executable")),
-    )
-
-    def pick(name: str, default: Any = None) -> Any:
-        return _pick_value(table.get(name), default)
-
-    ompthreads = pick("ompthreads", block_kwargs["ompthreads"])
-    environments = _normalize_str_dict(table.get("environments"))
-    if environments is None:
-        environments = block_kwargs["environments"]
-    timeout_seconds = pick("timeout_seconds")
-    watch_poll_interval = pick("watch_poll_interval")
-    return dict(
-        resource=resource,
-        # Not resolved: the path must be valid on the compute node.
-        python_executable=str(Path(str(python_executable).strip()).expanduser()),
-        root_dir=str(
-            Path(str(pick("work_dir", Path(block_kwargs["root_dir"]) / "qrmi"))).expanduser()
-        ),
-        queue=str(pick("queue", block_kwargs["queue"])).strip(),
-        project=str(pick("project", block_kwargs["project"])).strip(),
-        walltime=str(pick("walltime", "00:30:00")).strip(),
-        ompthreads=None if ompthreads is None else int(ompthreads),
-        slurm_memory=_optional_str(pick("slurm_memory", block_kwargs["slurm_memory"])),
-        modules=_normalize_str_list(pick("modules", block_kwargs["modules"])),
-        pre_commands=_normalize_str_list(pick("pre_commands", block_kwargs["pre_commands"])),
-        environments=environments,
-        extra_directives=_normalize_str_list(pick("extra_directives")),
-        timeout_seconds=None if timeout_seconds is None else float(timeout_seconds),
-        watch_poll_interval=None if watch_poll_interval is None else float(watch_poll_interval),
-        command_block_name=str(pick("command_block_name", "cmd-sqd-fulqrum-qrmi")).strip(),
-        execution_profile_block_name=str(
-            pick("execution_profile_block_name", "exec-sqd-fulqrum-qrmi")
-        ).strip(),
-        hpc_profile_block_name=str(
-            pick("hpc_profile_block_name", "hpc-slurm-sqd-fulqrum-qrmi")
-        ).strip(),
-    )
-
-
-def qrmi_runtime_settings(qrmi: dict[str, Any]) -> dict[str, Any]:
-    """QrmiRuntimeBlock fields of a ``scheduler="slurm"`` runtime that uses these blocks."""
-    runtime = {
-        "scheduler": "slurm",
-        "root_dir": qrmi["root_dir"],
-        "command_block_name": qrmi["command_block_name"],
-        "execution_profile_block_name": qrmi["execution_profile_block_name"],
-        "hpc_profile_block_name": qrmi["hpc_profile_block_name"],
-        "resource": qrmi["resource"],
-    }
-    for name in ("timeout_seconds", "watch_poll_interval"):
-        if qrmi[name] is not None:
-            runtime[name] = qrmi[name]
-    return runtime
-
-
-def create_qrmi_blocks(qrmi: dict[str, Any]) -> None:
-    """Save the QRMI sampler job's Command, ExecutionProfile and HPCProfile blocks.
-
-    These blocks are separate from the solver's: the HPC profile requests the
-    QPU (``slurm_qpu``), which a fulqrum solve must not hold.
-    """
-    from qcsc_prefect_blocks.common.blocks import (
-        CommandBlock,
-        ExecutionProfileBlock,
-        HPCProfileBlock,
-    )
-
-    environments = dict(qrmi["environments"] or {})
-    if qrmi["ompthreads"] is not None and "OMP_NUM_THREADS" not in environments:
-        environments["OMP_NUM_THREADS"] = str(qrmi["ompthreads"])
-    CommandBlock(
-        command_name="sqd-fulqrum-qrmi",
-        executable_key="qrmi_python",
-        description="QRMI sampler worker (python -m qcsc_prefect.integrations.qiskit.qrmi.worker)",
-        default_args=list(QRMI_WORKER_ARGS),
-    ).save(qrmi["command_block_name"], overwrite=True)
-    ExecutionProfileBlock(
-        profile_name="sqd-fulqrum-qrmi",
-        command_name="sqd-fulqrum-qrmi",
-        num_nodes=1,
-        mpiprocs=1,
-        ompthreads=qrmi["ompthreads"],
-        walltime=qrmi["walltime"],
-        launcher="single",
-        modules=list(qrmi["modules"] or []),
-        pre_commands=list(qrmi["pre_commands"] or []),
-        environments=environments,
-    ).save(qrmi["execution_profile_block_name"], overwrite=True)
-    HPCProfileBlock(
-        hpc_target="slurm",
-        queue_cpu=qrmi["queue"],
-        queue_gpu=qrmi["queue"],
-        project_cpu=qrmi["project"],
-        project_gpu=qrmi["project"],
-        executable_map={"qrmi_python": qrmi["python_executable"]},
-        slurm_qpu=qrmi["resource"],
-        slurm_ntasks=1,
-        slurm_memory=qrmi["slurm_memory"],
-        slurm_extra_directives=list(qrmi["extra_directives"] or []),
-    ).save(qrmi["hpc_profile_block_name"], overwrite=True)
-
-
-def resolve_runtime_settings(
-    config: dict[str, Any], qrmi: dict[str, Any] | None
-) -> dict[str, Any] | None:
-    """QrmiRuntimeBlock fields from ``[qrmi]`` or ``[runtime]``, or None without either."""
-    if qrmi is not None and "runtime" in config:
-        raise RuntimeError(
-            "Set either [qrmi] (a Slurm QRMI job) or [runtime] (any QrmiRuntimeBlock), not both."
+    check_rank_count(block_kwargs)
+    try:
+        validate_gpu_request(
+            hpc_target=hpc_target,
+            resource_class=block_kwargs["resource_class"],
+            gpus_per_node=gpus_per_node,
         )
-    if qrmi is not None:
-        return qrmi_runtime_settings(qrmi)
-    if "runtime" in config:
-        return runtime_block_settings(config["runtime"])
-    return None
+        # The eigensolver tuning must fit the eigensolver and backend; --dry-run checks it too.
+        FulqrumSolverOptions(**{k: block_kwargs[k] for k in _SOLVER_OPTION_KEYS})
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+    return block_kwargs
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -425,9 +348,13 @@ def main(argv: list[str] | None = None) -> None:
     qrmi = resolve_qrmi_settings(args, config, block_kwargs)
     runtime = resolve_runtime_settings(config, qrmi)
     runtime_name = runtime_block_name(args.runtime_block_name, config)
+    solver_ref = solver_ref_of("fulqrum", block_kwargs["solver_block_name"])
+    advanced = advanced_settings(config, solver_ref)
+    advanced_name = advanced_block_name(config)
 
     if args.dry_run:
         resolved = {"blocks": block_kwargs}
+        resolved["advanced_block"] = {"name": advanced_name, **advanced.model_dump()}
         if qrmi is not None:
             resolved["qrmi_blocks"] = qrmi
         if runtime is not None:
@@ -440,8 +367,8 @@ def main(argv: list[str] | None = None) -> None:
     block_names = create_fulqrum_blocks(**block_kwargs)
     if qrmi is not None:
         create_qrmi_blocks(qrmi)
-    if runtime is not None:
-        build_runtime_block(runtime).save(runtime_name, overwrite=True)
+    changes = save_runtime_block(runtime, runtime_name) if runtime is not None else []
+    save_advanced_block(advanced, advanced_name)
 
     print(f"Saved blocks for SQD fulqrum workflow (target={block_kwargs['hpc_target']})")
     print(f"  SQD solver block: {block_names['solver_block_name']}")
@@ -454,11 +381,15 @@ def main(argv: list[str] | None = None) -> None:
         print(f"  QRMI command block: {qrmi['command_block_name']}")
         print(f"  QRMI execution profile block: {qrmi['execution_profile_block_name']}")
         print(f"  QRMI HPC profile block: {qrmi['hpc_profile_block_name']}")
-        print(f"  QRMI resource (slurm_qpu): {qrmi['resource']}")
     if runtime is not None:
         print(f"  QRMI runtime block: {runtime_name} (scheduler={runtime['scheduler']})")
+        for change in changes:
+            print(f"    {change}")
         if runtime_name != "qrmi-runtime":
             print(f"Set sampling.runtime_block_name of each run to {runtime_name!r}.")
+    print(f"  Advanced SQD Settings block: {advanced_name} (Solver Block {solver_ref})")
+    if advanced_name != "sqd-advanced-settings":
+        print(f"Set advanced_block_name of each run to {advanced_name!r}.")
 
 
 if __name__ == "__main__":

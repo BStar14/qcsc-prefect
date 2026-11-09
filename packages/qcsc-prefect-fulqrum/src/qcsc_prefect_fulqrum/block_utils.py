@@ -6,7 +6,9 @@ from pathlib import Path
 from typing import Literal
 
 from qcsc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
+from qcsc_prefect_core.models.gpu_request import validate_gpu_request
 
+from .solver import FulqrumSolverOptions
 from .solver_job import FulqrumSolverJob
 
 
@@ -40,10 +42,11 @@ def create_fulqrum_blocks(
     profile_name: str = "fulqrum-omp",
     launcher: Literal["single", "srun", "mpirun", "mpiexec", "mpiexec.hydra"] = "single",
     num_nodes: int = 1,
-    mpiprocs: int = 1,
+    mpiprocs: int | None = None,
     ompthreads: int | None = None,
     walltime: str = "01:00:00",
     resource_class: Literal["cpu", "gpu"] = "cpu",
+    gpus_per_node: int | None = None,
     modules: list[str] | None = None,
     mpi_options: list[str] | None = None,
     pre_commands: list[str] | None = None,
@@ -57,6 +60,15 @@ def create_fulqrum_blocks(
     max_iter: int | None = None,
     dense_max_dim: int = 64,
     return_sci_state: bool = True,
+    backend: Literal["cpu", "gpu", "gpu-mpi"] = "cpu",
+    max_basis_size: int | None = None,
+    block_size: int | None = None,
+    min_restart_size: int | None = None,
+    primme_method: str | None = None,
+    convergence: Literal["abs", "rel", "norm", "energy"] = "abs",
+    energy_tol: float = 1e-6,
+    process_grid: tuple[int, int] | None = None,
+    comm_backend: Literal["auto", "nccl", "host_mpi", "cuda_mpi"] = "auto",
     slurm_memory: str | None = None,
     gfscache: str | None = None,
     spack_modules: list[str] | None = None,
@@ -66,13 +78,33 @@ def create_fulqrum_blocks(
     """Create the standard block set required to run fulqrum on qcsc-prefect.
 
     ``fulqrum_executable`` is the ``qcsc-fulqrum-solve`` entry point of the
-    compute-node environment, for example
-    ``/opt/venvs/fulqrum/bin/qcsc-fulqrum-solve``.
+    compute-node environment that ``native/build_fulqrum.sh`` builds, for example
+    ``/path/to/qcsc-prefect/packages/qcsc-prefect-fulqrum/native/fulqrum/bin/qcsc-fulqrum-solve``.
 
-    Fulqrum currently runs as one OpenMP process, so the defaults are
-    ``launcher="single"``, ``num_nodes=1`` and ``mpiprocs=1``. When ``ompthreads``
-    is set and ``environments`` has no ``OMP_NUM_THREADS``, it is exported with
-    the same value, because not every scheduler template sets it.
+    ``backend`` selects the solver path (see :mod:`qcsc_prefect_fulqrum.solver`):
+
+    - ``"cpu"`` and ``"gpu"`` run one process, so the defaults are
+      ``launcher="single"``, ``num_nodes=1`` and ``mpiprocs=1``.
+    - ``"gpu-mpi"`` runs one MPI rank per GPU. It needs an MPI ``launcher``
+      (``"srun"``, ``"mpirun"``, ...). With ``gpus_per_node`` set, ``mpiprocs``
+      is ``gpus_per_node``, one rank per GPU, and another value raises; without
+      it, ``mpiprocs`` defaults to 1.
+
+    ``gpus_per_node`` is the scheduler GPU request on the execution profile. It
+    needs ``resource_class="gpu"``, which selects the GPU queue; Fugaku and local
+    execution reject it, and Miyabi-G accepts only 1. These are checked here, before
+    any block is saved. The solver block's
+    ``carryover_fraction`` is left at 0; the SQD flow sets it for each run.
+
+    The eigensolver tuning (``max_basis_size``, ``block_size``,
+    ``min_restart_size``, ``primme_method``, and for ``gpu-mpi`` ``convergence``,
+    ``energy_tol``, ``process_grid`` and ``comm_backend``) is checked against the
+    eigensolver and backend before any block is saved, so an option the solver would
+    ignore fails here.
+
+    When ``ompthreads`` is set and ``environments`` has no ``OMP_NUM_THREADS``,
+    it is exported with the same value, because not every scheduler template
+    sets it.
 
     This helper keeps a typed, explicit API on purpose. Algorithm-specific
     wrappers can translate TOML or CLI config dictionaries into these arguments
@@ -86,6 +118,51 @@ def create_fulqrum_blocks(
         if pre_commands:
             unsupported.append("pre_commands")
         raise ValueError("Local execution does not support " + " or ".join(unsupported) + ".")
+    if backend == "gpu-mpi" and launcher == "single":
+        raise ValueError(
+            "backend='gpu-mpi' runs one MPI rank per GPU; set launcher to an MPI launcher "
+            "such as 'srun' or 'mpirun'."
+        )
+    validate_gpu_request(
+        hpc_target=hpc_target, resource_class=resource_class, gpus_per_node=gpus_per_node
+    )
+    if backend == "gpu-mpi" and gpus_per_node is not None:
+        # One rank per GPU: a different count would leave GPUs idle or share them.
+        if mpiprocs is not None and mpiprocs != gpus_per_node:
+            raise ValueError(
+                f"backend='gpu-mpi' runs one MPI rank per GPU, but mpiprocs={mpiprocs} and "
+                f"gpus_per_node={gpus_per_node}; set them to the same value."
+            )
+        mpiprocs = gpus_per_node
+    if mpiprocs is None:
+        mpiprocs = 1
+    if backend == "gpu-mpi" and process_grid is not None:
+        ranks = num_nodes * mpiprocs
+        grid = tuple(int(p) for p in process_grid)
+        if len(grid) == 2 and grid[0] * grid[1] != ranks:
+            # The job would fail on every rank only after waiting in the queue.
+            raise ValueError(
+                f"process_grid {list(grid)} needs {grid[0] * grid[1]} MPI ranks, but "
+                f"num_nodes={num_nodes} x mpiprocs={mpiprocs} gives {ranks}."
+            )
+
+    # Raises for tuning the eigensolver or backend would ignore, before any block is saved.
+    FulqrumSolverOptions(
+        eigensolver=eigensolver,
+        hamiltonian_format=hamiltonian_format,
+        tol=tol,
+        max_iter=max_iter,
+        dense_max_dim=dense_max_dim,
+        backend=backend,
+        max_basis_size=max_basis_size,
+        block_size=block_size,
+        min_restart_size=min_restart_size,
+        primme_method=primme_method,
+        convergence=convergence,
+        energy_tol=energy_tol,
+        process_grid=process_grid,
+        comm_backend=comm_backend,
+    )
 
     register_fulqrum_block_types()
 
@@ -118,6 +195,7 @@ def create_fulqrum_blocks(
         mpiprocs=mpiprocs,
         ompthreads=ompthreads,
         walltime=walltime,
+        gpus_per_node=gpus_per_node,
         launcher=launcher,
         mpi_options=list(mpi_options or []),
         modules=list(modules or []),
@@ -153,6 +231,15 @@ def create_fulqrum_blocks(
         max_iter=max_iter,
         dense_max_dim=dense_max_dim,
         return_sci_state=return_sci_state,
+        backend=backend,
+        max_basis_size=max_basis_size,
+        block_size=block_size,
+        min_restart_size=min_restart_size,
+        primme_method=primme_method,
+        convergence=convergence,
+        energy_tol=energy_tol,
+        process_grid=process_grid,
+        comm_backend=comm_backend,
     ).save(solver_block_name, overwrite=True)
 
     return {

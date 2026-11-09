@@ -53,7 +53,16 @@ def to_fugaku_template_kwargs(
 
     Returns:
         A dictionary that can be passed to the Fugaku Jinja template.
+
+    Raises:
+        ValueError: If ``exec_profile.gpus_per_node`` is set. Fugaku nodes
+            have no GPUs.
     """
+
+    if exec_profile.gpus_per_node is not None:
+        raise ValueError(
+            "Fugaku nodes have no GPUs; gpus_per_node must be unset for hpc_target 'fugaku'."
+        )
 
     stdout_path = work_dir / f"{script_basename}.{req.job_name}.out"
     stderr_path = work_dir / f"{script_basename}.{req.job_name}.err"

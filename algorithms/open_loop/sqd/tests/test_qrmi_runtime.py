@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from qrmi_stubs import QrmiBlockStub
 
 np = pytest.importorskip("numpy")
 pytest.importorskip("ffsim")
@@ -31,12 +32,12 @@ from qiskit.primitives.containers import BitArray, DataBin  # noqa: E402
 from qiskit.providers.fake_provider import GenericBackendV2  # noqa: E402
 from qiskit.quantum_info import Statevector  # noqa: E402
 from qiskit_ibm_runtime import RuntimeEncoder  # noqa: E402
-from sqd_common import flow, lucj, postprocess, sampling  # noqa: E402
+from sqd_common import flow, lucj, postprocess, sampling, topology  # noqa: E402
+from sqd_common.advanced import AdvancedSettings  # noqa: E402
 from sqd_common.flow_params import (  # noqa: E402
     CircuitParameters,
     FlowParameters,
     SamplingParameters,
-    TranspilerParameters,
 )
 from sqd_common.main import ARTIFACT_KEY, sqd  # noqa: E402
 from sqd_common.qrmi import TRANSPILER, make_qrmi_runtime, prepare_sampler_circuit  # noqa: E402
@@ -64,23 +65,25 @@ def h2():
 
 
 def circuit_parameters(reset=False):
-    return CircuitParameters(
+    """Advanced SQD Settings with reset mitigation and a small SABRE search."""
+    return AdvancedSettings(
         use_reset_mitigation=reset,
-        configure_transpiler=True,
-        transpiler=TranspilerParameters(
-            sabre_layout_trials=4, sabre_swap_trials=2, sabre_max_iterations=2
-        ),
+        sabre_layout_trials=4,
+        sabre_swap_trials=2,
+        sabre_max_iterations=2,
     )
 
 
 def lucj_parameters(params, h2):
     with patch.object(lucj, "get_run_logger", return_value=LOGGER):
-        return lucj.get_lucj_params.fn(params, h2)
+        return lucj.get_lucj_params.fn(CircuitParameters(), h2, "heavy-hex")
 
 
 def make_circuit(params, h2):
     with patch.object(lucj, "get_run_logger", return_value=LOGGER):
-        return lucj.build_lucj_circuit.fn(lucj_parameters(params, h2), params)
+        return lucj.build_lucj_circuit.fn(
+            lucj_parameters(params, h2), use_reset_mitigation=params.use_reset_mitigation
+        )
 
 
 def target(with_rzz=False):
@@ -165,7 +168,7 @@ def test_node_hook_matches_host_transpile(h2, reset, with_rzz):
         host = lucj.transpile_lucj_circuit.fn(
             circuit=original.copy(),
             target=actual_target,
-            circuit_params=params,
+            advanced=params,
             seed=np.random.default_rng(24),
         )
     config = lucj.circuit_transpile_options(params, np.random.default_rng(24))
@@ -246,7 +249,7 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
 
     async def load_block(name):
         assert name == "qrmi-runtime"
-        return slurm_runtime(tmp_path)
+        return QrmiBlockStub(slurm_runtime(tmp_path))
 
     artifacts = []
 
@@ -256,13 +259,13 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     monkeypatch.setattr(runtime_mod, "_sample_on_slurm", runtime_mod._sample_on_slurm.fn)
     monkeypatch.setattr(runtime_mod, "get_run_logger", lambda: LOGGER)
     monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
-    for module in (lucj, sampling, postprocess, flow):
+    for module in (lucj, sampling, postprocess, flow, topology):
         monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
     monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
     monkeypatch.setattr(sampling, "create_table_artifact", artifact)
     monkeypatch.setattr(postprocess, "create_table_artifact", artifact)
     monkeypatch.setattr(sampling.QuantumRuntime, "load", reject_ibm)
-    monkeypatch.setattr(sampling, "_load_qrmi_runtime", load_block)
+    monkeypatch.setattr(sampling, "load_qrmi_block", load_block)
     monkeypatch.setattr(postprocess.flow_run, "get_id", lambda: "run")
     sampling_params = SamplingParameters(shots=4)
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
@@ -284,7 +287,9 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     assert (row["shots"], row["shots_kept"]) == (4, len(result))
 
     # The saved job directory reloads to the same samples, without a new job.
-    reloaded = asyncio.run(sampling.load_qrmi_result.fn(row["qrmi_result_dir"], params))
+    reloaded = asyncio.run(
+        sampling.load_qrmi_result.fn(row["qrmi_result_dir"], params.use_reset_mitigation)
+    )
     np.testing.assert_array_equal(reloaded, result)
     assert len(calls) == 1
 
@@ -321,10 +326,14 @@ def test_sampler_qrmi_qpy_handoff_and_reset_postselection(tmp_path, monkeypatch,
     monkeypatch.setattr(
         flow, "solver_class", lambda slug: SimpleNamespace(load=load_solver, __name__=slug)
     )
+
+    async def advanced_block(name, logger):
+        return params
+
+    monkeypatch.setattr(flow, "load_advanced_settings", advanced_block)
     artifacts.clear()
     parameters = FlowParameters(
         molecule={"atom": "H 0 0 0; H 0 0 0.74", "basis": "sto-3g"},
-        circuit=params,
         sampling=sampling_params,
         sqd={"subspace_dim": 1, "num_batches": 1, "max_iterations": 1},
     )
@@ -359,3 +368,105 @@ def test_pre_init_cannot_run_after_qpy_so_prepare_runs_it_first(h2):
     assert [(reg.name, len(reg)) for reg in prepared.cregs] == [
         (reg.name, len(reg)) for reg in circuit.cregs
     ]
+
+
+def test_the_run_form_has_no_qpu_backend():
+    assert "qpu_resource" not in SamplingParameters.model_fields
+    # A run form saved before keeps the field hidden; empty is ignored, a value fails.
+    assert SamplingParameters(qpu_resource="").shots == 100_000
+    assert SamplingParameters(qpu_resource=None).shots == 100_000
+    with pytest.raises(ValueError, match="set QPU Backend in the QRMI Runtime block"):
+        SamplingParameters(qpu_resource="ibm_kingston")
+
+
+def test_runtime_table_rejects_a_secret_conflicts_and_typos(monkeypatch):
+    from sqd_common import runtime_block
+
+    monkeypatch.setenv("QRMI_IBM_QCS_IAM_APIKEY", "k")
+    base = {"scheduler": "iqp", "resource": "ibm_test"}
+    with pytest.raises(RuntimeError, match="Do not write QRMI_IBM_QCS_IAM_APIKEY"):
+        runtime_block.runtime_block_settings({**base, "QRMI_IBM_QCS_IAM_APIKEY": "x"})
+    with pytest.raises(RuntimeError, match="differ; set only service_crn"):
+        runtime_block.runtime_block_settings(
+            {**base, "service_crn": "a", "qrmi": {"QRMI_IBM_QCS_SERVICE_CRN": "b"}}
+        )
+    with pytest.raises(RuntimeError, match="Unknown \\[runtime\\] settings: service_cr"):
+        runtime_block.build_runtime_block({**base, "service_cr": "a"})
+
+
+LOGIN_BLOCK = dict(
+    scheduler="slurm",
+    resource="ibm_kingston",
+    instance="open-instance (open)",
+    instances={"main-instance (premium)": "crn:v1:main", "open-instance (open)": "crn:v1:open"},
+    instance_backends={
+        "main-instance (premium)": ["ibm_fez", "ibm_kingston"],
+        "open-instance (open)": ["ibm_kingston"],
+    },
+    root_dir="/data/sqd/qrmi",
+    command_block_name="cmd-sqd-qrmi",
+    execution_profile_block_name="exec-sqd-qrmi",
+    hpc_profile_block_name="hpc-slurm-sqd-qrmi",
+)
+
+
+def _saved_runtime(monkeypatch, saved_block):
+    from sqd_common import runtime_block
+
+    saved = {}
+    monkeypatch.setattr(runtime_block, "_saved_block", lambda name: saved_block)
+
+    def capture(self, name, overwrite=False):
+        saved[name] = self
+
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    monkeypatch.setattr(QrmiRuntimeBlock, "save", capture)
+    return runtime_block, saved
+
+
+def test_create_blocks_keeps_the_login_choice_and_dropdowns(monkeypatch):
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    runtime_block, saved = _saved_runtime(monkeypatch, QrmiRuntimeBlock(**LOGIN_BLOCK))
+    # A [qrmi] table that sets no backend or instance, with a new work directory.
+    settings = {
+        "scheduler": "slurm",
+        "root_dir": "/data/new/qrmi",
+        "command_block_name": "cmd-sqd-qrmi",
+        "execution_profile_block_name": "exec-sqd-qrmi",
+        "hpc_profile_block_name": "hpc-slurm-sqd-qrmi",
+    }
+    assert runtime_block.save_runtime_block(settings, "qrmi-runtime") == []
+    block = saved["qrmi-runtime"]
+    assert (block.instance, block.resource, block.root_dir) == (
+        "open-instance (open)",
+        "ibm_kingston",
+        "/data/new/qrmi",
+    )
+    schema = type(block).model_json_schema()["properties"]
+    assert schema["resource"]["enum"] == ["ibm_fez", "ibm_kingston"]
+    assert schema["instance"]["enum"] == list(LOGIN_BLOCK["instances"])
+
+
+def test_create_blocks_prints_a_changed_backend_or_instance(monkeypatch):
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    runtime_block, saved = _saved_runtime(monkeypatch, QrmiRuntimeBlock(**LOGIN_BLOCK))
+    changes = runtime_block.save_runtime_block(
+        {"scheduler": "slurm", "resource": "ibm_fez", "instance": "main-instance"}, "qrmi-runtime"
+    )
+    assert changes == [
+        "QPU Backend: ibm_kingston -> ibm_fez",
+        "IBM Quantum Instance: open-instance (open) -> main-instance",
+    ]
+    # The bare instance name selects its 'name (plan)' label.
+    assert saved["qrmi-runtime"].instance == "main-instance (premium)"
+    with pytest.raises(RuntimeError, match="is not one of"):
+        runtime_block.save_runtime_block({"instance": "elsewhere"}, "qrmi-runtime")
+
+
+def test_a_first_block_needs_a_backend(monkeypatch):
+    runtime_block, _ = _saved_runtime(monkeypatch, None)
+    with pytest.raises(RuntimeError, match="Run qcsc-qrmi login, or set resource"):
+        runtime_block.save_runtime_block({"scheduler": "slurm", "root_dir": "/x"}, "qrmi-runtime")

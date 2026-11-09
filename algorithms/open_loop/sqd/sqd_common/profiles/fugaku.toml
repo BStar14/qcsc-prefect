@@ -16,8 +16,15 @@ launcher = "single"
 mpiprocs = 1
 ompthreads = 4
 
-# DICE: MPI. Used with solver = "dice".
+# DICE: MPI. Used with solver = "dice". mpi_options defaults to -n num_nodes x mpiprocs.
 [dice]
 launcher = "mpiexec"
 mpiprocs = 2
+fugaku_mpi_options_for_pjm = ["max-proc-per-node=2"]  # = mpiprocs
+
+# SBD: MPI. Used with solver = "sbd". Keep -n at num_nodes x mpiprocs.
+[sbd]
+launcher = "mpiexec"
+mpiprocs = 2
 mpi_options = ["-n", "2"]
+fugaku_mpi_options_for_pjm = ["max-proc-per-node=2"]  # = mpiprocs

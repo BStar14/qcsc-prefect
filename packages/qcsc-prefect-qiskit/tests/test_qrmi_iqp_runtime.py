@@ -709,7 +709,7 @@ def test_mismatched_iqp_result_is_rejected(runtime, fake, returned, message):
         sample(runtime, [(bell("a"),), (bell("b"),)])
 
 
-def test_runtime_block_round_trip_keeps_settings_and_secret(monkeypatch):
+def test_runtime_block_round_trip_keeps_settings_and_secret(monkeypatch, no_api_key):
     # Restoring a block emits a Prefect "loaded" event, which starts a temporary
     # Prefect server. Record the event instead; this test checks only the settings.
     events = []
@@ -758,13 +758,259 @@ def test_runtime_block_builds_slurm_runtime_and_passes_prepare(tmp_path):
     assert runtime.transpiler == runtime_mod.DEFAULT_TRANSPILER
 
 
-def test_runtime_block_rejects_invalid_settings_when_building_runtime():
-    block = QrmiRuntimeBlock(scheduler="iqp", resource="ibm_test")
-    with pytest.raises(ValueError, match="requires a nonempty resource_config"):
+@pytest.fixture
+def no_api_key(monkeypatch, tmp_path):
+    """No qrmi_config.json and no API key in the environment."""
+    monkeypatch.setenv("QRMI_CONFIG", str(tmp_path / "missing.json"))
+    monkeypatch.delenv("QRMI_IBM_QCS_IAM_APIKEY", raising=False)
+
+
+def test_iqp_without_an_api_key_asks_for_qcsc_qrmi_login(no_api_key):
+    block = QrmiRuntimeBlock(scheduler="iqp", resource="ibm_test", service_crn="crn:v1:x")
+    with pytest.raises(ValueError, match="needs an API key: run qcsc-qrmi login"):
         block.get_runtime()
+
+
+def test_iqp_reads_the_api_key_of_the_qrmi_config(monkeypatch, tmp_path):
+    from qcsc_prefect.integrations.qiskit.qrmi import config_file
+
+    path = tmp_path / "qrmi_config.json"
+    config_file.write_config(
+        config_file.QrmiConfig(
+            api_key="file-key",
+            instances=[config_file.Instance("main", "crn:v1:main", "premium", ["ibm_test"])],
+        ),
+        path,
+    )
+    monkeypatch.setenv("QRMI_CONFIG", str(path))
+    monkeypatch.setenv("QRMI_IBM_QCS_IAM_APIKEY", "env-key")
+    block = QrmiRuntimeBlock(
+        scheduler="iqp",
+        resource="ibm_test",
+        instance="main (premium)",
+        instances={"main (premium)": "crn:v1:main"},
+    )
+    config = block.get_runtime().resource_config
+    # The file wins over the environment; the instance gives the CRN.
+    assert config["QRMI_IBM_QCS_IAM_APIKEY"] == "file-key"
+    assert config["QRMI_IBM_QCS_SERVICE_CRN"] == "crn:v1:main"
+    assert "file-key" not in repr(block) and "file-key" not in str(block.model_dump())
+
+
+def test_the_block_has_no_api_key_field():
+    assert "api_key" not in QrmiRuntimeBlock.model_fields
+    schema = QrmiRuntimeBlock.model_json_schema()["properties"]
+    # Service CRN is a plain text field, shown by default; the endpoints are filled in.
+    assert schema["service_crn"]["type"] == "string" and "anyOf" not in schema["service_crn"]
+    assert schema["endpoint"]["default"] == "https://quantum.cloud.ibm.com/api/v1"
+    assert schema["session_mode"]["default"] == "batch"
+    order = sorted(schema, key=lambda name: schema[name].get("position", 99))
+    assert order[:5] == ["scheduler", "instance", "resource", "service_crn", "instances"]
+
+
+def test_a_block_saved_before_these_fields_loads_with_the_defaults(no_api_key):
+    old = QrmiRuntimeBlock.model_validate(
+        {
+            "scheduler": "iqp",
+            "resource": "ibm_test",
+            "service_crn": None,
+            "endpoint": None,
+            "iam_endpoint": None,
+            "session_mode": None,
+            "resource_config": dict(CONFIG),
+        }
+    )
+    assert (old.service_crn, old.endpoint, old.session_mode) == (
+        "",
+        "https://quantum.cloud.ibm.com/api/v1",
+        "batch",
+    )
+    # Its resource_config keeps its own endpoints and key.
+    assert old.get_runtime().resource_config == CONFIG
+
+
+def test_block_fields_are_stripped_and_checked(tmp_path):
+    block = QrmiRuntimeBlock(
+        scheduler="iqp", resource=" ibm_test ", service_crn=" crn:v1:x\n", endpoint=""
+    )
+    assert (block.resource, block.service_crn, block.endpoint) == (
+        "ibm_test",
+        "crn:v1:x",
+        "https://quantum.cloud.ibm.com/api/v1",
+    )
+    with pytest.raises(ValueError, match="without spaces"):
+        QrmiRuntimeBlock(scheduler="iqp", resource="ibm_test", service_crn="crn v1")
+    with pytest.raises(ValueError, match="QPU Backend is required"):
+        QrmiRuntimeBlock(scheduler="iqp", resource=" ")
+    with pytest.raises(ValueError, match="only used by scheduler 'iqp'"):
+        QrmiRuntimeBlock(
+            scheduler="slurm",
+            resource="test_heron",
+            root_dir=str(tmp_path),
+            resource_config={"QRMI_IBM_QCS_SERVICE_CRN": "crn"},
+        )
 
 
 def uuid():
     import uuid as uuid_module
 
     return uuid_module.uuid4()
+
+
+def test_a_validation_error_never_shows_the_legacy_secret():
+    secret = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-QWERT"
+    with pytest.raises(ValueError) as error:
+        QrmiRuntimeBlock(
+            scheduler="slurm", resource="r", resource_config={"QRMI_IBM_QCS_IAM_APIKEY": secret}
+        )
+    for part in (secret, secret[:6], secret[-6:]):
+        assert part not in str(error.value)
+
+
+def test_slurm_block_passes_the_instance_crn_and_endpoints_to_the_job(tmp_path):
+    slurm = dict(
+        resource="ibm_fez",
+        root_dir=str(tmp_path),
+        command_block_name="c",
+        execution_profile_block_name="e",
+        hpc_profile_block_name="h",
+        instance="main",
+        instances={"main (premium)": "crn:v1:main", "open (open)": "crn:v1:open"},
+    )
+    runtime = QrmiRuntimeBlock(**slurm).get_runtime()
+    assert runtime.job_settings == {
+        "QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:main",
+        "QRMI_IBM_QCS_ENDPOINT": "https://quantum.cloud.ibm.com/api/v1",
+        "QRMI_IBM_QCS_IAM_ENDPOINT": "https://iam.cloud.ibm.com",
+        "QRMI_IBM_QCS_SESSION_MODE": "batch",
+    }
+    assert runtime.resource_config is None
+    override = QrmiRuntimeBlock(**slurm, service_crn="crn:v1:other").get_runtime()
+    assert override.job_settings["QRMI_IBM_QCS_SERVICE_CRN"] == "crn:v1:other"
+    with pytest.raises(ValueError, match="job_settings must not contain"):
+        runtime_mod.QrmiRuntime(
+            **{k: v for k, v in slurm.items() if k not in ("instance", "instances")},
+            job_settings={"QRMI_IBM_QCS_IAM_APIKEY": "x"},
+        )
+
+
+ACCESS = {
+    "main (premium)": ["ibm_fez", "ibm_kingston"],
+    "open (open)": ["ibm_kingston"],
+}
+CRNS = {"main (premium)": "crn:v1:main", "open (open)": "crn:v1:open"}
+
+
+def _access_block(**changes):
+    settings = dict(
+        scheduler="slurm",
+        resource="ibm_fez",
+        instance="open (open)",
+        instances=CRNS,
+        instance_backends=ACCESS,
+        root_dir="/x",
+        command_block_name="c",
+        execution_profile_block_name="e",
+        hpc_profile_block_name="h",
+    )
+    return QrmiRuntimeBlock(**{**settings, **changes})
+
+
+def test_the_backend_check_names_the_instances_that_have_it(no_api_key):
+    from qcsc_prefect.integrations.qiskit.qrmi.block import BackendAccessError
+
+    with pytest.raises(BackendAccessError) as error:
+        _access_block().check_backend_access()
+    assert "ibm_fez is not available to open (open)" in str(error.value)
+    assert "available to: main (premium)" in str(error.value)
+    _access_block(instance="main").check_backend_access()
+    with pytest.raises(BackendAccessError, match="names no IBM Quantum Instance"):
+        _access_block(instance="", instances={}).check_backend_access()
+
+
+def test_the_live_check_wins_over_a_stale_list(monkeypatch):
+    from qcsc_prefect.integrations.qiskit.qrmi import block as block_mod
+
+    monkeypatch.setenv("QRMI_CONFIG", "/nonexistent/qrmi_config.json")
+    monkeypatch.setenv("QRMI_IBM_QCS_IAM_APIKEY", "k")
+    asked = []
+
+    def live(key, crn, backend):
+        asked.append((crn, backend))
+        return {backend}  # IBM Quantum now lists it for the open instance
+
+    monkeypatch.setattr(block_mod, "_live_backend_names", live)
+    _access_block().check_backend_access()
+    assert asked == [("crn:v1:open", "ibm_fez")]
+    monkeypatch.setattr(block_mod, "_live_backend_names", lambda *args: set())
+    with pytest.raises(block_mod.BackendAccessError):
+        _access_block(instance="main").check_backend_access()
+
+
+def test_a_failed_live_check_falls_back_to_the_list(monkeypatch, caplog):
+    from qcsc_prefect.integrations.qiskit.qrmi import block as block_mod
+
+    monkeypatch.setenv("QRMI_CONFIG", "/nonexistent/qrmi_config.json")
+    monkeypatch.setenv("QRMI_IBM_QCS_IAM_APIKEY", "k")
+
+    def offline(*args):
+        raise ConnectionError("no network")
+
+    monkeypatch.setattr(block_mod, "_live_backend_names", offline)
+    _access_block(instance="main").check_backend_access()
+    assert "Could not ask IBM Quantum" in caplog.text
+    assert "could not be reached. Check the network connection" in caplog.text
+    with pytest.raises(block_mod.BackendAccessError):
+        _access_block().check_backend_access()
+
+
+def test_the_dropdown_class_lists_the_choices_and_loads_as_the_base_class():
+    from prefect.blocks.core import Block
+    from qcsc_prefect.integrations.qiskit.qrmi.block import qrmi_runtime_block_class
+
+    dropdown = qrmi_runtime_block_class(list(CRNS), ["ibm_kingston", "ibm_fez", "ibm_fez"])
+    schema = dropdown.model_json_schema()["properties"]
+    assert schema["instance"]["enum"] == ["main (premium)", "open (open)"]
+    assert schema["resource"]["enum"] == ["ibm_fez", "ibm_kingston"]
+    assert dropdown.get_block_type_slug() == QrmiRuntimeBlock.get_block_type_slug()
+    assert set(dropdown.model_fields) == set(QrmiRuntimeBlock.model_fields)
+    # Loading by block type keeps the base class, which accepts any saved value.
+    assert Block.get_block_class_from_key("qrmi-runtime") is QrmiRuntimeBlock
+    block = dropdown(**{**_access_block().settings(), "resource": "ibm_fez"})
+    restored = QrmiRuntimeBlock.model_validate({**block.settings(), "resource": "ibm_new"})
+    assert restored.resource == "ibm_new"
+    assert qrmi_runtime_block_class([], []) is QrmiRuntimeBlock
+
+
+def test_runtime_block_round_trip_keeps_the_settings(monkeypatch, no_api_key):
+    events = []
+    monkeypatch.setattr(prefect.blocks.core, "emit_event", lambda **event: events.append(event))
+    block = _access_block(instance="main (premium)", transpile_config={"optimization_level": 3})
+    doc = block._to_block_document(name="test", block_schema_id=uuid(), block_type_id=uuid())
+    restored = QrmiRuntimeBlock._from_block_document(doc)
+    assert restored.instances == CRNS and restored.instance_backends == ACCESS
+    assert restored.get_runtime().job_settings["QRMI_IBM_QCS_SERVICE_CRN"] == "crn:v1:main"
+
+
+def test_the_live_check_runs_its_real_imports(monkeypatch):
+    """Only the service is fake: the exception import and the regional CRN are real."""
+    import qiskit_ibm_runtime
+    from qcsc_prefect.integrations.qiskit.qrmi import block as block_mod
+    from qiskit.providers.exceptions import QiskitBackendNotFoundError
+
+    eu = "crn:v1:bluemix:public:quantum-computing:eu-de:a/acct:2222bbbb::"
+    opened = []
+
+    class Service:
+        def __init__(self, **kwargs):
+            opened.append(kwargs)
+
+        def backends(self, name, instance):
+            if name == "ibm_berlin":
+                return [SimpleNamespace(name=name)]
+            raise QiskitBackendNotFoundError("No backend matches the criteria.")
+
+    monkeypatch.setattr(qiskit_ibm_runtime, "QiskitRuntimeService", Service)
+    assert block_mod._live_backend_names("k", eu, "ibm_berlin") == {"ibm_berlin"}
+    assert block_mod._live_backend_names("k", eu, "ibm_kingston") == set()
+    assert opened[0] == {"channel": "ibm_quantum_platform", "token": "k", "instance": eu}

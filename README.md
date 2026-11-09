@@ -162,15 +162,17 @@ See [DICE Integration](./docs/howto/howto_use_dice_prefect.md) for a longer setu
 
 ## Fulqrum Integration
 
-`qcsc-prefect-fulqrum` runs the [fulqrum](https://github.com/qiskit-community/fulqrum)
+`qcsc-prefect-fulqrum` runs the [fulqrum](https://github.com/Qiskit/fulqrum)
 subspace eigensolver through the same block model. Its `FulqrumSolverJob` has the same `run()`
 signature and `SCIResult` return type as `DiceSHCISolverJob`, so SQD workflows can switch
 solvers by changing the solver block.
 
-Like DICE, fulqrum itself is not installed by `pip`. Version 0.5 is not on PyPI yet, so build
-it per site with `packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`, then install
-`qcsc-prefect-fulqrum` into that environment with `--no-deps`. The compute node needs only
-numpy, scipy and fulqrum, and runs the `qcsc-fulqrum-solve` entry point. Install the package
+Like DICE, fulqrum itself is not installed by `pip`. Build it per site with
+`packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh`, which pins the fulqrum 1.0.0 release candidate (branch `v1.0.0-rc`), with
+`FULQRUM_WITH_GPU=1` for the GPU backends. Then install `qcsc-prefect-fulqrum` into that
+environment with `--no-deps`. The compute node needs only fulqrum and its dependencies, and
+runs the `qcsc-fulqrum-solve` entry point. The solver runs on CPUs, on the GPUs of one node,
+or on one MPI rank per GPU across nodes, selected by the solver block's `backend`. Install the package
 from the source checkout on the workflow host:
 
 ```bash

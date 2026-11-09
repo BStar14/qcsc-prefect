@@ -4,7 +4,8 @@ Usage (from the repository root)::
 
     python algorithms/open_loop/sqd/deploy.py
 
-Each run selects its solver with ``solver_block_ref`` in the flow parameters.
+Each run uses the solver block of the Advanced SQD Settings block, which
+``sqd-create-blocks`` saves; ``solver_block_ref`` overrides it for one run.
 """
 
 from sqd_common.main import deploy

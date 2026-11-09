@@ -100,6 +100,25 @@ def test_return_sci_state_false_skips_amplitudes(monkeypatch, tmp_path: Path):
     result = _run(FulqrumSolverJob(root_dir=str(tmp_path), return_sci_state=False))
     assert result.sci_state is None
     assert result.energy == -1.5
+    assert result.carryover is None
+
+
+def test_carryover_reaches_the_sci_result(monkeypatch, tmp_path: Path):
+    def on_run(work_dir: Path):
+        options = io_utils.read_solver_input(work_dir)["options"]
+        assert (options.backend, options.carryover_fraction) == ("gpu", 0.5)
+        solution = _solution(amplitudes=False)
+        solution.carryover_a = np.array([1], dtype=np.int64)
+        solution.carryover_b = np.array([1], dtype=np.int64)
+        io_utils.write_solver_output(work_dir, solution)
+
+    _fake_scheduler(monkeypatch, on_run=on_run)
+    solver = FulqrumSolverJob(
+        root_dir=str(tmp_path), return_sci_state=False, backend="gpu", carryover_fraction=0.5
+    )
+    result = _run(solver)
+    np.testing.assert_array_equal(result.carryover[0], [1])
+    np.testing.assert_array_equal(result.carryover[1], [1])
 
 
 def test_spin_sq_is_ignored_with_warning(monkeypatch, tmp_path: Path, caplog):
@@ -149,6 +168,10 @@ def test_block_validates_solver_fields(tmp_path: Path):
         FulqrumSolverJob(root_dir=str(tmp_path), eigensolver="lanczos")
     with pytest.raises(ValueError):
         FulqrumSolverJob(root_dir=str(tmp_path), tol=-1.0)
+    with pytest.raises(ValueError):
+        FulqrumSolverJob(root_dir=str(tmp_path), backend="tpu")
+    with pytest.raises(ValueError):
+        FulqrumSolverJob(root_dir=str(tmp_path), carryover_fraction=1.5)
     options = FulqrumSolverJob(
         root_dir=str(tmp_path), hamiltonian_format="matrix_free", max_iter=10, dense_max_dim=0
     ).solver_options()
@@ -164,3 +187,48 @@ def test_package_exports_prefect_side_lazily():
     assert callable(pkg.create_fulqrum_blocks)
     with pytest.raises(AttributeError):
         pkg.not_a_name  # noqa: B018
+
+
+def test_requested_carryover_that_selected_nothing_is_empty_not_none(monkeypatch, tmp_path):
+    """A fraction too small for the subspace selects no string; that is not 'no carryover'."""
+    _fake_scheduler(
+        monkeypatch, on_run=lambda wd: io_utils.write_solver_output(wd, _solution(False))
+    )
+    solver = FulqrumSolverJob(
+        root_dir=str(tmp_path), return_sci_state=False, carryover_fraction=0.4
+    )
+    result = _run(solver)
+    assert result.carryover is not None
+    assert [len(c) for c in result.carryover] == [0, 0]
+
+
+def test_block_tuning_reaches_the_solver_options(tmp_path: Path):
+    options = FulqrumSolverJob(
+        root_dir=str(tmp_path),
+        backend="gpu-mpi",
+        max_basis_size=32,
+        block_size=2,
+        min_restart_size=8,
+        primme_method="PRIMME_DYNAMIC",
+        convergence="energy",
+        energy_tol=1e-7,
+        process_grid=(2, 2),
+        comm_backend="nccl",
+    ).solver_options()
+    assert (options.max_basis_size, options.block_size, options.min_restart_size) == (32, 2, 8)
+    assert (options.primme_method, options.convergence, options.energy_tol) == (
+        "PRIMME_DYNAMIC",
+        "energy",
+        1e-7,
+    )
+    assert (options.process_grid, options.comm_backend) == ((2, 2), "nccl")
+
+
+def test_the_tuning_fields_are_editable_in_the_block_form():
+    properties = FulqrumSolverJob.model_json_schema()["properties"]
+    titles = {name: properties[name]["title"] for name in properties}
+    assert titles["max_basis_size"] == "Max Basis Size"
+    assert titles["block_size"] == "Block Size"
+    assert titles["process_grid"] == "Process Grid"
+    assert titles["comm_backend"] == "Communication Backend"
+    assert properties["convergence"]["enum"] == ["abs", "rel", "norm", "energy"]

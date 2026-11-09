@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sqd"
-version = "2.0.0"
+version = "2.1.0"
 description = "Prefect workflow of the SQD experiment from arXiv:2405.05068 with the fulqrum, DICE or SBD solver."
 readme = "README.md"
 license = "Apache-2.0"
@@ -27,16 +27,16 @@ dependencies = [
     "pydantic",
     "pydantic_numpy",
     "qiskit",
-    "qiskit-addon-sqd>=0.12.0",
+    "qiskit-addon-sqd>=0.14.0",
     "qiskit-ibm-runtime",
-    "qcsc-prefect-fulqrum==0.3.0",
-    "qcsc-prefect-qiskit[slurm]==0.3.0",
+    "qcsc-prefect-fulqrum==0.3.1",
+    "qcsc-prefect-qiskit[slurm]==0.3.1",
     "qcsc_workflow_utility",
 ]
 
 [project.optional-dependencies]
-dice = ["qcsc-prefect-dice==0.3.0"]
-sbd = ["qcsc-prefect-sbd==0.3.0"]
+dice = ["qcsc-prefect-dice==0.3.1"]
+sbd = ["qcsc-prefect-sbd==0.3.1"]
 all = ["sqd[dice,sbd]"]
 
 [tool.uv.sources]
@@ -51,7 +51,7 @@ qcsc-prefect-sbd = { path = "../../../packages/qcsc-prefect-sbd", editable = tru
 qcsc_workflow_utility = { path = "../../qcsc_workflow_utility", editable = true }
 
 [tool.setuptools]
-packages = ["sqd_common", "sqd_dice", "sqd_fulqrum"]
+packages = ["sqd_common", "sqd_dice", "sqd_fulqrum", "sqd_sbd"]
 include-package-data = true
 zip-safe = false
 

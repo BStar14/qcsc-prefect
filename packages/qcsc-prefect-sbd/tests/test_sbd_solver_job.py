@@ -33,13 +33,14 @@ SAVED_DATA = {
     "carryover_ratio": 0.1,
     "solver_mode": "gpu",
 }
-# Schema checksum of the pre-move class. Prefect matches saved documents to this schema.
-SAVED_SCHEMA_CHECKSUM = "sha256:1c79601e5644c3553"
+# Schema checksum of the current class, with the carryover_type field. A change here means
+# saving the block registers a new schema version.
+SCHEMA_CHECKSUM = "sha256:f5f57489e6d89ed3dbcf3bae556df81d79a523c1"
 
 
 @pytest.fixture(autouse=True)
 def quiet_logger(monkeypatch):
-    logger = SimpleNamespace(debug=lambda *a, **k: None)
+    logger = SimpleNamespace(debug=lambda *a, **k: None, info=lambda *a, **k: None)
     monkeypatch.setattr(mod, "get_run_logger", lambda: logger)
 
 
@@ -48,7 +49,7 @@ def test_block_type_is_unchanged_by_the_move():
     assert SBDSolverJob.get_block_type_slug() == "sbd-solver-job"
     assert SBDSolverJob.get_block_type_name() == "SBD Solver Job"
     schema = SBDSolverJob._to_block_schema(block_type_id=uuid.uuid4())
-    assert schema.checksum.startswith(SAVED_SCHEMA_CHECKSUM)
+    assert schema.checksum.startswith(SCHEMA_CHECKSUM)
 
 
 @pytest.mark.parametrize("loader", [SBDSolverJob, Block])
@@ -79,6 +80,8 @@ def test_block_saved_before_the_move_loads(monkeypatch, loader):
 
     assert type(solver) is SBDSolverJob
     assert {name: getattr(solver, name) for name in SAVED_DATA} == SAVED_DATA
+    # Saved before carryover_type existed: the default keeps the carryover the flow uses.
+    assert solver.carryover_type == 1
     assert [event["event"] for event in events] == ["prefect.block.sbd-solver-job.loaded"]
 
 
@@ -107,6 +110,50 @@ def test_prep_files_rejects_out_of_range_determinants(tmp_path: Path, alpha):
             two_body_tensor=np.zeros((4,) * 4),
             norb=4,
             nelec=(1, 1),
+        )
+
+
+def test_prep_files_writes_beta_dets_only_when_the_sets_differ(tmp_path: Path):
+    norb = 4
+    common = dict(one_body_tensor=np.eye(norb), two_body_tensor=np.zeros((norb,) * 4), norb=norb)
+    same = tmp_path / "same"
+    same.mkdir()
+    mod._prep_files(
+        work_dir=same, ci_strings=(np.array([3, 5]), np.array([3, 5])), nelec=(2, 2), **common
+    )
+    assert not (same / "BetaDets.bin").exists()
+
+    rohf = tmp_path / "rohf"
+    rohf.mkdir()
+    mod._prep_files(
+        work_dir=rohf, ci_strings=(np.array([3, 5]), np.array([1, 2, 8])), nelec=(2, 1), **common
+    )
+    assert (rohf / "AlphaDets.bin").read_bytes() == bytes([3, 5])
+    assert (rohf / "BetaDets.bin").read_bytes() == bytes([1, 2, 8])
+    header = (rohf / "fcidump.txt").read_text().splitlines()[0]
+    assert "NELEC= 3" in header and "MS2=1" in header
+
+
+@pytest.mark.parametrize(
+    "ci_strings,nelec,message",
+    [
+        ((np.array([3, 1]), np.array([3, 1])), (2, 2), "1 of 2 Alpha determinants do not have 2"),
+        ((np.array([3, 5]), np.array([1, 3])), (2, 1), "1 of 2 Beta determinants do not have 1"),
+        ((np.array([3, 5, 3]), np.array([3, 5, 3])), (2, 2), "Alpha .* 1 duplicate"),
+        ((np.array([3, 5]), np.array([1, 2, 2])), (2, 1), "Beta .* 1 duplicate"),
+    ],
+)
+def test_prep_files_rejects_wrong_sector_and_duplicate_determinants(
+    tmp_path: Path, ci_strings, nelec, message
+):
+    with pytest.raises(ValueError, match=message):
+        mod._prep_files(
+            work_dir=tmp_path,
+            ci_strings=ci_strings,
+            one_body_tensor=np.eye(4),
+            two_body_tensor=np.zeros((4,) * 4),
+            norb=4,
+            nelec=nelec,
         )
 
 
@@ -139,6 +186,25 @@ def test_read_files_accepts_empty_carryover_and_rejects_misaligned(tmp_path: Pat
         mod._read_files(work_dir=tmp_path, norb=10)
 
 
+def test_read_files_reads_the_beta_carryover_for_separate_beta(tmp_path: Path):
+    write_outputs(tmp_path, bytes([0b11000000]))
+    (tmp_path / "carryover_b.bin").write_bytes(bytes([0b10000000, 0b00100000]))
+
+    shared = mod._read_files(work_dir=tmp_path, norb=3)
+    assert shared.carryover_bitstrings_b is None
+
+    result = mod._read_files(work_dir=tmp_path, norb=3, separate_beta=True)
+    assert result.carryover_bitstrings.tolist() == [[True, True, False]]
+    assert result.carryover_bitstrings_b.tolist() == [[True, False, False], [False, False, True]]
+    assert result.carryover_bitstrings_b.dtype == bool
+
+
+def test_read_files_requires_the_beta_carryover_for_separate_beta(tmp_path: Path):
+    write_outputs(tmp_path, b"")
+    with pytest.raises(FileNotFoundError, match="--bdetfile"):
+        mod._read_files(work_dir=tmp_path, norb=3, separate_beta=True)
+
+
 @pytest.mark.parametrize("mode,extra", [("cpu", []), ("gpu", ["--adetfile", "AlphaDets.bin"])])
 def test_solver_args(mode, extra):
     solver = SBDSolverJob(root_dir="/work", solver_mode=mode, block=4, user_args=["--y"])
@@ -147,11 +213,38 @@ def test_solver_args(mode, extra):
     assert args[args.index("--block") + 1] == "4"
     assert args[args.index("--rdm") + 1] == "0"
     assert args[args.index("--carryover_type") + 1] == "1"
+    assert "--dump_matrix_form_wf" not in args
+    assert "--bdetfile" not in args
     if extra:
         assert args[args.index("--adetfile") : args.index("--adetfile") + 2] == extra
         assert "--carryoverfile" in args
     else:
         assert "--adetfile" not in args
+    assert args[-1] == "--y"
+
+
+@pytest.mark.parametrize("carryover_type", [0, 2, 3])
+def test_solver_args_pass_the_carryover_type(carryover_type):
+    solver = SBDSolverJob(root_dir="/work", carryover_type=carryover_type)
+    args = mod._build_solver_args(solver)
+    assert args[args.index("--carryover_type") + 1] == str(carryover_type)
+
+
+@pytest.mark.parametrize("carryover_type", [-1, 4])
+def test_carryover_type_is_range_checked(carryover_type):
+    with pytest.raises(ValueError, match="carryover_type"):
+        SBDSolverJob(root_dir="/work", carryover_type=carryover_type)
+
+
+@pytest.mark.parametrize("mode", ["cpu", "gpu"])
+def test_separate_beta_args_name_each_determinant_file_once(mode):
+    solver = SBDSolverJob(root_dir="/work", solver_mode=mode, user_args=["--y"])
+    args = mod._build_solver_args(solver, separate_beta=True)
+    assert args.count("--adetfile") == 1
+    assert args.count("--bdetfile") == 1
+    assert args[args.index("--adetfile") + 1] == "AlphaDets.bin"
+    assert args[args.index("--bdetfile") + 1] == "BetaDets.bin"
+    assert ("--carryoverfile" in args) == (mode == "gpu")
     assert args[-1] == "--y"
 
 
@@ -184,6 +277,36 @@ def test_run_sbd_inner_runs_through_block_executor(monkeypatch, tmp_path: Path):
     assert executed["script_filename"] == "sbd_solver.pbs"
     assert Path(executed["work_dir"]).parent == (tmp_path / "sbd_jobs").resolve()
     assert (Path(executed["work_dir"]) / "AlphaDets.bin").is_file()
+    assert not (Path(executed["work_dir"]) / "BetaDets.bin").exists()
+    assert "--bdetfile" not in executed["user_args"]
+    assert result.carryover_bitstrings_b is None
+
+
+def test_run_sbd_inner_passes_separate_beta_for_an_open_shell_subspace(monkeypatch, tmp_path: Path):
+    executed = {}
+
+    async def fake_run_job_from_blocks(**kwargs):
+        executed.update(kwargs)
+        write_outputs(kwargs["work_dir"], bytes([0b11000000]))
+        (kwargs["work_dir"] / "carryover_b.bin").write_bytes(bytes([0b10000000]))
+        return SimpleNamespace(exit_status=0)
+
+    monkeypatch.setattr(mod, "run_job_from_blocks", fake_run_job_from_blocks)
+    result = asyncio.run(
+        mod._run_sbd_inner.fn(
+            solver=SBDSolverJob(root_dir=str(tmp_path)),
+            ci_strings=(np.array([0b011, 0b101]), np.array([0b001, 0b010])),
+            one_body_tensor=np.eye(3),
+            two_body_tensor=np.zeros((3,) * 4),
+            norb=3,
+            nelec=(2, 1),
+        )
+    )
+
+    args = executed["user_args"]
+    assert args[args.index("--bdetfile") + 1] == "BetaDets.bin"
+    assert (Path(executed["work_dir"]) / "BetaDets.bin").is_file()
+    assert result.carryover_bitstrings_b.tolist() == [[True, False, False]]
 
 
 def test_run_sbd_inner_fails_on_nonzero_exit(monkeypatch, tmp_path: Path):
@@ -205,18 +328,20 @@ def test_run_sbd_inner_fails_on_nonzero_exit(monkeypatch, tmp_path: Path):
 
 
 HF_2 = 0b11  # Hartree-Fock determinant for two electrons per spin.
+HF_1 = 0b1  # Hartree-Fock determinant for one electron.
 
 
 @pytest.mark.parametrize(
     "ci_strings,nelec,spin_sq,message",
     [
-        ((np.array([HF_2, 5]), np.array([HF_2, 5])), (2, 1), None, "closed-shell"),
-        ((np.array([HF_2, 5]), np.array([HF_2, 6])), (2, 2), None, "must be the same"),
-        ((np.array([HF_2, 5]), np.array([HF_2])), (2, 2), None, "must be the same"),
-        ((np.array([5, HF_2]), np.array([5, HF_2])), (2, 2), None, "Hartree-Fock"),
+        ((np.array([5, HF_2]), np.array([5, HF_2])), (2, 2), None, "alpha Hartree-Fock"),
+        ((np.array([HF_2, 5]), np.array([5, HF_2])), (2, 2), None, "beta Hartree-Fock"),
+        ((np.array([HF_2, 5]), np.array([HF_2, 5])), (2, 1), None, "beta Hartree-Fock"),
+        ((np.array([HF_1, 2]), np.array([HF_2, 5])), (2, 2), None, "alpha Hartree-Fock"),
         ((np.array([], dtype=int), np.array([], dtype=int)), (2, 2), None, "Hartree-Fock"),
+        ((np.array([HF_2, 5]), np.array([], dtype=int)), (2, 2), None, "beta Hartree-Fock"),
         ((np.array([HF_2, 5]), np.array([HF_2, 5])), (2, 2), 0.0, "spin_sq"),
-        ((np.array([HF_2, 5]), np.array([HF_2, 5])), (2, 2), 0.75, "spin_sq"),
+        ((np.array([HF_2, 5]), np.array([HF_1, 2])), (2, 1), 0.75, "spin_sq"),
     ],
 )
 def test_run_rejects_input_sbd_cannot_solve(monkeypatch, ci_strings, nelec, spin_sq, message):
@@ -242,15 +367,27 @@ def test_run_rejects_input_sbd_cannot_solve(monkeypatch, ci_strings, nelec, spin
     assert calls == []
 
 
-def test_open_shell_is_rejected_by_electron_count_not_by_arrays():
-    # Same alpha and beta sets with HF first, but nelec says open-shell.
-    with pytest.raises(ValueError, match="closed-shell"):
+def test_the_hartree_fock_error_names_the_expected_and_found_determinant():
+    with pytest.raises(ValueError, match="beta Hartree-Fock determinant 1 first.*got 2"):
         mod.check_sbd_input(
-            ci_strings=(np.array([0b111]), np.array([0b111])), nelec=(3, 2), spin_sq=None
+            ci_strings=(np.array([HF_2, 5]), np.array([2, HF_1])), nelec=(2, 1), spin_sq=None
         )
 
 
 def test_valid_closed_shell_input_passes():
     mod.check_sbd_input(
         ci_strings=(np.array([HF_2, 5, 6]), [HF_2, 5, 6]), nelec=(2, 2), spin_sq=None
+    )
+
+
+def test_closed_shell_input_with_different_alpha_and_beta_sets_passes():
+    mod.check_sbd_input(
+        ci_strings=(np.array([HF_2, 5, 6]), np.array([HF_2, 9])), nelec=(2, 2), spin_sq=None
+    )
+
+
+def test_restricted_open_shell_input_passes():
+    # Doublet with two alpha and one beta electron: the sets differ, each starts with HF.
+    mod.check_sbd_input(
+        ci_strings=(np.array([HF_2, 5, 6]), np.array([HF_1, 2, 4])), nelec=(2, 1), spin_sq=None
     )

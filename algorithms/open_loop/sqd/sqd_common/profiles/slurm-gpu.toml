@@ -1,0 +1,40 @@
+# System profile: a Slurm cluster with GPU nodes. Selected with profile = "slurm-gpu".
+# Settings in your sqd_blocks.toml override the ones here. Set queue to a GPU partition.
+
+hpc_target = "slurm"
+resource_class = "gpu"              # Use the GPU queue and project of the HPC profile block
+
+# fulqrum: one MPI rank per GPU (backend "gpu-mpi"); needs a GPU build of fulqrum.
+backend = "gpu-mpi"
+launcher = "srun"
+mpi_options = ["--mpi=pmix"]        # Match the PMI plugin of your Slurm and MPI
+num_nodes = 1                       # More nodes add more ranks and GPUs
+gpus_per_node = 4                   # #SBATCH --gpus-per-node
+mpiprocs = 4                        # --ntasks-per-node; one rank per GPU
+ompthreads = 8                      # --cpus-per-task and OMP_NUM_THREADS of each rank
+walltime = "01:00:00"
+modules = []                        # For example ["cuda", "openmpi"]
+pre_commands = []
+# slurm_memory = "64G"              # Optional: #SBATCH --mem
+
+[environments]
+FQ_DIST_BACKEND = "auto"            # Distributed fulqrum transport; "auto" picks one at run time
+# CuPy compiles kernels on first use. Point its cache at shared storage under your
+# work_dir so the ranks and later jobs reuse it, for example:
+# CUPY_CACHE_DIR = "/data/sqd-fulqrum/.cupy"
+
+# SBD: GPU build (diag-gpu), one MPI rank per GPU. Used with solver = "sbd".
+[sbd]
+solver_mode = "gpu"
+launcher = "srun"
+mpi_options = ["--mpi=pmix"]
+mpiprocs = 4                        # One rank per GPU; follows gpus_per_node
+
+[sbd.environments]                  # The fulqrum variables above do not apply to SBD
+
+# The QRMI sampler job runs on CPU. It uses the solver's queue unless you set queue in
+# the [qrmi] table of your file, for example a CPU partition.
+[qrmi]
+walltime = "00:30:00"
+ompthreads = 4
+timeout_seconds = 3600              # Monitoring only; does not cancel the job

@@ -19,7 +19,7 @@ from .io_utils import (
     read_solver_output,
     write_solver_input,
 )
-from .solver import FulqrumSolution, FulqrumSolverOptions
+from .solver import Backend, CommBackend, Convergence, FulqrumSolution, FulqrumSolverOptions
 
 
 def _logger():
@@ -99,6 +99,92 @@ class FulqrumSolverJob(Block):
         title="SCI State",
         description="Return the ground-state amplitudes as an SCIState.",
     )
+    backend: Backend = Field(
+        default="cpu",
+        title="Backend",
+        description=(
+            "'cpu' (OpenMP), 'gpu' (one process on the GPUs of a node) or 'gpu-mpi' (one "
+            "MPI rank per GPU, across nodes). The GPU backends need a GPU build of fulqrum."
+        ),
+    )
+    carryover_fraction: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        title="Carryover Fraction",
+        description=(
+            "Share of each spin's CI strings, heaviest first, returned for the next "
+            "configuration recovery round. 0 returns none. The SQD flow sets it from its "
+            "Carryover Fraction parameter for each run, so leave it at 0 in the block."
+        ),
+    )
+    max_basis_size: int | None = Field(
+        default=None,
+        gt=0,
+        title="Max Basis Size",
+        description=(
+            "Largest search subspace of the eigensolver (ncv), for scipy, primme and "
+            "gpu-mpi. A larger basis converges in fewer iterations but needs more memory. "
+            "Empty uses the solver default."
+        ),
+    )
+    block_size: int | None = Field(
+        default=None,
+        gt=0,
+        title="Block Size",
+        description=(
+            "PRIMME block size: vectors expanded per iteration (maxBlockSize). For primme "
+            "and gpu-mpi. Empty uses the PRIMME default."
+        ),
+    )
+    min_restart_size: int | None = Field(
+        default=None,
+        gt=0,
+        title="Min Restart Size",
+        description=(
+            "Vectors PRIMME keeps when it restarts (minRestartSize). For primme and "
+            "gpu-mpi. Empty uses the PRIMME default."
+        ),
+    )
+    primme_method: str | None = Field(
+        default=None,
+        title="PRIMME Method",
+        description=(
+            "PRIMME preset, for example PRIMME_DYNAMIC or PRIMME_GD_Olsen_plusK. For primme "
+            "and gpu-mpi. Empty keeps PRIMME's choice (PRIMME_GD_Olsen_plusK for gpu-mpi)."
+        ),
+    )
+    convergence: Convergence = Field(
+        default="abs",
+        title="Convergence Test",
+        description=(
+            "gpu-mpi only: abs or rel residual below Eigensolver Tolerance, norm, or energy "
+            "(the Ritz value stops changing by more than Energy Tolerance)."
+        ),
+    )
+    energy_tol: float = Field(
+        default=1e-6,
+        gt=0,
+        title="Energy Tolerance",
+        description="gpu-mpi with Convergence Test energy: Ritz-value stability tolerance.",
+    )
+    process_grid: tuple[int, int] | None = Field(
+        default=None,
+        title="Process Grid",
+        description=(
+            "gpu-mpi only: [alpha ranks, beta ranks] the subspace is split over. Their "
+            "product must equal the MPI ranks of the job (nodes x MPI procs per node). "
+            "Empty lets fulqrum choose."
+        ),
+    )
+    comm_backend: CommBackend = Field(
+        default="auto",
+        title="Communication Backend",
+        description=(
+            "gpu-mpi only: transport between ranks. auto picks NCCL when every rank has its "
+            "own GPU, else host MPI; cuda_mpi needs a CUDA-aware MPI."
+        ),
+    )
 
     def solver_options(self) -> FulqrumSolverOptions:
         """Return the numerical controls passed to the compute-node solver."""
@@ -110,6 +196,16 @@ class FulqrumSolverJob(Block):
             max_iter=self.max_iter,
             dense_max_dim=self.dense_max_dim,
             return_amplitudes=self.return_sci_state,
+            backend=self.backend,
+            carryover_fraction=self.carryover_fraction,
+            max_basis_size=self.max_basis_size,
+            block_size=self.block_size,
+            min_restart_size=self.min_restart_size,
+            primme_method=self.primme_method,
+            convergence=self.convergence,
+            energy_tol=self.energy_tol,
+            process_grid=self.process_grid,
+            comm_backend=self.comm_backend,
         )
 
     async def run(
@@ -139,12 +235,19 @@ class FulqrumSolverJob(Block):
 
 
 def solution_to_sci_result(
-    solution: FulqrumSolution, *, norb: int, nelec: tuple[int, int]
+    solution: FulqrumSolution,
+    *,
+    norb: int,
+    nelec: tuple[int, int],
+    carryover_requested: bool = False,
 ) -> SCIResult:
     """Convert a :class:`FulqrumSolution` into a qiskit-addon-sqd ``SCIResult``.
 
     The energy is electronic only, as with the DICE solver. Without amplitudes the
-    ``sci_state`` is ``None``.
+    ``sci_state`` is ``None``. The carryover strings go into ``SCIResult.carryover``.
+    When carryover was requested it is always a pair of arrays, empty if the
+    fraction selected no string, so that it is not taken for a solver without
+    carryover; otherwise it is ``None`` unless the solve returned some.
     """
 
     sci_state = None
@@ -156,6 +259,9 @@ def solution_to_sci_result(
             norb=norb,
             nelec=tuple(nelec),
         )
+    carryover = None
+    if carryover_requested or len(solution.carryover_a) or len(solution.carryover_b):
+        carryover = (np.asarray(solution.carryover_a), np.asarray(solution.carryover_b))
     return SCIResult(
         energy=float(solution.energy),
         sci_state=sci_state,
@@ -163,6 +269,7 @@ def solution_to_sci_result(
             np.asarray(solution.orbital_occupancies[0]),
             np.asarray(solution.orbital_occupancies[1]),
         ),
+        carryover=carryover,
     )
 
 
@@ -234,4 +341,6 @@ async def _run_fulqrum_inner(
         meta.get("timings"),
         job_work_dir,
     )
-    return solution_to_sci_result(solution, norb=norb, nelec=nelec)
+    return solution_to_sci_result(
+        solution, norb=norb, nelec=nelec, carryover_requested=solver.carryover_fraction > 0
+    )

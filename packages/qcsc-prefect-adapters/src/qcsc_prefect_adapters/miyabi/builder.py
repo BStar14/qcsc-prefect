@@ -28,13 +28,27 @@ class MiyabiJobRequest:
 def to_miyabi_template_kwargs(*, exec_profile: ExecutionProfile, req: MiyabiJobRequest) -> dict:
     """Build template variables for the Miyabi PBS script.
 
+    A Miyabi-G node has exactly one GH200 GPU and is allocated whole, so a
+    GPU job is requested by its queue (``queue_gpu``, for example
+    ``regular-g``) and a plain ``select=N`` line; no ``ngpus`` resource is
+    rendered. ``gpus_per_node`` therefore only accepts ``None`` or ``1``.
+
     Args:
         exec_profile: Scheduler-independent execution profile.
         req: Miyabi-specific scheduler request fields.
 
     Returns:
         A dictionary that can be passed to the Miyabi Jinja template.
+
+    Raises:
+        ValueError: If ``exec_profile.gpus_per_node`` is greater than 1.
     """
+
+    if exec_profile.gpus_per_node not in (None, 1):
+        raise ValueError(
+            "Miyabi-G nodes have one GPU each; gpus_per_node must be 1 or unset, "
+            f"got {exec_profile.gpus_per_node}. Request more nodes for more GPUs."
+        )
 
     kw: dict = {
         "queue_name": req.queue_name,

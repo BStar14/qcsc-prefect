@@ -61,7 +61,7 @@ def test_run_miyabi_job_local_mock(tmp_path: Path, monkeypatch):
     stdout_path = tmp_path / "output.out"
     stderr_path = tmp_path / "output.err"
     stdout_path.write_text("hello from stdout")
-    stderr_path.write_text("warning from stderr")
+    stderr_path.write_text("WARNING from stderr")
 
     final_status = {
         "Exit_status": "0",
@@ -113,9 +113,9 @@ def test_run_miyabi_job_local_mock(tmp_path: Path, monkeypatch):
     assert result.job_status["Exit_status"] == "0"
     assert (tmp_path / "job.pbs").exists()
     assert logger.info_lines[0] == f"Create Script file in {tmp_path / 'job.pbs'}"
-    assert logger.info_lines[1:] == ["hello from stdout"]
-    # A successful job's stderr is progress or warnings, not an error.
-    assert logger.warning_lines == ["warning from stderr"]
+    # A successful job's stderr goes to info; its warning line also stands out.
+    assert logger.info_lines[1:] == ["hello from stdout", "WARNING from stderr"]
+    assert logger.warning_lines == ["Warnings in the job's stderr:\nWARNING from stderr"]
     assert logger.error_lines == []
     assert runtime_calls[0][0] == "submit"
     assert runtime_calls[1] == (

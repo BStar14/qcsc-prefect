@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "qcsc-prefect"
-version = "0.3.0"
+version = "0.3.1"
 description = "Meta-package for installing QCSC Prefect core packages"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,26 +16,32 @@ maintainers = [
     { name = "QCSC Prefect Maintainers" },
 ]
 dependencies = [
-    "qcsc-prefect-adapters==0.3.0",
-    "qcsc-prefect-blocks==0.3.0",
-    "qcsc-prefect-core==0.3.0",
-    "qcsc-prefect-executor==0.3.0",
+    "qcsc-prefect-adapters==0.3.1",
+    "qcsc-prefect-blocks==0.3.1",
+    "qcsc-prefect-core==0.3.1",
+    "qcsc-prefect-executor==0.3.1",
 ]
 
 [project.optional-dependencies]
 qiskit = [
-    "qcsc-prefect-qiskit==0.3.0",
+    "qcsc-prefect-qiskit==0.3.1",
 ]
 dice = [
-    "qcsc-prefect-dice==0.3.0",
+    "qcsc-prefect-dice==0.3.1",
 ]
 sbd = [
-    "qcsc-prefect-sbd==0.3.0",
+    "qcsc-prefect-sbd==0.3.1",
+]
+# Python-side integration only; fulqrum itself is built per site
+# (packages/qcsc-prefect-fulqrum/native/build_fulqrum.sh).
+fulqrum = [
+    "qcsc-prefect-fulqrum==0.3.1",
 ]
 all = [
-    "qcsc-prefect-dice==0.3.0",
-    "qcsc-prefect-qiskit==0.3.0",
-    "qcsc-prefect-sbd==0.3.0",
+    "qcsc-prefect-dice==0.3.1",
+    "qcsc-prefect-fulqrum==0.3.1",
+    "qcsc-prefect-qiskit==0.3.1",
+    "qcsc-prefect-sbd==0.3.1",
 ]
 
 [project.urls]

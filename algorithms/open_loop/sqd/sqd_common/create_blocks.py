@@ -4,11 +4,12 @@ Usage::
 
     sqd-create-blocks --config sqd_blocks.toml       # solver from the file (default fulqrum)
     sqd-create-blocks --solver dice --config sqd_blocks.toml
+    sqd-create-blocks --solver sbd --config sqd_blocks.toml
 
-The remaining arguments go to the solver's own script (``sqd_fulqrum.create_blocks``
-or ``sqd_dice.create_blocks``). An SBD solver block is created with
-``algorithms/closed_loop/sqd_de/create_blocks.py``; select it in a run with
-``solver_block_ref = "sbd_solver_job/<name>"``.
+The remaining arguments go to the solver's own script (``sqd_fulqrum.create_blocks``,
+``sqd_dice.create_blocks`` or ``sqd_sbd.create_blocks``). Each also saves the Advanced
+SQD Settings block, whose Solver Block names the solver block it created, so the runs
+use that solver.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from sqd_common.block_config import read_config_file, solver_of
 
-SOLVERS = ("fulqrum", "dice")
+SOLVERS = ("fulqrum", "dice", "sbd")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -30,16 +31,13 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(f"--solver needs one of {', '.join(SOLVERS)}")
         solver = argv[index + 1]
         del argv[index : index + 2]
-    if solver == "sbd":
-        raise SystemExit(
-            "Create the SBD solver block with algorithms/closed_loop/sqd_de/create_blocks.py, "
-            "then set solver_block_ref = 'sbd_solver_job/<name>' in the flow parameters."
-        )
     if solver not in SOLVERS:
         raise SystemExit(f"--solver must be one of {', '.join(SOLVERS)}; got {solver!r}")
 
     if solver == "fulqrum":
         from sqd_fulqrum.create_blocks import main as create
+    elif solver == "sbd":
+        from sqd_sbd.create_blocks import main as create
     else:
         try:
             from sqd_dice.create_blocks import main as create

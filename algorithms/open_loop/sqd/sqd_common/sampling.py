@@ -17,7 +17,8 @@ from qiskit.primitives import PrimitiveResult
 from qiskit.primitives.containers import BitArray
 from qiskit_addon_sqd.counts import generate_bit_array_uniform
 
-from sqd_common.flow_params import CircuitParameters, SamplingParameters
+from sqd_common.advanced import AdvancedSettings
+from sqd_common.flow_params import SamplingParameters
 from sqd_common.lucj import LUCJParameters, build_lucj_circuit, circuit_transpile_options
 
 SAMPLING_ARTIFACT_KEY = "sqd-sampling-source"
@@ -70,12 +71,17 @@ def random_bool_array(sampling_params: SamplingParameters, norb: int) -> np.ndar
 
 
 async def record_sampling_source(*, bool_array: np.ndarray, shots: int, **source) -> None:
-    """Write the ``sqd-sampling-source`` artifact, so a later run can reload the samples."""
+    """Write the ``sqd-sampling-source`` artifact, so a later run can reload the samples.
+
+    ``qpu_topology`` is the topology the LUCJ interaction pairs were chosen for. A
+    reload does not build the circuit and leaves it empty.
+    """
     row = {
         "source": source.pop("source"),
         "resource": source.pop("resource", None),
         "qiskit_runtime_job_id": source.pop("qiskit_runtime_job_id", None),
         "qrmi_result_dir": source.pop("qrmi_result_dir", None),
+        "qpu_topology": source.pop("qpu_topology", None),
         **source,
         "shots": int(shots),
         "shots_kept": int(len(bool_array)),
@@ -100,17 +106,47 @@ async def _load_runtime(runner_name: str) -> QuantumRuntime:
         ) from exc
 
 
-async def _load_qrmi_runtime(block_name: str):
+async def load_qrmi_block(block_name: str):
+    """The ``QrmiRuntimeBlock`` named ``block_name``.
+
+    Raises:
+        RuntimeError: If the block cannot be loaded.
+    """
     from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
 
     try:
-        return await QrmiRuntimeBlock.aload_runtime(block_name)
+        return await QrmiRuntimeBlock.aload(block_name)
     except ValueError as exc:
         raise RuntimeError(
             f"Quantum source 'real-device' requested but QrmiRuntimeBlock '{block_name}' "
-            "could not be loaded. Set quantum_source='random' to use deterministic random "
-            "sampling instead."
+            "could not be loaded. Run qcsc-qrmi login and sqd-create-blocks, or set "
+            "quantum_source='random' to use deterministic random sampling instead."
         ) from exc
+
+
+async def check_qrmi_block(block_name: str, logger):
+    """Load the QRMI Runtime block and check that its instance can use its backend.
+
+    The flow calls it before Map, so a backend the instance cannot use fails the run
+    before any stage starts.
+
+    Raises:
+        RuntimeError: If the block cannot be loaded.
+        BackendAccessError: If its instance cannot use its backend.
+    """
+    import asyncio
+
+    block = await load_qrmi_block(block_name)
+    # The live check asks IBM Quantum over the network; keep the event loop free.
+    await asyncio.to_thread(block.check_backend_access, logger=logger)
+    logger.info(
+        "Sampling on %s with instance %s (QRMI Runtime block %s, scheduler=%s).",
+        block.resource,
+        block.instance_label() or "of the Service CRN",
+        block_name,
+        block.scheduler,
+    )
+    return block
 
 
 @task(
@@ -121,8 +157,9 @@ async def _load_qrmi_runtime(block_name: str):
 )
 async def quantum_sampling(
     lucj_params: LUCJParameters,
-    circuit_params: CircuitParameters,
+    advanced: AdvancedSettings,
     sampling_params: SamplingParameters,
+    qrmi_block=None,
 ) -> np.ndarray:
     """Build the LUCJ circuit and sample it through the QRMI runtime block.
 
@@ -133,8 +170,10 @@ async def quantum_sampling(
 
     Args:
         lucj_params: LUCJ operator parameters, including the system size.
-        circuit_params: Circuit and transpiler settings.
+        advanced: Advanced SQD Settings: reset mitigation and the transpiler.
         sampling_params: Shots and the QRMI runtime block.
+        qrmi_block: The ``QrmiRuntimeBlock`` that the flow checked; loaded by
+            ``sampling_params.runtime_block_name`` when not given.
 
     Returns:
         Sampled bitstrings as a 2D bool array.
@@ -144,11 +183,14 @@ async def quantum_sampling(
     logger = get_run_logger()
     rng = np.random.default_rng(TRANSPILER_SEED)
     shots = sampling_params.shots
+    if qrmi_block is None:
+        qrmi_block = await load_qrmi_block(sampling_params.runtime_block_name)
     runtime = make_qrmi_runtime(
-        await _load_qrmi_runtime(sampling_params.runtime_block_name),
-        transpile_config=circuit_transpile_options(circuit_params, rng),
+        qrmi_block.get_runtime(), transpile_config=circuit_transpile_options(advanced, rng)
     )
-    lucj_circ = build_lucj_circuit(lucj_params=lucj_params, circuit_params=circuit_params)
+    lucj_circ = build_lucj_circuit(
+        lucj_params=lucj_params, use_reset_mitigation=advanced.use_reset_mitigation
+    )
     logger.info(
         "Submitting sampler workload to QRMI resource %s (scheduler=%s, shots=%s).",
         runtime.resource,
@@ -156,7 +198,7 @@ async def quantum_sampling(
         shots,
     )
     pub_result = await runtime.sampler(sampler_pubs=[(lucj_circ,)], shots=shots)
-    bool_array, num_shots = extract_bool_array(pub_result, circuit_params.use_reset_mitigation)
+    bool_array, num_shots = extract_bool_array(pub_result, advanced.use_reset_mitigation)
 
     slurm = pub_result.metadata.get("qcsc_slurm")
     if slurm is not None:
@@ -176,6 +218,7 @@ async def quantum_sampling(
         shots=num_shots,
         source=f"qrmi-{runtime.scheduler}",
         resource=runtime.resource,
+        qpu_topology=lucj_params.qpu_topology,
         **source,
     )
     return bool_array
@@ -190,14 +233,14 @@ async def quantum_sampling(
 async def load_runtime_job(
     job_id: str,
     runner_name: str,
-    circuit_params: CircuitParameters,
+    use_reset_mitigation: bool,
 ) -> np.ndarray:
     """Load the samples of a finished IBM Quantum Runtime job.
 
     Args:
         job_id: Qiskit Runtime job ID.
         runner_name: QuantumRuntime block whose credentials can read the job.
-        circuit_params: Circuit settings the job was sampled with (reset mitigation).
+        use_reset_mitigation: Whether the job was sampled with reset mitigation.
 
     Returns:
         Sampled bitstrings as a 2D bool array.
@@ -207,7 +250,7 @@ async def load_runtime_job(
     logger.info("Loading samples from Qiskit Runtime job %s.", job_id)
     client = runtime.credentials.get_client()
     pub_result = await client.get_primitive_result(job_id=job_id)
-    bool_array, num_shots = extract_bool_array(pub_result, circuit_params.use_reset_mitigation)
+    bool_array, num_shots = extract_bool_array(pub_result, use_reset_mitigation)
     await record_sampling_source(
         bool_array=bool_array,
         shots=num_shots,
@@ -226,13 +269,13 @@ async def load_runtime_job(
 )
 async def load_qrmi_result(
     work_dir: str,
-    circuit_params: CircuitParameters,
+    use_reset_mitigation: bool,
 ) -> np.ndarray:
     """Load the samples of a finished QRMI Slurm job from its job directory.
 
     Args:
         work_dir: QRMI job directory holding ``sampler_request.json`` and ``result.json``.
-        circuit_params: Circuit settings the job was sampled with (reset mitigation).
+        use_reset_mitigation: Whether the job was sampled with reset mitigation.
 
     Returns:
         Sampled bitstrings as a 2D bool array.
@@ -253,7 +296,7 @@ async def load_qrmi_result(
     if isinstance(registers, dict):
         registers = [registers]
     pub_result = decode_result(result_path, request["shots"], registers)
-    bool_array, num_shots = extract_bool_array(pub_result, circuit_params.use_reset_mitigation)
+    bool_array, num_shots = extract_bool_array(pub_result, use_reset_mitigation)
     await record_sampling_source(
         bool_array=bool_array,
         shots=num_shots,

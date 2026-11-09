@@ -40,9 +40,9 @@ def prepare_sampler_circuit(circuit, *, transpile_config: dict) -> PreparedCircu
 def make_qrmi_runtime(block_runtime: QrmiRuntime, transpile_config: dict) -> QrmiRuntime:
     """Replace the hooks of a ``QrmiRuntimeBlock`` runtime with the SQD ones.
 
-    The block holds where to sample (scheduler, resource, Slurm blocks or IQP
-    settings). The preparation, the compilation hook and its configuration come
-    from the workflow's circuit parameters, so the block's ``transpiler`` and
+    The block holds where to sample (scheduler, instance, backend, Slurm blocks or
+    IQP settings). The preparation, the compilation hook and its configuration come
+    from the workflow's settings, so the block's ``transpiler`` and
     ``transpile_config`` are replaced.
     """
     return dataclasses.replace(

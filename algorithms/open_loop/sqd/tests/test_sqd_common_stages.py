@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from qrmi_stubs import QrmiBlockStub
 
 for _mod in ("ffsim", "prefect_qiskit", "pydantic_numpy", "pyscf", "qiskit_addon_sqd"):
     pytest.importorskip(_mod)
@@ -19,7 +20,8 @@ from qiskit.primitives import PrimitiveResult, SamplerPubResult  # noqa: E402
 from qiskit.primitives.containers import BitArray, DataBin  # noqa: E402
 from qiskit_addon_sqd.fermion import SCIResult, solve_fermion  # noqa: E402
 from qiskit_ibm_runtime import RuntimeEncoder  # noqa: E402
-from sqd_common import flow_params, lucj, postprocess, sampling  # noqa: E402
+from sqd_common import advanced as advanced_mod  # noqa: E402
+from sqd_common import flow_params, lucj, postprocess, recovery, sampling, topology  # noqa: E402
 
 LOGGER = logging.getLogger("sqd_common.test")
 LIH = "Li 0 0 0; H 0 0 1.6"
@@ -27,7 +29,7 @@ LIH = "Li 0 0 0; H 0 0 1.6"
 
 @pytest.fixture(autouse=True)
 def offline(monkeypatch):
-    for module in (chem, lucj, sampling, postprocess):
+    for module in (chem, lucj, sampling, postprocess, topology):
         monkeypatch.setattr(module, "get_run_logger", lambda: LOGGER)
     artifacts = []
 
@@ -66,15 +68,17 @@ def _flow_parameters(**sampling_kwargs):
 
 def test_flow_parameters_defaults():
     params = _flow_parameters()
-    assert params.molecule.ccsd_maxiter == 4
-    assert params.molecule.spin_sq == 0.0
-    assert params.circuit.compress is True and params.circuit.compress_maxiter == 20
-    assert params.circuit.configure_transpiler is False
+    assert params.molecule.spin_sq is None
+    assert params.circuit.compress is True and params.circuit.compress_maxiter == 50
     assert params.sampling.quantum_source == "real-device"
-    assert params.sampling.shots == 10_000
+    assert params.sampling.shots == 100_000
     assert params.sampling.runtime_block_name == "qrmi-runtime"
     assert params.sampling.runner_name == "ibm-runner"
-    assert params.solver_block_ref == "fulqrum_solver_job/sqd-fulqrum-solver"
+    assert params.advanced_block_name == "sqd-advanced-settings"
+    assert params.solver_block_ref is None
+    defaults = advanced_mod.AdvancedSettings()
+    assert defaults.solver_block_ref == "fulqrum_solver_job/sqd-fulqrum-solver"
+    assert (defaults.ccsd_maxiter, defaults.use_reset_mitigation) == (10, False)
 
 
 def test_flow_parameters_parse_fcidump_molecule():
@@ -89,8 +93,8 @@ def test_flow_parameters_parse_fcidump_molecule():
     assert params.molecule.spin_sq is None
 
 
-def test_removed_solver_block_name_points_to_solver_block_ref():
-    with pytest.raises(ValidationError, match="fulqrum_solver_job/my-solver"):
+def test_removed_solver_block_name_points_to_the_advanced_block():
+    with pytest.raises(ValidationError, match="Solver Block in the Advanced SQD Settings"):
         flow_params.FlowParameters.model_validate(
             {
                 "molecule": {"fcidump_file": "/data/n2.fcidump"},
@@ -106,7 +110,8 @@ def test_removed_solver_block_name_points_to_solver_block_ref():
         ({"qiskit_runtime_job_id": "j", "qrmi_result_dir": "/d"}, "at most one"),
         ({"quantum_source": "random", "qiskit_runtime_job_id": "j"}, "random"),
         ({"quantum_source": "random", "qrmi_result_dir": "/d"}, "random"),
-        ({"qrmi_runtime_config": {}}, "runtime_block_name"),
+        # An empty value is a hidden key of an old run form and is ignored; a set one fails.
+        ({"qrmi_runtime_config": {"resource": "ibm_kingston"}}, "runtime_block_name"),
         ({"sampler_options": {"params": {"shots": 5}}}, "only the Shots parameter"),
     ],
 )
@@ -118,16 +123,11 @@ def test_sampling_parameters_reject_conflicts(kwargs, match):
 def test_only_the_molecule_is_needed():
     params = flow_params.FlowParameters(molecule={"atom": LIH, "basis": "sto-3g"})
     sqd = params.sqd
-    assert (sqd.subspace_dim, sqd.num_batches, sqd.max_iterations) == (90_000, 4, 5)
+    assert (sqd.subspace_dim, sqd.num_batches, sqd.max_iterations) == (1_000_000, 4, 5)
 
 
-def test_transpiler_settings_apply_only_when_configured():
-    custom = flow_params.TranspilerParameters(sabre_layout_trials=7, optimization_level=1)
-    off = flow_params.CircuitParameters(transpiler=custom)
-    on = flow_params.CircuitParameters(configure_transpiler=True, transpiler=custom)
-    assert off.transpile_options == flow_params.TranspilerParameters()
-    assert on.transpile_options == custom
-    options = lucj.circuit_transpile_options(off, 5)
+def test_transpiler_options_come_from_the_advanced_settings():
+    options = lucj.circuit_transpile_options(advanced_mod.AdvancedSettings(), 5)
     assert options == {
         "optimization_level": 3,
         "seed_transpiler": 5,
@@ -135,20 +135,27 @@ def test_transpiler_settings_apply_only_when_configured():
         "sabre_layout_trials": 10000,
         "sabre_swap_trials": 10,
     }
-    assert lucj.circuit_transpile_options(on, 5)["sabre_layout_trials"] == 7
+    custom = advanced_mod.AdvancedSettings(sabre_layout_trials=7, optimization_level=1)
+    assert lucj.circuit_transpile_options(custom, 5)["sabre_layout_trials"] == 7
 
 
 @pytest.mark.parametrize(
-    "circuit, match",
+    "model, data, match",
     [
-        ({"max_ab_pairs": 2}, "max_ab_pairs was removed"),
-        ({"sabre_layout_trials": 10}, "circuit.transpiler.sabre_layout_trials"),
-        ({"optimization_level": 1}, "configure_transpiler = true"),
+        (flow_params.CircuitParameters, {"max_ab_pairs": 2}, "max_ab_pairs was removed"),
+        (flow_params.CircuitParameters, {"use_reset_mitigation": True}, "Advanced SQD Settings"),
+        (
+            flow_params.CircuitParameters,
+            {"configure_transpiler": True, "transpiler": {"sabre_layout_trials": 7}},
+            "circuit.configure_transpiler moved to the Advanced SQD Settings",
+        ),
+        (flow_params.CircuitParameters, {"sabre_layout_trials": 10}, "Advanced SQD Settings"),
+        (flow_params.FCIDumpFile, {"fcidump_file": "/x", "ccsd_maxiter": 2}, "molecule.ccsd"),
     ],
 )
-def test_circuit_parameters_reject_moved_fields(circuit, match):
+def test_moved_fields_point_to_the_advanced_block(model, data, match):
     with pytest.raises(ValidationError, match=match):
-        flow_params.CircuitParameters(**circuit)
+        model(**data)
 
 
 def test_stale_run_form_keys_left_at_their_defaults_are_ignored():
@@ -163,9 +170,20 @@ def test_stale_run_form_keys_left_at_their_defaults_are_ignored():
             "sabre_swap_trials": 10,
             "sabre_max_iterations": 8,
             "configure_transpiler": False,
+            "use_reset_mitigation": False,
         }
     )
-    assert circuit.transpile_options == flow_params.TranspilerParameters()
+    assert circuit.compress is True
+    molecule = flow_params.MoleculeGeometry(atom=LIH, ccsd_maxiter=4)
+    assert "ccsd_maxiter" not in molecule.model_dump()
+    params = flow_params.FlowParameters.model_validate(
+        {
+            "molecule": {"fcidump_file": "/x"},
+            "solver_block_ref": "fulqrum_solver_job/sqd-fulqrum-solver",
+        }
+    )
+    # The old default of the form never overrides the block's Solver Block.
+    assert params.solver_block_ref is None
     sampling = flow_params.SamplingParameters(qrmi_runtime_config=None, sampler_options={})
     assert sampling.quantum_source == "real-device"
 
@@ -186,7 +204,6 @@ def test_run_form_follows_the_qiskit_patterns_order():
         "MoleculeGeometry",
         "FCIDumpFile",
         "CircuitParameters",
-        "TranspilerParameters",
         "SamplingParameters",
         "SQDParameters",
     ):
@@ -198,14 +215,15 @@ def test_run_form_follows_the_qiskit_patterns_order():
         "circuit",
         "sampling",
         "sqd",
+        "advanced_block_name",
         "solver_block_ref",
     ]
-    assert _form_order(schema, "CircuitParameters")[-2:] == ["configure_transpiler", "transpiler"]
+    assert _form_order(schema, "CircuitParameters")[-1] == "qpu_topology"
     assert _form_order(schema, "SamplingParameters")[:2] == ["quantum_source", "shots"]
     sqd_schema = schema["definitions"]["SQDParameters"]
     # Defaulted, but marked required so the form highlights them.
     assert {"subspace_dim", "num_batches", "max_iterations"} <= set(sqd_schema["required"])
-    assert sqd_schema["properties"]["subspace_dim"]["default"] == 90_000
+    assert sqd_schema["properties"]["subspace_dim"]["default"] == 1_000_000
 
 
 # ---------------------------------------------------------------- Optimize
@@ -217,16 +235,21 @@ def test_interaction_pairs_heavy_hex():
     assert ab == [(0, 0), (4, 4), (8, 8)]
     # At most five alpha-beta pairs, from orbital 0.
     assert lucj.interaction_pairs(40)[1] == [(p, p) for p in range(0, 20, 4)]
+    assert lucj.MAX_AB_PAIRS == 5
 
 
-def test_get_lucj_params_matches_ffsim(lih):
+@pytest.mark.parametrize("qpu_topology", ["heavy-hex", "square"])
+def test_get_lucj_params_matches_ffsim(lih, qpu_topology):
     import ffsim
 
-    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(n_lucj_layers=2), lih)
+    # Without compression, the parameters are ffsim's own truncated factorization.
+    circuit_params = flow_params.CircuitParameters(n_lucj_layers=2, compress=False)
+    params = lucj.get_lucj_params.fn(circuit_params, lih, qpu_topology)
     ref = ffsim.UCJOpSpinBalanced.from_t_amplitudes(
-        lih.t2, n_reps=2, interaction_pairs=lucj.interaction_pairs(lih.num_orbitals)
+        lih.t2, n_reps=2, interaction_pairs=lucj.interaction_pairs(lih.num_orbitals, qpu_topology)
     )
     assert params.norb == lih.num_orbitals and params.nelec == lih.num_electrons
+    assert params.qpu_topology == qpu_topology
     np.testing.assert_allclose(params.diag_coulomb_mats, ref.diag_coulomb_mats)
     np.testing.assert_allclose(params.orbital_rotations, ref.orbital_rotations)
     assert params.diag_coulomb_mats.shape == (2, 2, lih.num_orbitals, lih.num_orbitals)
@@ -235,7 +258,7 @@ def test_get_lucj_params_matches_ffsim(lih):
 def test_get_lucj_params_compression_logs_iterations(lih, caplog):
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
         params = lucj.get_lucj_params.fn(
-            flow_params.CircuitParameters(compress=True, compress_maxiter=3), lih
+            flow_params.CircuitParameters(compress=True, compress_maxiter=3), lih, "heavy-hex"
         )
     assert "Compression iteration 1" in caplog.text
     assert params.orbital_rotations.dtype == np.complex128
@@ -244,17 +267,54 @@ def test_get_lucj_params_compression_logs_iterations(lih, caplog):
 def test_lucj_parameters_round_trip_through_pickle(lih):
     import pickle
 
-    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih)
+    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "square")
     restored = pickle.loads(pickle.dumps(params))
     np.testing.assert_array_equal(restored.diag_coulomb_mats, params.diag_coulomb_mats)
+    assert restored.qpu_topology == "square"
+
+
+def test_lucj_parameters_keep_the_imaginary_parts_in_json(lih):
+    """The JSON form, which Prefect hashes for cache keys, keeps complex values exactly."""
+    import warnings
+
+    from prefect.utilities.hashing import hash_objects
+
+    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "square")
+    assert np.abs(params.orbital_rotations.imag).max() > 0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # no ComplexWarning
+        text = params.model_dump_json()
+    restored = lucj.LUCJParameters.model_validate_json(text)
+    np.testing.assert_array_equal(restored.orbital_rotations, params.orbital_rotations)
+    assert restored.orbital_rotations.dtype == np.complex128
+    conjugate = params.model_copy(update={"orbital_rotations": params.orbital_rotations.conj()})
+    assert params.model_dump(mode="json") != conjugate.model_dump(mode="json")
+    assert hash_objects(params) != hash_objects(conjugate)
+
+
+def test_get_lucj_params_cache_key_depends_on_the_topology(lih):
+    """The persisted Optimize result of one topology is never reused for another."""
+    from prefect.cache_policies import DEFAULT
+    from prefect.utilities.callables import get_call_parameters
+
+    task = lucj.get_lucj_params
+    assert task.cache_policy == DEFAULT
+    # The default policy reads only the task and the flow run ID from the run context.
+    context = SimpleNamespace(task=task, task_run=SimpleNamespace(flow_run_id="run"))
+
+    def key(qpu_topology):
+        args = (flow_params.CircuitParameters(), lih, qpu_topology)
+        inputs = get_call_parameters(task.fn, args, {})
+        return task.cache_policy.compute_key(context, inputs, flow_parameters={})
+
+    assert key("heavy-hex") == key("heavy-hex")
+    assert key("heavy-hex") != key("square")
 
 
 @pytest.mark.parametrize("reset", [False, True])
 def test_build_lucj_circuit_registers(lih, reset):
-    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih)
-    circuit = lucj.build_lucj_circuit.fn(
-        params, flow_params.CircuitParameters(use_reset_mitigation=reset)
-    )
+    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "heavy-hex")
+    circuit = lucj.build_lucj_circuit.fn(params, use_reset_mitigation=reset)
     names = [reg.name for reg in circuit.cregs]
     assert names == (["meas", "test"] if reset else ["meas"])
     assert circuit.num_qubits == 2 * lih.num_orbitals
@@ -354,28 +414,26 @@ def test_sampling_uses_the_qrmi_block_with_the_sqd_hooks(monkeypatch, lih, offli
 
     async def load(name):
         calls["block"] = name
-        return runtime
+        return QrmiBlockStub(runtime)
 
-    monkeypatch.setattr(sampling, "_load_qrmi_runtime", load)
+    monkeypatch.setattr(sampling, "load_qrmi_block", load)
     monkeypatch.setattr(qrmi.dataclasses, "replace", lambda obj, **changes: obj.replace(**changes))
     monkeypatch.setattr(sampling, "build_lucj_circuit", lucj.build_lucj_circuit.fn)
-    circuit_params = flow_params.CircuitParameters(
-        configure_transpiler=True,
-        transpiler=flow_params.TranspilerParameters(sabre_layout_trials=7),
-    )
-    params = lucj.get_lucj_params.fn(circuit_params, lih)
+    advanced = advanced_mod.AdvancedSettings(sabre_layout_trials=7)
+    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "square")
     sampling_params = flow_params.SamplingParameters(shots=4, runtime_block_name="my-qrmi")
-    bool_array = asyncio.run(sampling.quantum_sampling.fn(params, circuit_params, sampling_params))
+    bool_array = asyncio.run(sampling.quantum_sampling.fn(params, advanced, sampling_params))
 
     assert calls["block"] == "my-qrmi" and calls["shots"] == 4
     hooks = calls["hooks"]
     assert hooks["transpiler"] == qrmi.TRANSPILER and hooks["transpile_config"] == {}
-    expected = lucj.circuit_transpile_options(circuit_params, np.random.default_rng(24))
+    expected = lucj.circuit_transpile_options(advanced, np.random.default_rng(24))
     assert hooks["prepare"].keywords == {"transpile_config": expected}
     assert expected["sabre_layout_trials"] == 7
     assert bool_array.shape == (4, 4)
     row = offline[0]["table"][0]
     assert row["source"] == f"qrmi-{scheduler}" and row["resource"] == "test_heron"
+    assert row["qpu_topology"] == "square"
     if scheduler == "iqp":
         assert row["qiskit_runtime_job_id"] == "d7" and row["qrmi_result_dir"] is None
     else:
@@ -388,12 +446,12 @@ def test_missing_runtime_block_explains_random_fallback(monkeypatch, lih):
     async def missing(name, prepare=None):
         raise ValueError(f"Unable to find block document named {name}")
 
-    monkeypatch.setattr(QrmiRuntimeBlock, "aload_runtime", staticmethod(missing))
-    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih)
+    monkeypatch.setattr(QrmiRuntimeBlock, "aload", staticmethod(missing))
+    params = lucj.get_lucj_params.fn(flow_params.CircuitParameters(), lih, "heavy-hex")
     with pytest.raises(RuntimeError, match="quantum_source='random'"):
         asyncio.run(
             sampling.quantum_sampling.fn(
-                params, flow_params.CircuitParameters(), flow_params.SamplingParameters()
+                params, advanced_mod.AdvancedSettings(), flow_params.SamplingParameters()
             )
         )
 
@@ -417,15 +475,15 @@ def test_load_runtime_job_reads_the_job_result(monkeypatch, offline, reset):
 
     monkeypatch.setattr(sampling.QuantumRuntime, "load", staticmethod(load))
     bool_array = asyncio.run(
-        sampling.load_runtime_job.fn(
-            "d123", "ibm-runner", flow_params.CircuitParameters(use_reset_mitigation=reset)
-        )
+        sampling.load_runtime_job.fn("d123", "ibm-runner", use_reset_mitigation=reset)
     )
     assert seen == ["d123"]
     assert len(bool_array) == (2 if reset else 4)
     row = offline[0]["table"][0]
     assert row["qiskit_runtime_job_id"] == "d123" and row["shots"] == 4
     assert row["shots_kept"] == len(bool_array)
+    # A reload builds no circuit, so it records no topology.
+    assert row["qpu_topology"] is None
 
 
 def _qrmi_job_dir(tmp_path, reset, schema=2):
@@ -447,11 +505,7 @@ def _qrmi_job_dir(tmp_path, reset, schema=2):
 @pytest.mark.parametrize("reset", [False, True])
 def test_load_qrmi_result_decodes_the_job_directory(tmp_path, offline, reset, schema):
     job_dir = _qrmi_job_dir(tmp_path, reset, schema)
-    bool_array = asyncio.run(
-        sampling.load_qrmi_result.fn(
-            str(job_dir), flow_params.CircuitParameters(use_reset_mitigation=reset)
-        )
-    )
+    bool_array = asyncio.run(sampling.load_qrmi_result.fn(str(job_dir), use_reset_mitigation=reset))
     assert BitArray.from_bool_array(bool_array).get_bitstrings() == (
         ["0101", "1001"] if reset else ["0101", "0110", "1001", "1010"]
     )
@@ -462,16 +516,12 @@ def test_load_qrmi_result_decodes_the_job_directory(tmp_path, offline, reset, sc
 def test_load_qrmi_result_rejects_reset_on_a_job_without_test_register(tmp_path):
     job_dir = _qrmi_job_dir(tmp_path, reset=False)
     with pytest.raises(ValueError, match="no 'test' register"):
-        asyncio.run(
-            sampling.load_qrmi_result.fn(
-                str(job_dir), flow_params.CircuitParameters(use_reset_mitigation=True)
-            )
-        )
+        asyncio.run(sampling.load_qrmi_result.fn(str(job_dir), use_reset_mitigation=True))
 
 
 def test_load_qrmi_result_requires_result_file(tmp_path):
     with pytest.raises(FileNotFoundError, match="sampler_request.json"):
-        asyncio.run(sampling.load_qrmi_result.fn(str(tmp_path), flow_params.CircuitParameters()))
+        asyncio.run(sampling.load_qrmi_result.fn(str(tmp_path), use_reset_mitigation=False))
 
 
 # ---------------------------------------------------------------- Post-process
@@ -519,7 +569,7 @@ def test_sqd_loop_diagonalizes_with_the_solver_block(lih, offline, tmp_path):
     assert artifact["key"] == "my-artifact"
     assert checkpoint["key"] == postprocess.CHECKPOINT_ARTIFACT_KEY
     assert checkpoint["table"][0]["checkpoint"].startswith(str(tmp_path))
-    assert [row["round"] for row in artifact["table"]] == [0, 0, 1, 1]
+    assert [row["round"] for row in artifact["table"]] == [1, 1, 2, 2]
     assert energy == pytest.approx(min(row["energy"] for row in artifact["table"]))
     # LiH/STO-3G: SQD is variational, a few mHa above FCI (-7.882 Ha) at most here.
     assert -7.8825 < energy < -7.80
@@ -571,13 +621,15 @@ def _ckpt(path):
 
 
 def test_retry_resumes_after_the_last_completed_round(ckpt_run):
-    with pytest.raises(_Crash):
+    # A crashed solver job fails its whole round, naming the crash as the cause.
+    with pytest.raises(recovery.RoundFailedError, match="iteration 3 failed") as info:
         ckpt_run("run-a", _CrashingSolve(crash_at=4), max_iterations=4)
+    assert isinstance(info.value.__cause__, _Crash)
     assert _ckpt(ckpt_run.root / "run-a")[0] == 2
 
     energy, solver, artifacts = ckpt_run("run-a", max_iterations=4)
     assert len(solver.calls) == 4  # rounds 3 and 4 only
-    assert [row["round"] for row in artifacts["recovery"]] == [2, 2, 3, 3]
+    assert [row["round"] for row in artifacts["recovery"]] == [3, 3, 4, 4]
     assert _ckpt(ckpt_run.root / "run-a") == (4, pytest.approx(energy))
     (row,) = artifacts[postprocess.CHECKPOINT_ARTIFACT_KEY]
     assert row["completed_iterations"] == 4 and row["resumed_from"] is None
@@ -591,7 +643,7 @@ def test_resume_checkpoint_continues_another_run_with_more_rounds(ckpt_run):
 
     energy, solver, artifacts = ckpt_run("run-b", max_iterations=5, resume_checkpoint=given)
     assert len(solver.calls) == 6  # rounds 3 to 5
-    assert [row["round"] for row in artifacts["recovery"]] == [2, 2, 3, 3, 4, 4]
+    assert [row["round"] for row in artifacts["recovery"]] == [3, 3, 4, 4, 5, 5]
     assert energy <= first
     assert (ckpt_run.root / "run-a" / "ckpt_t00_w0.npz").read_bytes() == before
     assert _ckpt(ckpt_run.root / "run-b")[0] == 5
@@ -609,7 +661,7 @@ def test_resume_checkpoint_accepts_the_folder(ckpt_run):
 def test_a_retry_before_the_first_new_round_still_resumes(ckpt_run):
     ckpt_run("run-a", max_iterations=2)
     given = str(ckpt_run.root / "run-a")
-    with pytest.raises(_Crash):
+    with pytest.raises(recovery.RoundFailedError):
         ckpt_run("run-b", _CrashingSolve(crash_at=0), max_iterations=4, resume_checkpoint=given)
     assert _ckpt(ckpt_run.root / "run-b")[0] == 2
     # The retry of run-b finds its own copy, even without resume_checkpoint.

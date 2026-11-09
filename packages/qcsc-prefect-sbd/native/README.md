@@ -22,9 +22,15 @@ The Python-facing input/output files, including determinant byte order and carry
 padding, are unchanged. The native compatibility tests cover MPI broadcast, energy,
 occupancies and the carryover round trip with a small analytic Hamiltonian.
 
-The Python wrapper explicitly passes `--carryover_type 1`; upstream defaults to type
-0, which produces no carryover even when `--carryover_ratio` is set. User arguments
-are appended afterward and can override the carryover type intentionally.
+The Python wrapper passes `--carryover_type` from the `SBDSolverJob.carryover_type`
+field, 1 by default; upstream defaults to type 0, which produces no carryover even when
+`--carryover_ratio` is set. User arguments are appended afterward and can override it.
+
+The driver reads `fcidump.txt` and `AlphaDets.bin` unless `--fcidump` or `--adetfile`
+name other files. With `--bdetfile` it reads a separate beta determinant set (open shell);
+without it the beta set is the alpha set. GPU builds (`-DSBD_THRUST` with a CUDA
+compiler) bind each rank to GPU `node-local rank % GPU count`, from `SLURM_LOCALID` or
+`OMPI_COMM_WORLD_LOCAL_RANK`, before `MPI_Init`.
 
 After building the CPU executable, run them with:
 
@@ -43,8 +49,22 @@ The modified program generates the following output files:
 - `occ_a.txt`: Average occupancies of alpha orbitals
 - `occ_b.txt`: Average occupancies of beta orbitals
 - `carryover.bin`: Carryover bitstrings in `uint8` format with big-endian ordering
+- `carryover_b.bin`: Beta carryover bitstrings in the same format, only with `--bdetfile`
 
 These files are consumed by the Prefect integration block to construct a corresponding Python data class.
+
+## Building the Executable on a Slurm Cluster
+
+For a generic Slurm cluster with an MPI C++ wrapper (`mpicxx` or `mpic++`) and OpenBLAS,
+run:
+
+```bash
+bash ./build_sbd_slurm.sh
+```
+
+It produces `packages/qcsc-prefect-sbd/native/diag`. Launch it with `srun --mpi=pmix`
+(match the PMI plugin of your Slurm and MPI), as the `slurm` profile of the open-loop SQD
+workflow does with 4 ranks and 1 thread each.
 
 ## Building the Executable on Miyabi
 
@@ -103,10 +123,12 @@ Upon successful compilation, an executable named `diag` will be created in this 
 packages/qcsc-prefect-sbd/native/diag
 ```
 
-Set the absolute path to this executable in the SBD block configuration file:
+`build_sbd.sh` and `build_sbd_slurm.sh` write the same path. Set the absolute path to this
+executable in the SBD block configuration file:
 
 ```toml
-# algorithms/closed_loop/sqd_de/sbd_blocks.toml (or the block config of another algorithm)
+# algorithms/open_loop/sqd/sqd_blocks.toml, in its [sbd] table
+# (or algorithms/closed_loop/sqd_de/sbd_blocks.toml, or the block config of another algorithm)
 sbd_executable = "/abs/path/to/qcsc-prefect/packages/qcsc-prefect-sbd/native/diag"
 ```
 

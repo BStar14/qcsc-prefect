@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,7 @@ from qcsc_prefect_adapters.slurm import runtime as runtime_mod
 def test_submit_parses_job_id(tmp_path: Path, monkeypatch):
     calls: list[tuple[tuple[str, ...], Path | None]] = []
 
-    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+    async def fake_run_command(*args: str, cwd: Path | None = None, env=None) -> str:
         calls.append((args, cwd))
         return "12345;cluster-a\n"
 
@@ -25,7 +26,7 @@ def test_submit_parses_job_id(tmp_path: Path, monkeypatch):
 
 
 def test_wait_final_status_parses_sacct_output(monkeypatch):
-    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+    async def fake_run_command(*args: str, cwd: Path | None = None, env=None) -> str:
         if args[0] == "scontrol":
             return ""
         return (
@@ -54,7 +55,7 @@ def test_wait_final_status_without_accounting(monkeypatch, terminal_state, exit_
     states = iter(["PENDING", "RUNNING", terminal_state])
     calls: list[tuple[str, ...]] = []
 
-    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+    async def fake_run_command(*args: str, cwd: Path | None = None, env=None) -> str:
         calls.append(args)
         if args[0] == "sacct":
             raise RuntimeError("Slurm accounting storage is disabled")
@@ -82,7 +83,7 @@ def test_wait_final_status_without_accounting(monkeypatch, terminal_state, exit_
 
 
 def test_wait_final_status_times_out_without_accounting(monkeypatch):
-    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+    async def fake_run_command(*args: str, cwd: Path | None = None, env=None) -> str:
         assert args[0] == "scontrol"
         return "JobId=12345 JobState=PENDING ExitCode=0:0\n"
 
@@ -98,7 +99,7 @@ def test_wait_final_status_times_out_without_accounting(monkeypatch):
 def test_cancel_invokes_scancel(monkeypatch):
     calls: list[tuple[str, ...]] = []
 
-    async def fake_run_command(*args: str, cwd: Path | None = None) -> str:
+    async def fake_run_command(*args: str, cwd: Path | None = None, env=None) -> str:
         calls.append(args)
         return ""
 
@@ -156,3 +157,44 @@ def test_transient_scheduler_failures_are_retried(monkeypatch):
     )
     assert status["State"] == "COMPLETED"
     assert calls == ["scontrol", "sacct", "scontrol"]
+
+
+def test_submit_env_reaches_sbatch_only(monkeypatch, tmp_path: Path):
+    seen = {}
+
+    async def fake_run_command(*args: str, cwd: Path | None = None, env=None) -> str:
+        seen.update(args=args, env=env)
+        return "42"
+
+    monkeypatch.setattr(runtime_mod, "run_command", fake_run_command)
+    script = tmp_path / "job.slurm"
+    script.write_text("#!/bin/bash\n")
+    env = {"ibm_test_QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:x"}
+    asyncio.run(runtime_mod.SlurmRuntime().submit(script, cwd=tmp_path, env=env))
+    assert seen["env"] == env
+    assert "crn:v1:x" not in " ".join(seen["args"]) and "crn:v1:x" not in script.read_text()
+
+
+def test_run_command_merges_the_extra_environment(tmp_path: Path):
+    out = asyncio.run(
+        runtime_mod.run_command(
+            sys.executable,
+            "-c",
+            "import os; print(os.environ['QCSC_TEST_VAR'], 'PATH' in os.environ)",
+            env={"QCSC_TEST_VAR": "here"},
+        )
+    )
+    assert out.split() == ["here", "True"]
+
+
+def test_run_command_removes_a_variable_set_to_none(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("QCSC_TEST_SECRET", "hidden")
+    out = asyncio.run(
+        runtime_mod.run_command(
+            sys.executable,
+            "-c",
+            "import os; print(os.environ.get('QCSC_TEST_SECRET', 'unset'))",
+            env={"QCSC_TEST_SECRET": None},
+        )
+    )
+    assert out.strip() == "unset"

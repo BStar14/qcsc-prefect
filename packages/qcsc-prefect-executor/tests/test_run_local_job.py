@@ -26,7 +26,7 @@ class _LoggerStub:
         self.error_lines.append(message)
 
 
-@pytest.mark.parametrize("exit_status, level", [(0, "warning"), (1, "error")])
+@pytest.mark.parametrize("exit_status, level", [(0, "info"), (1, "error")])
 def test_run_local_job_logs_stderr_as_error_only_on_failure(
     tmp_path: Path, monkeypatch, exit_status, level
 ):
@@ -54,7 +54,10 @@ def test_run_local_job_logs_stderr_as_error_only_on_failure(
     )
 
     assert result.exit_status == exit_status
-    assert logger.info_lines == ["out"]
-    assert getattr(logger, f"{level}_lines") == ["INFO progress"]
-    other = "error" if level == "warning" else "warning"
-    assert getattr(logger, f"{other}_lines") == []
+    if level == "info":
+        # A successful job's progress is info, and nothing is a warning.
+        assert logger.info_lines == ["out", "INFO progress"]
+    else:
+        assert logger.info_lines == ["out"]
+        assert logger.error_lines == ["INFO progress"]
+    assert logger.warning_lines == []

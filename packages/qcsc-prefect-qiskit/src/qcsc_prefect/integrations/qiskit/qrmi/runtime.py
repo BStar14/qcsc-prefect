@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -16,7 +17,13 @@ from prefect.logging import get_run_logger
 from qiskit import QuantumCircuit, qpy
 from qiskit.primitives import PrimitiveResult
 
-from .contract import SCHEMA_VERSION, circuit_registers, decode_result, resolve_shots
+from .contract import (
+    SCHEMA_VERSION,
+    TASK_ENDED_FILE,
+    circuit_registers,
+    decode_result,
+    resolve_shots,
+)
 from .transpilation import preset_pass_manager_options
 
 DEFAULT_TRANSPILER = "qcsc_prefect.integrations.qiskit.qrmi.worker:generic_transpile"
@@ -31,6 +38,10 @@ async def run_job_from_blocks(**kwargs):
     from qcsc_prefect_executor.from_blocks import run_job_from_blocks as execute
 
     return await execute(**kwargs)
+
+
+class QrmiJobCancelled(RuntimeError):
+    """The QRMI job or its quantum task was cancelled, so there are no samples."""
 
 
 @dataclass
@@ -88,6 +99,12 @@ class QrmiRuntime:
     scheduler: Literal["slurm", "iqp"] = field(default="slurm", kw_only=True)
     # Credentials: kept out of repr so that logs and task parameters do not show them.
     resource_config: Mapping[str, str] | None = field(default=None, kw_only=True, repr=False)
+    # Slurm only: QRMI settings without the "<resource>_" prefix (never the API key), passed
+    # to sbatch's environment so that SPANK reads them over qrmi_config.json.
+    job_settings: Mapping[str, str] | None = field(default=None, kw_only=True)
+    # Slurm only: request ``resource`` as the job's --qpu. Off only for tests without a
+    # QPU, which then follow the HPC profile's slurm_qpu.
+    request_qpu: bool = field(default=True, kw_only=True)
 
     def __post_init__(self) -> None:
         self._validate_scheduler()
@@ -102,8 +119,16 @@ class QrmiRuntime:
                     'resource_config is only used by scheduler="iqp"; Slurm compute nodes '
                     "read QRMI settings from their own environment"
                 )
+            secret = sorted(key for key in self.job_settings or {} if "APIKEY" in key)
+            if secret:
+                raise ValueError(
+                    f"job_settings must not contain {', '.join(secret)}: the Slurm job "
+                    "environment is stored with the job"
+                )
         elif self.scheduler == "iqp":
             extra = [name for name in SLURM_FIELDS if getattr(self, name)]
+            if self.job_settings:
+                extra.append("job_settings")
             if extra:
                 raise ValueError(f'scheduler="iqp" does not use {", ".join(extra)}')
             if not isinstance(self.resource_config, Mapping) or not self.resource_config:
@@ -163,6 +188,20 @@ class QrmiRuntime:
         return await _sample_on_slurm(prepared_circuits, shots, registers, configs, self)
 
 
+def _job_environment(runtime: QrmiRuntime) -> dict[str, str | None]:
+    """sbatch's environment changes: the job settings, and no API key of this process.
+
+    sbatch passes its environment to the job, and Slurm stores it with the job, so an
+    API key that this process holds (for example for IQP) is removed.
+    """
+    env: dict[str, str | None] = {
+        name: None for name in os.environ if name.endswith("QRMI_IBM_QCS_IAM_APIKEY")
+    }
+    for key, value in (runtime.job_settings or {}).items():
+        env[f"{runtime.resource}_{key}"] = value
+    return env
+
+
 @task(name="quantum-sampling-qrmi-slurm", retries=0, cache_policy=NO_CACHE, persist_result=False)
 async def _sample_on_slurm(circuits, shots, registers, configs, runtime) -> PrimitiveResult:
     work_dir = Path(runtime.root_dir).expanduser().resolve() / uuid4().hex
@@ -185,13 +224,19 @@ async def _sample_on_slurm(circuits, shots, registers, configs, runtime) -> Prim
         work_dir=work_dir,
         script_filename="sampler.slurm",
         user_args=["--request", "sampler_request.json"],
+        # The job requests the runtime's resource, which the worker checks.
+        slurm_qpu=runtime.resource if runtime.request_qpu else None,
+        submit_env=_job_environment(runtime),
         watch_poll_interval=runtime.watch_poll_interval,
         timeout_seconds=runtime.timeout_seconds,
         metrics_artifact_key="qrmi-slurm-job",
     )
+    # The executor cancels the Slurm job (scancel) and returns no status when the wait
+    # is cancelled, for example when the flow run is cancelled in Prefect.
+    cancelled = not job.state and not getattr(job, "job_status", None)
     record = {
         "job_id": job.job_id,
-        "state": job.state,
+        "state": "CANCELLED" if cancelled else job.state,
         "exit_status": job.exit_status,
         "work_dir": str(work_dir),
         "resource": runtime.resource,
@@ -199,8 +244,20 @@ async def _sample_on_slurm(circuits, shots, registers, configs, runtime) -> Prim
         "transpiler": runtime.transpiler,
     }
     (work_dir / "slurm_job.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+    if cancelled:
+        raise QrmiJobCancelled(
+            f"QRMI Slurm job {job.job_id} was cancelled with the run; Slurm stopped it, and its "
+            f"quantum task with it. Job directory: {work_dir}"
+        )
+    ended = work_dir / TASK_ENDED_FILE
+    if ended.is_file():
+        # The worker found the quantum task ended without a result, e.g. cancelled on IBM.
+        raise QrmiJobCancelled(f"{ended.read_text(encoding='utf-8').strip()} Job: {work_dir}")
     if job.state != "COMPLETED" or job.exit_status != 0:
-        raise RuntimeError(f"QRMI Slurm job {job.job_id} failed; see {work_dir}")
+        raise RuntimeError(
+            f"QRMI Slurm job {job.job_id} ended with state {job.state or 'unknown'} and exit "
+            f"status {job.exit_status}; see {work_dir}/output.err"
+        )
     result_path = work_dir / "result.json"
     if not result_path.is_file():
         raise RuntimeError(f"QRMI produced no result; see {work_dir}/output.err")

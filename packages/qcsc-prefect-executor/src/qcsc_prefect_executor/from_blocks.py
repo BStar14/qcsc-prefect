@@ -22,6 +22,7 @@ from qcsc_prefect_adapters.slurm.builder import SlurmJobRequest
 from qcsc_prefect_adapters.slurm.runtime import SlurmRuntime
 from qcsc_prefect_blocks.common.blocks import CommandBlock, ExecutionProfileBlock, HPCProfileBlock
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
+from qcsc_prefect_core.models.gpu_request import validate_gpu_request
 from qcsc_prefect_core.queue import QueueAwareSubmitGate, QueueProbe
 
 from qcsc_prefect_executor.bulk.exceptions import (
@@ -51,6 +52,7 @@ _EXECUTION_PROFILE_OVERRIDE_KEYS = {
     "mpiprocs",
     "ompthreads",
     "walltime",
+    "gpus_per_node",
     "launcher",
     "mpi_options",
     "modules",
@@ -167,6 +169,30 @@ async def resolve_submission_target(
     )
 
 
+async def check_gpu_request(
+    *,
+    hpc_profile_block_name: str,
+    execution_profile_block_name: str,
+) -> None:
+    """Check the GPU request of saved blocks without submitting a job.
+
+    A workflow calls this before it starts expensive stages, so a bad
+    ``gpus_per_node`` fails at once, not when its first job is built. The rules are
+    those of :func:`qcsc_prefect_core.models.gpu_request.validate_gpu_request`.
+
+    Raises:
+        ValueError: If the execution profile's GPU request does not fit the target.
+    """
+
+    hpc_block = await _load_block(HPCProfileBlock, hpc_profile_block_name)
+    execution_profile_block = await _load_block(ExecutionProfileBlock, execution_profile_block_name)
+    validate_gpu_request(
+        hpc_target=hpc_block.hpc_target,
+        resource_class=execution_profile_block.resource_class,
+        gpus_per_node=getattr(execution_profile_block, "gpus_per_node", None),
+    )
+
+
 def build_scheduler_script_filename(script_stem: str, hpc_target: str) -> str:
     """Build a scheduler-specific script filename from a logical stem.
 
@@ -235,6 +261,7 @@ def _build_execution_profile(
         "mpiprocs": execution_profile_block.mpiprocs,
         "ompthreads": execution_profile_block.ompthreads,
         "walltime": execution_profile_block.walltime,
+        "gpus_per_node": getattr(execution_profile_block, "gpus_per_node", None),
         "launcher": execution_profile_block.launcher,
         "mpi_options": list(execution_profile_block.mpi_options),
         "modules": list(execution_profile_block.modules),
@@ -519,6 +546,7 @@ async def _prepare_job_from_blocks(
     user_args: list[str] | None = None,
     fugaku_job_name: str | None = None,
     execution_profile_overrides: dict[str, Any] | None = None,
+    slurm_qpu: str | None = None,
 ) -> _PreparedBlockJob:
     command_block = await _load_block(CommandBlock, command_block_name)
     execution_profile_block = await _load_block(ExecutionProfileBlock, execution_profile_block_name)
@@ -559,6 +587,11 @@ async def _prepare_job_from_blocks(
         user_args=user_args,
         execution_profile_overrides=execution_profile_overrides,
     )
+    validate_gpu_request(
+        hpc_target=submission_target.hpc_target,
+        resource_class=execution_profile_block.resource_class,
+        gpus_per_node=exec_profile.gpus_per_node,
+    )
     resolved_work_dir = Path(work_dir).expanduser().resolve()
 
     if submission_target.hpc_target == "local":
@@ -587,7 +620,7 @@ async def _prepare_job_from_blocks(
             partition=submission_target.queue_name,
             account=submission_target.project or None,
             executable=executable,
-            qpu=hpc_block.slurm_qpu,
+            qpu=slurm_qpu or hpc_block.slurm_qpu,
             memory=getattr(hpc_block, "slurm_memory", None),
             ntasks=getattr(hpc_block, "slurm_ntasks", None),
             extra_directives=tuple(hpc_block.slurm_extra_directives),
@@ -1578,6 +1611,8 @@ async def run_job_from_blocks(
     metrics_artifact_key: str = "hpc-job-metrics",
     fugaku_job_name: str | None = None,
     execution_profile_overrides: dict[str, Any] | None = None,
+    slurm_qpu: str | None = None,
+    submit_env: dict[str, str] | None = None,
 ) -> Any:
     """Resolve Prefect blocks and execute a job on the configured target.
 
@@ -1606,6 +1641,11 @@ async def run_job_from_blocks(
             is derived from the command name.
         execution_profile_overrides: Optional runtime overrides for selected
             execution profile fields, such as ``num_nodes`` or ``walltime``.
+        slurm_qpu: Slurm only: ``--qpu`` resource for this job, instead of the HPC
+            profile's ``slurm_qpu``.
+        submit_env: Slurm only: extra environment variables for ``sbatch``. The
+            job and its SPANK plugins see them; the rendered script does not. A
+            value of None removes the variable from the environment sbatch inherits.
 
     Returns:
         A target-specific result object: ``LocalRunResult``,
@@ -1629,7 +1669,10 @@ async def run_job_from_blocks(
         user_args=user_args,
         fugaku_job_name=fugaku_job_name,
         execution_profile_overrides=execution_profile_overrides,
+        slurm_qpu=slurm_qpu,
     )
+    if (slurm_qpu or submit_env) and prepared.submission_target.hpc_target != "slurm":
+        raise ValueError("slurm_qpu and submit_env apply to hpc_target 'slurm' only.")
 
     if prepared.submission_target.hpc_target == "local":
         return await run_local_job(
@@ -1671,6 +1714,7 @@ async def run_job_from_blocks(
             watch_poll_interval=watch_poll_interval,
             timeout_seconds=timeout_seconds,
             metrics_artifact_key=metrics_artifact_key,
+            submit_env=submit_env,
         )
 
     raise NotImplementedError(

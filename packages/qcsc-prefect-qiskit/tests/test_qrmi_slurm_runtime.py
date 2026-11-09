@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import socket
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -582,8 +584,7 @@ def test_worker_compiles_each_pub_with_its_config_and_sends_one_payload(runtime,
     runtime.transpile_config = {"initial_layout": [1, 3], "seed_transpiler": 7}
     payloads = []
 
-    def fake_cli(command, check):
-        assert check is True
+    def fake_cli(command):
         parameters = json.loads(Path(command[2]).read_text())["parameters"]
         payloads.append(parameters)
         assert [pub[1:] for pub in parameters["pubs"]] == [[None, 4], [None, 4]]
@@ -600,13 +601,14 @@ def test_worker_compiles_each_pub_with_its_config_and_sends_one_payload(runtime,
         bits = {"narrow": "0", "wide": "1"}
         result = make_result(4, [{name: 2} for name in names], bits=[bits[n] for n in names])
         Path(command[3]).write_text(json.dumps(result, cls=RuntimeEncoder))
+        return "INFO Task ID: t1\n"
 
     async def submit(**kwargs):
         monkeypatch.chdir(kwargs["work_dir"])
         worker.main(kwargs["user_args"])
         return SimpleNamespace(job_id="73", state="COMPLETED", exit_status=0)
 
-    monkeypatch.setattr(worker.subprocess, "run", fake_cli)
+    monkeypatch.setattr(worker, "run_task_runner", fake_cli)
     monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
     result = asyncio.run(
         runtime.sampler([(bell_circuit("narrow"),), (bell_circuit("wide"),)], shots=4)
@@ -650,7 +652,7 @@ def test_worker_rejects_inconsistent_request_files(
     Path("transpile_config.json").write_text(json.dumps(configs))
     with Path("circuit.qpy").open("wb") as stream:
         qpy.dump([bell_circuit(), bell_circuit()], stream)
-    monkeypatch.setattr(worker.subprocess, "run", lambda *a, **k: pytest.fail("must not run"))
+    monkeypatch.setattr(worker, "run_task_runner", lambda *a, **k: pytest.fail("must not run"))
     with pytest.raises(ValueError, match=message):
         worker.main([])
 
@@ -694,8 +696,9 @@ def test_worker_validates_every_register_even_when_cli_exits_zero(tmp_path, monk
         Path("result.json").write_text(
             json.dumps(make_result(registers={"readout": 2}), cls=RuntimeEncoder)
         )
+        return ""
 
-    monkeypatch.setattr(worker.subprocess, "run", zero_exit_with_missing_test)
+    monkeypatch.setattr(worker, "run_task_runner", zero_exit_with_missing_test)
     with pytest.raises(RuntimeError, match="registers"):
         worker.execute_task_runner([measured_circuit()], 4, Path("task_runner"), "custom_resource")
 
@@ -841,3 +844,121 @@ from qcsc_prefect.integrations.qiskit.qrmi.worker import main
     src = Path(__file__).parents[1] / "src"
     env = {**os.environ, "PYTHONPATH": str(src)}
     subprocess.run([sys.executable, "-c", program], env=env, check=True, capture_output=True)
+
+
+def test_job_settings_go_to_the_sbatch_environment_not_the_files(runtime, submitted):
+    run = replace(
+        runtime,
+        resource="ibm_kingston",
+        job_settings={"QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:x", "QRMI_IBM_QCS_SESSION_MODE": "batch"},
+    )
+    asyncio.run(run.sampler([(measured_circuit(),)], shots=4))
+    (call,) = submitted
+    # SPANK reads the settings under the resource prefix; --qpu follows the resource.
+    assert call["submit_env"] == {
+        "ibm_kingston_QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:x",
+        "ibm_kingston_QRMI_IBM_QCS_SESSION_MODE": "batch",
+    }
+    assert call["slurm_qpu"] == "ibm_kingston"
+    job_dir = call["work_dir"]
+    for name in ("sampler_request.json", "transpile_config.json", "slurm_job.json"):
+        assert "crn:v1:x" not in (job_dir / name).read_text()
+
+
+def test_without_job_settings_the_submit_env_is_empty(runtime, submitted, monkeypatch):
+    for name in list(os.environ):
+        if name.endswith("QRMI_IBM_QCS_IAM_APIKEY"):
+            monkeypatch.delenv(name)
+    asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    assert submitted[0]["submit_env"] == {}
+    # --qpu is the resource that the request, the env prefix and the worker use.
+    assert submitted[0]["slurm_qpu"] == runtime.resource
+
+
+def test_the_workflow_api_key_is_removed_from_the_sbatch_environment(
+    runtime, submitted, monkeypatch
+):
+    monkeypatch.setenv("QRMI_IBM_QCS_IAM_APIKEY", "workflow-key")
+    monkeypatch.setenv("custom_resource_QRMI_IBM_QCS_IAM_APIKEY", "prefixed-key")
+    asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    env = submitted[0]["submit_env"]
+    assert env["QRMI_IBM_QCS_IAM_APIKEY"] is None
+    assert env["custom_resource_QRMI_IBM_QCS_IAM_APIKEY"] is None
+    assert "workflow-key" not in json.dumps(env)
+
+
+TASK_RUNNER_OUTPUT = {
+    # As task_runner logs it: it exits 0 and writes no result file.
+    "Cancelled": "2026-11-08 04:36:54,463 INFO Task ID: dbnvopg\n"
+    "2026-11-08 04:40:06,195 ERROR TaskStatus.Cancelled\n",
+    "Failed": "2026-11-08 04:36:54,463 INFO Task ID: dbnvopg\n"
+    "2026-11-08 04:40:06,195 ERROR TaskStatus.Failed\n",
+    "stopped": "2026-11-08 04:36:54,463 INFO Task ID: dbnvopg\n",
+}
+
+
+@pytest.mark.parametrize(
+    "case,message",
+    [
+        ("Cancelled", "Quantum task dbnvopg on custom_resource was cancelled on IBM Quantum"),
+        ("Failed", "Quantum task dbnvopg on custom_resource failed on IBM Quantum"),
+        ("stopped", "ended without a result"),
+    ],
+)
+def test_a_task_without_a_result_is_named_not_a_missing_file(tmp_path, monkeypatch, case, message):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(worker, "run_task_runner", lambda command: TASK_RUNNER_OUTPUT[case])
+    with pytest.raises(worker.QuantumTaskEnded, match=message):
+        worker.execute_task_runner([measured_circuit()], 4, Path("task_runner"), "custom_resource")
+
+
+def test_the_worker_exits_with_one_line_and_tells_the_host(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    def ended(argv=None):
+        raise worker.QuantumTaskEnded("Quantum task t1 on r was cancelled on IBM Quantum.")
+
+    monkeypatch.setattr(worker, "main", ended)
+    with pytest.raises(SystemExit) as exit_info:
+        worker.run()
+    assert exit_info.value.code == 3
+    err = capsys.readouterr().err
+    assert err == "qcsc-qrmi-sampler: Quantum task t1 on r was cancelled on IBM Quantum.\n"
+    assert (tmp_path / "task_ended.txt").read_text().startswith("Quantum task t1")
+
+
+def test_task_runner_output_reaches_the_job_log(tmp_path, capsys):
+    script = tmp_path / "fake_runner.py"
+    script.write_text(
+        "print('INFO Task ID: t9', flush=True)\nprint('ERROR TaskStatus.Cancelled')\n"
+    )
+    output = worker.run_task_runner([sys.executable, str(script)])
+    assert "TaskStatus.Cancelled" in output
+    assert "INFO Task ID: t9" in capsys.readouterr().out
+    script.write_text("import sys; sys.exit(2)\n")
+    with pytest.raises(subprocess.CalledProcessError):
+        worker.run_task_runner([sys.executable, str(script)])
+
+
+def test_the_host_reports_a_cancelled_job_or_task_in_one_line(runtime, monkeypatch):
+    async def cancelled_with_the_run(**kwargs):
+        # The executor scancels the job and returns no status when the wait is cancelled.
+        return SimpleNamespace(job_id="275", state="", exit_status=-1, job_status={})
+
+    monkeypatch.setattr(runtime_mod, "run_job_from_blocks", cancelled_with_the_run)
+    with pytest.raises(runtime_mod.QrmiJobCancelled, match="275 was cancelled with the run"):
+        asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    (work_dir,) = [p for p in runtime.root_dir.iterdir()]
+    assert json.loads((work_dir / "slurm_job.json").read_text())["state"] == "CANCELLED"
+
+    async def cancelled_on_ibm(**kwargs):
+        Path(kwargs["work_dir"], "task_ended.txt").write_text(
+            "Quantum task t1 on custom_resource was cancelled on IBM Quantum; no samples."
+        )
+        return SimpleNamespace(
+            job_id="274", state="FAILED", exit_status=3, job_status={"State": "FAILED"}
+        )
+
+    monkeypatch.setattr(runtime_mod, "run_job_from_blocks", cancelled_on_ibm)
+    with pytest.raises(runtime_mod.QrmiJobCancelled, match="^Quantum task t1 .* cancelled on IBM"):
+        asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))

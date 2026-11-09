@@ -7,21 +7,28 @@ the files described in :mod:`qcsc_prefect_fulqrum.io_utils`.
 Under a multi-process launcher (``srun``, ``mpirun``) every process runs this
 program. Every process reads the input and calls :func:`solve_fulqrum`, because a
 distributed solve is collective: all of them have to enter it. Only the control
-process (:func:`is_control_process`) touches the job directory or writes to
-stdout, so the processes cannot race on the result files. The process index
-comes from the launcher's environment, so no MPI library is needed to read it
-and the single-process path is unchanged.
+process (index 0) writes the results or to stdout, so the processes cannot race
+on the result files.
 
-The ``process_index`` / ``is_control_process`` names follow
+When the launcher starts more than one process and mpi4py is installed, the
+processes use ``MPI.COMM_WORLD``, whatever the solver backend: the process index
+is its rank, and every process learns whether all of them read the input before
+any of them solves. Otherwise the index comes from the launcher's environment
+(:func:`process_index`), so no MPI library is needed and the single-process path
+is unchanged. The ``process_index`` / ``is_control_process`` names follow
 ``qiskit_addon_sqd.processes`` (qiskit-addon-sqd 0.13 and later), but the
 detection does not: see :func:`process_index`.
 
-Exit codes: ``0`` success, ``1`` the solve failed (details in ``error.json``),
-``2`` usage error. A failing process returns ``1`` whether or not it is the
-control process, because the scheduler reports the job as failed only if the
-process it samples exited non-zero. A failure that only some processes hit is
-not handled here: one process failing inside a collective leaves the others
-waiting in it, which needs ``MPI_Abort`` or a communicator-wide check.
+Exit codes: ``0`` success, ``1`` the solve failed, ``2`` usage error. A failing
+process writes its own error file, ``error.json`` for index 0 and
+``error.rank<k>.json`` otherwise (:func:`io_utils.read_solver_error` reads them
+all), and returns ``1`` whether or not it is the control process, because the
+scheduler reports the job as failed only if the process it samples exited
+non-zero. Any error file fails the solve, so a failure of one process fails it
+even when the control process wrote a result. If a process cannot read the
+input, every process returns ``1`` together. If one fails inside the solve, it
+calls ``MPI.COMM_WORLD.Abort(1)``: its peers may be waiting for it inside a
+collective and would otherwise hang until the job's walltime.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from . import io_utils
@@ -52,6 +60,16 @@ _PROCESS_INDEX_ENV_VARS = (
     "PMIX_RANK",  # PMIx-based launchers
     "SLURM_PROCID",  # srun
 )
+# Process counts set by the same launchers. More than one means a multi-process launch.
+_PROCESS_COUNT_ENV_VARS = (
+    "OMPI_COMM_WORLD_SIZE",  # Open MPI, IBM Spectrum MPI
+    "PMI_SIZE",  # Intel MPI, MPICH
+    "PMIX_SIZE",  # PMIx-based launchers
+    "SLURM_NTASKS",  # srun
+)
+# Without a communicator, the control process clears only rank error files that are
+# this much older than its start, so it never deletes one a peer writes in this run.
+_STALE_ERROR_AGE_SECONDS = 60.0
 
 
 def process_index() -> int:
@@ -89,6 +107,67 @@ def is_control_process() -> bool:
     return process_index() == 0
 
 
+def _launched_processes() -> int:
+    """The process count of the launch, from the launcher's environment; 1 if none is set."""
+
+    for name in _PROCESS_COUNT_ENV_VARS:
+        try:
+            return max(int(os.environ[name]), 1)
+        except (KeyError, ValueError):
+            continue
+    return 1
+
+
+def _mpi_world():
+    """``MPI.COMM_WORLD`` for a multi-process launch with mpi4py, else ``None``.
+
+    The decision depends only on the environment, which every process of a launch
+    shares, so the processes never disagree on whether they use the communicator.
+    """
+
+    if _launched_processes() < 2:
+        return None
+    try:
+        from mpi4py import MPI
+
+        comm = MPI.COMM_WORLD
+        size = comm.Get_size()
+    except ImportError as exc:
+        logger.debug("No mpi4py (%s); using the launcher's process index.", exc)
+        return None
+    except Exception as exc:
+        # sbatch exports SLURM_NTASKS for --ntasks-per-node even when one process runs
+        # the job; an MPI library that cannot start then must not stop the solve.
+        logger.warning("MPI did not start (%s); using the launcher's process index.", exc)
+        return None
+    return comm if size > 1 else None
+
+
+def _abort(comm) -> None:
+    # Peers blocked in a collective never return, so end the whole MPI job.
+    logger.error("Aborting MPI.COMM_WORLD so that the other processes do not hang.")
+    for stream in (sys.stdout, sys.stderr):
+        stream.flush()
+    comm.Abort(1)
+
+
+def _remove_stale_error(path: Path, started: float | None) -> None:
+    """Delete a stale error file; with ``started``, only one older than this run."""
+
+    try:
+        if started is None or path.stat().st_mtime < started - _STALE_ERROR_AGE_SECONDS:
+            path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _write_error(work_dir: Path, exc: BaseException, index: int) -> None:
+    try:
+        io_utils.write_solver_error(work_dir, exc, rank=index)
+    except OSError:
+        logger.exception("could not write the error file in %s", work_dir)
+
+
 def _default_omp_threads() -> None:
     # Slurm does not export OMP_NUM_THREADS for --cpus-per-task. Set it before
     # fulqrum (and its OpenMP runtime) is imported inside solve_fulqrum.
@@ -124,25 +203,51 @@ def main(argv: list[str] | None = None) -> int:
         print(f"qcsc-fulqrum-solve: not a directory: {work_dir}", file=sys.stderr)
         return 2
 
+    started = time.time()
     # Resolved once: every branch below must agree on who is in control.
-    control = is_control_process()
+    comm = _mpi_world()
+    index = comm.Get_rank() if comm is not None else process_index()
+    control = index == 0
 
-    # A stale result must never be read as the outcome of this run. Only the
-    # control process deletes, and only output files, which nothing reads.
+    # A stale result must never be read as the outcome of this run. Each process
+    # deletes its own error file, and the control process the outputs, which
+    # nothing reads yet, and the other stale error files. With a communicator the
+    # barrier keeps it from deleting a file that a peer writes in this run;
+    # without one, it deletes only files older than this run.
+    (work_dir / io_utils.error_file_name(index)).unlink(missing_ok=True)
     if control:
-        for name in (io_utils.OUTPUT_RESULT, io_utils.OUTPUT_ARRAYS, io_utils.OUTPUT_ERROR):
+        for name in (io_utils.OUTPUT_RESULT, io_utils.OUTPUT_ARRAYS):
             (work_dir / name).unlink(missing_ok=True)
+        for path in io_utils.solver_error_files(work_dir):
+            _remove_stale_error(path, None if comm is not None else started)
+    if comm is not None:
+        comm.Barrier()
 
     _default_omp_threads()
     try:
         problem = io_utils.read_solver_input(work_dir)
+    except Exception as exc:
+        problem, failure = None, exc
+    else:
+        failure = None
+    if comm is not None and not all(comm.allgather(failure is None)):
+        # Every process stops here together, so none waits for a peer in the solve.
+        if failure is None:
+            failure = RuntimeError("another process could not read the solver input")
+    if failure is not None:
+        logger.error("fulqrum input not read in %s (process %d): %s", work_dir, index, failure)
+        _write_error(work_dir, failure, index)
+        return 1
+
+    try:
         solution = solve_fulqrum(**problem)
         if control:
             io_utils.write_solver_output(work_dir, solution)
     except Exception as exc:
-        logger.exception("fulqrum solve failed in %s", work_dir)
-        if control:
-            io_utils.write_solver_error(work_dir, exc)
+        logger.exception("fulqrum solve failed in %s (process %d)", work_dir, index)
+        _write_error(work_dir, exc, index)
+        if comm is not None:
+            _abort(comm)
         # Every process fails the job: the scheduler may sample any one of them.
         return 1
 

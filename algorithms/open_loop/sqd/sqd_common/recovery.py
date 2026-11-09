@@ -3,6 +3,10 @@
 This module has no Prefect dependency. The eigensolver is passed in as an async
 callable, so the flows can use a solver block while tests can use an
 in-process solver.
+
+The best result of each round seeds the next one twice: its orbital occupancies
+drive the configuration recovery, and its carryover CI strings, the heaviest
+strings of its ground state, are kept in every subspace of the next round.
 """
 
 from __future__ import annotations
@@ -13,19 +17,111 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 
 import numpy as np
+from qcsc_prefect_fulqrum.carryover import marginal_weights, select_carryover
 from qiskit_addon_sqd.configuration_recovery import recover_configurations
+from qiskit_addon_sqd.counts import bitstring_matrix_to_integers
 from qiskit_addon_sqd.fermion import SCIResult
 
 from sqd_common.subsample import postselect, subsample
 
 SolveFn = Callable[[tuple[np.ndarray, np.ndarray]], Awaitable[SCIResult]]
 # Maps the subsampled batches of a round, and the loop's RNG, to the batches solved.
+# The carryover CI strings of the round come third, so the transform can keep them.
 BatchTransformFn = Callable[
-    [Iterable[tuple[np.ndarray, np.ndarray]], np.random.Generator],
+    [
+        Iterable[tuple[np.ndarray, np.ndarray]],
+        np.random.Generator,
+        tuple[np.ndarray, np.ndarray],
+    ],
     Iterable[tuple[np.ndarray, np.ndarray]],
 ]
-# Called after each round with (next_round, occupancies for it, best total energy so far).
-RoundEndFn = Callable[[int, tuple[np.ndarray, np.ndarray], float], None]
+# Called after each round with (next_round, occupancies for it, best total energy so far,
+# carryover CI strings for it).
+RoundEndFn = Callable[
+    [int, tuple[np.ndarray, np.ndarray], float, tuple[np.ndarray, np.ndarray]], None
+]
+
+
+def empty_carryover() -> tuple[np.ndarray, np.ndarray]:
+    """No carryover CI strings for either spin."""
+    return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
+
+
+def carryover_of(result: SCIResult, fraction: float, norb: int) -> tuple[np.ndarray, np.ndarray]:
+    """The (alpha, beta) carryover CI strings of a solver result, heaviest first.
+
+    The first source the result has is used:
+
+    1. ``result.carryover``, which the fulqrum solver block sets.
+    2. ``carryover_bitstrings`` of an SBD result, one bool row per alpha string
+       (column ``p`` is orbital ``norb - 1 - p``). The beta strings come from its
+       ``carryover_bitstrings_b`` rows, of the same layout, when an open-shell run
+       set them; otherwise the alpha strings are used for both spins.
+    3. The heaviest ``fraction`` of each spin's strings in ``result.sci_state``
+       (DICE, ``solve_fermion``), by marginal weight.
+
+    Without any of them, or with ``fraction`` 0, the carryover is empty.
+    """
+    return _carryover_and_source(result, fraction, norb)[0]
+
+
+def _carryover_and_source(
+    result: SCIResult, fraction: float, norb: int
+) -> tuple[tuple[np.ndarray, np.ndarray], str | None]:
+    if fraction <= 0:
+        return empty_carryover(), "off"
+    carryover = getattr(result, "carryover", None)
+    if carryover is not None:
+        return (np.asarray(carryover[0]), np.asarray(carryover[1])), "carryover"
+    rows = getattr(result, "carryover_bitstrings", None)
+    if rows is not None:
+        strings = _bool_rows_to_ints(np.asarray(rows, dtype=bool), norb)
+        rows_b = getattr(result, "carryover_bitstrings_b", None)
+        if rows_b is None:
+            return (strings, strings.copy()), "carryover_bitstrings"
+        strings_b = _bool_rows_to_ints(np.asarray(rows_b, dtype=bool), norb)
+        return (strings, strings_b), "carryover_bitstrings"
+    try:
+        state = getattr(result, "sci_state", None)
+    except NotImplementedError:
+        state = None
+    amplitudes = getattr(state, "amplitudes", None)
+    if amplitudes is not None:
+        strs_a, strs_b = np.asarray(state.ci_strs_a), np.asarray(state.ci_strs_b)
+        probs = np.abs(np.asarray(amplitudes)) ** 2
+        w_a, w_b = marginal_weights(probs, len(strs_a), len(strs_b))
+        return select_carryover(w_a, w_b, strs_a, strs_b, fraction), "sci_state"
+    return empty_carryover(), None
+
+
+def _bool_rows_to_ints(rows: np.ndarray, norb: int) -> np.ndarray:
+    """CI strings of ``(n, norb)`` bool rows whose first column is orbital ``norb - 1``."""
+    if rows.size == 0:
+        return np.zeros(0, dtype=np.int64 if norb < 64 else object)
+    if rows.ndim != 2 or rows.shape[1] != norb:
+        raise ValueError(f"carryover rows must have shape (n, {norb}), got {rows.shape}")
+    strings = bitstring_matrix_to_integers(rows)
+    return strings.astype(np.int64) if norb < 64 else strings
+
+
+def with_carryover_fraction(solver, fraction: float):
+    """A copy of a solver block that returns the run's share of carryover strings.
+
+    The fulqrum block gets ``carryover_fraction``. The SBD block gets
+    ``carryover_ratio``, which must be above 0, so a fraction of 0 leaves it as it
+    is; the recovery loop then ignores the strings it returns. A block with neither
+    field (DICE) is returned unchanged, and its carryover comes from its SCI state.
+    """
+    fields = getattr(type(solver), "model_fields", {})
+    if "carryover_fraction" in fields:
+        name = "carryover_fraction"
+    elif "carryover_ratio" in fields and fraction > 0:
+        name = "carryover_ratio"
+    else:
+        return solver
+    if getattr(solver, name) == fraction:
+        return solver
+    return solver.model_copy(update={name: fraction})
 
 
 @dataclass
@@ -40,12 +136,14 @@ class RecoveryOutcome:
             the ``best_energy`` a resumed run started from.
         round_energies: Best total energy of each round run in this call.
         records: One row per solved subspace, for the Prefect table artifact.
+        final_carryover: Carryover CI strings for the round after the last one run.
     """
 
     best_result: SCIResult | None
     best_energy: float
     round_energies: list[float] = field(default_factory=list)
     records: list[dict] = field(default_factory=list)
+    final_carryover: tuple[np.ndarray, np.ndarray] = field(default_factory=empty_carryover)
 
 
 async def run_configuration_recovery(
@@ -66,18 +164,23 @@ async def run_configuration_recovery(
     best_energy: float | None = None,
     on_round_end: RoundEndFn | None = None,
     batch_transform: BatchTransformFn | None = None,
+    initial_carryover: tuple[np.ndarray, np.ndarray] | None = None,
+    carryover_fraction: float = 0.0,
 ) -> RecoveryOutcome:
     """Run the SQD configuration recovery loop.
 
     Each round recovers configurations with the current orbital occupancies,
     post-selects on the electron numbers, draws ``num_batches`` subspaces and
     solves them concurrently with ``solve``. The occupancies of the best result in
-    the round seed the next round, as in arXiv:2405.05068.
+    the round seed the next round, as in arXiv:2405.05068. With a
+    ``carryover_fraction`` above 0, the carryover CI strings of that result are
+    also kept in every subspace of the next round, within ``subspace_dim``.
 
     A resumed run passes the occupancies of its checkpoint as
-    ``initial_occupancies``, the number of completed rounds as ``start_round`` and
-    their best total energy as ``best_energy``. It then runs rounds
-    ``start_round`` to ``max_iterations - 1`` and never reports a higher energy.
+    ``initial_occupancies``, its carryover as ``initial_carryover``, the number of
+    completed rounds as ``start_round`` and their best total energy as
+    ``best_energy``. It then runs rounds ``start_round`` to ``max_iterations - 1``
+    and never reports a higher energy.
 
     Args:
         raw_bitstrings: Sampled bitstring matrix (rows are shots, right half alpha).
@@ -96,15 +199,36 @@ async def run_configuration_recovery(
         best_energy: Best total energy of those rounds.
         on_round_end: Called after each round, for example to write a checkpoint.
         batch_transform: Rewrites the subsampled batches of each round before they are
-            solved, for a solver that needs another input form (SBD). It draws from
-            ``rng`` after the subsampling, so the subspaces of the next round change.
+            solved, for a solver that needs another input form (SBD). It also gets the
+            round's carryover strings, to keep them. It draws from ``rng`` after the
+            subsampling, so the subspaces of the next round change.
+        initial_carryover: Alpha and beta carryover CI strings for the first round.
+        carryover_fraction: Share of each spin's strings kept as carryover, read from
+            the best result of each round with :func:`carryover_of`. ``0`` uses no
+            carryover, not even ``initial_carryover``.
 
     Raises:
         RuntimeError: If no bitstring survives post-selection.
+        RoundFailedError: If a solver job fails. The round's other jobs are
+            cancelled and ``on_round_end`` is not called for it.
     """
     logger = logger or logging.getLogger(__name__)
     n_alpha, n_beta = nelec
     current_occupancies = initial_occupancies
+    if carryover_fraction <= 0 or initial_carryover is None:
+        current_carryover = empty_carryover()
+    else:
+        current_carryover = (
+            np.asarray(initial_carryover[0]),
+            np.asarray(initial_carryover[1]),
+        )
+    norb = raw_bitstrings.shape[1] // 2
+    warned_no_carryover = False
+    if carryover_fraction >= 1.0:
+        logger.warning(
+            "carryover_fraction=1: from the second iteration on, the carryover strings can "
+            "fill a whole subspace, and then no recovered sample enters it."
+        )
     best_result: SCIResult | None = None
     outcome_records: list[dict] = []
     round_energies: list[float] = []
@@ -143,11 +267,14 @@ async def run_configuration_recovery(
             num_batches=num_batches,
             rng=rng,
             open_shell=open_shell,
+            carryover=current_carryover if _has_carryover(current_carryover) else None,
+            nelec=nelec,
+            carryover_fraction=carryover_fraction,
         )
         if batch_transform is not None:
-            batches = batch_transform(batches, rng)
+            batches = batch_transform(batches, rng, current_carryover)
         batches = list(batches)
-        results: list[SCIResult] = await asyncio.gather(*(solve(ci) for ci in batches))
+        results = await _solve_round(solve, batches, round_idx)
 
         best_result_in_batch = min(results, key=lambda result: result.energy)
         round_energy = float(best_result_in_batch.energy + nuclear_repulsion_energy)
@@ -155,24 +282,40 @@ async def run_configuration_recovery(
             best_result = best_result_in_batch
             best_energy = round_energy
         current_occupancies = best_result_in_batch.orbital_occupancies
+        round_carryover = current_carryover
+        current_carryover, source = _carryover_and_source(
+            best_result_in_batch, carryover_fraction, norb
+        )
+        if source is None and not warned_no_carryover:
+            warned_no_carryover = True
+            logger.warning(
+                f"carryover_fraction={carryover_fraction}, but the solver returned no "
+                "carryover strings or ground state; the next rounds use no carryover."
+            )
 
         for subspace_idx, (ci_strings, result) in enumerate(zip(batches, results, strict=True)):
             outcome_records.append(
                 dict(
-                    round=int(round_idx),
-                    subspace=int(subspace_idx),
+                    round=int(round_idx + 1),
+                    batch=int(subspace_idx + 1),
                     energy=float(result.energy + nuclear_repulsion_energy),
                     dimension=int(len(ci_strings[0]) * len(ci_strings[1])),
                     num_ci_strs_a=int(len(ci_strings[0])),
                     num_ci_strs_b=int(len(ci_strings[1])),
+                    num_carryover_a=int(len(round_carryover[0])),
+                    num_carryover_b=int(len(round_carryover[1])),
                 )
             )
         round_energies.append(round_energy)
+        # The iteration's lowest batch energy, and the lowest of all iterations so far
+        # (from the resumed run too); the outcome and the checkpoint keep the latter.
+        best_note = "new overall best" if best_energy == round_energy else "overall best"
         logger.info(
-            f"Best energy in SQD iteration {round_idx + 1}/{max_iterations}: {round_energy} Ha."
+            f"SQD iteration {round_idx + 1}/{max_iterations}: iteration best {round_energy} Ha; "
+            f"{best_note} {best_energy} Ha."
         )
         if on_round_end is not None:
-            on_round_end(round_idx + 1, current_occupancies, best_energy)
+            on_round_end(round_idx + 1, current_occupancies, best_energy, current_carryover)
 
     if best_energy is None:
         raise ValueError("max_iterations must be at least 1.")
@@ -181,4 +324,53 @@ async def run_configuration_recovery(
         best_energy=float(best_energy),
         round_energies=round_energies,
         records=outcome_records,
+        final_carryover=current_carryover,
     )
+
+
+class RoundFailedError(RuntimeError):
+    """A solver job of a recovery round failed, so the round has no result.
+
+    The round's checkpoint is not written, so a Retry of the run starts again at
+    this round, after the last completed one.
+    """
+
+
+async def _solve_round(
+    solve: SolveFn, batches: list[tuple[np.ndarray, np.ndarray]], round_idx: int
+) -> list[SCIResult]:
+    """Solve the batches of a round concurrently; the first failure fails the round.
+
+    The other batches are then cancelled, which cancels their scheduler jobs, so
+    no job of a failed round keeps running. The same happens when the round itself
+    is cancelled, for example by a flow timeout: ``asyncio.wait`` leaves its tasks
+    running then, so they are cancelled here.
+
+    Raises:
+        RoundFailedError: If any batch fails. Its cause is the first failure.
+    """
+    jobs = [asyncio.ensure_future(solve(ci)) for ci in batches]
+    try:
+        done, pending = await asyncio.wait(jobs, return_when=asyncio.FIRST_EXCEPTION)
+    except asyncio.CancelledError:
+        for job in jobs:
+            job.cancel()
+        await asyncio.gather(*jobs, return_exceptions=True)
+        raise
+    failed = [i for i, job in enumerate(jobs) if job in done and job.exception() is not None]
+    if not failed:
+        return [job.result() for job in jobs]
+    for job in pending:
+        job.cancel()
+    await asyncio.gather(*pending, return_exceptions=True)
+    first = jobs[failed[0]].exception()
+    names = ", ".join(str(i + 1) for i in failed)
+    raise RoundFailedError(
+        f"SQD iteration {round_idx + 1} failed: batch {names} of {len(jobs)} raised "
+        f"{type(first).__name__}: {first}. {len(pending)} other batch job(s) were cancelled. "
+        "The checkpoint holds the last completed iteration, so a Retry continues from this one."
+    ) from first
+
+
+def _has_carryover(carryover: tuple[np.ndarray, np.ndarray]) -> bool:
+    return bool(len(carryover[0]) or len(carryover[1]))

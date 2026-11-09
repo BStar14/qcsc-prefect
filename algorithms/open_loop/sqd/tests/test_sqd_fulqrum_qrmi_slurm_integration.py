@@ -22,8 +22,8 @@ same paths on the compute nodes:
 Environment:
     SLURM_INTEGRATION=1        enable the test
     SQD_QRMI_SLURM_ROOT        shared job root (default /data/sqd-fulqrum-qrmi-integration)
-    SQD_QRMI_SLURM_PYTHON      compute-node Python with Prefect, Qiskit and
-                               qiskit-ibm-runtime (default: this interpreter)
+    SQD_QRMI_SLURM_PYTHON      compute-node Python, e.g. ~/venv/sqd-node/bin/python
+                               (default: this interpreter)
     FULQRUM_SLURM_PARTITION    default from the example TOML
     FULQRUM_SLURM_TIMEOUT      seconds, default 600
 """
@@ -31,6 +31,7 @@ Environment:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -58,12 +59,16 @@ from qcsc_prefect_executor import from_blocks  # noqa: E402
 from qcsc_prefect_executor.slurm import run as slurm_run  # noqa: E402
 from qcsc_prefect_fulqrum import block_utils  # noqa: E402
 from qiskit.primitives.containers import BitArray  # noqa: E402
-from sqd_common import lucj, sampling  # noqa: E402
+from sqd_common import (  # noqa: E402
+    lucj,
+    qrmi_blocks,  # noqa: E402
+    sampling,
+)
+from sqd_common.advanced import AdvancedSettings  # noqa: E402
 from sqd_common.block_config import load_block_config  # noqa: E402
 from sqd_common.flow_params import (  # noqa: E402
     CircuitParameters,
     SamplingParameters,
-    TranspilerParameters,
 )
 from sqd_common.qrmi import TRANSPILER  # noqa: E402
 from sqd_fulqrum import create_blocks  # noqa: E402
@@ -97,8 +102,13 @@ class QRMIService:
 
 
 def _record_modules():
+    import os
+
     loaded = sorted({name.split(".")[0] for name in sys.modules})
     Path("node_modules.json").write_text(json.dumps(loaded))
+    # The QRMI settings the job sees: the block's plain ones arrive through sbatch.
+    qrmi_env = {k: v for k, v in os.environ.items() if "_QRMI_" in k}
+    Path("node_qrmi_env.json").write_text(json.dumps(qrmi_env))
 
 
 def get_backend(resource):
@@ -124,6 +134,7 @@ assert resource == "fake_qpu"
 payload = json.loads(Path(source).read_text())
 assert payload["program_id"] == "sampler"
 shots = payload["parameters"]["shots"]
+print("2026-01-01 00:00:00,000 INFO Task ID: fake-task-1", flush=True)
 with open("isa.qpy", "rb") as stream:
     (isa,) = qpy.load(stream)
 result = StatevectorSampler(seed=7).run([(isa,)], shots=shots).result()
@@ -195,9 +206,9 @@ def qrmi_runtime(monkeypatch):
     config["work_dir"] = str(ROOT)
     if os.getenv("FULQRUM_SLURM_PARTITION"):
         config["queue"] = os.environ["FULQRUM_SLURM_PARTITION"]
+    config["python_executable"] = NODE_PYTHON
     config["qrmi"] = {
         "resource": RESOURCE,
-        "python_executable": NODE_PYTHON,
         "walltime": "00:10:00",
         "ompthreads": 2,
         "timeout_seconds": TIMEOUT,
@@ -215,21 +226,39 @@ def qrmi_runtime(monkeypatch):
     }
     args = create_blocks._parse_args([])
     block_kwargs = create_blocks.resolve_settings(args, config)
-    qrmi = create_blocks.resolve_qrmi_settings(args, config, block_kwargs)
-    create_blocks.create_qrmi_blocks(qrmi)
+    qrmi = qrmi_blocks.resolve_qrmi_settings(args, config, block_kwargs)
+    qrmi_blocks.create_qrmi_blocks(qrmi)
 
-    # The fakes stand in for the QPU: request no QPU and run the fake task_runner.
-    assert blocks[qrmi["hpc_profile_block_name"]].slurm_qpu == RESOURCE
-    blocks[qrmi["hpc_profile_block_name"]].slurm_qpu = None
+    # The QRMI job requests the block's backend; its HPC profile names no QPU.
+    assert blocks[qrmi["hpc_profile_block_name"]].slurm_qpu is None
     blocks[qrmi["command_block_name"]].default_args += ["--task-runner", str(runner)]
-    # The QrmiRuntimeBlock that create_blocks saves for [qrmi], loaded as the flow does.
-    block_runtime = runtime_mod.QrmiRuntime(**create_blocks.qrmi_runtime_settings(qrmi))
+    # The QrmiRuntimeBlock that create_blocks and qcsc-qrmi login save, loaded as the flow
+    # does: the instance's CRN must reach the job, and no API key.
+    from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
+
+    settings = {
+        **qrmi_blocks.qrmi_runtime_settings(qrmi),
+        "resource": RESOURCE,
+        "instance": "testbed (open)",
+        "instances": {"testbed (open)": "crn:v1:testbed"},
+        "instance_backends": {"testbed (open)": [RESOURCE]},
+    }
+    block = QrmiRuntimeBlock(**settings)
+    block.check_backend_access(live=False)
+    # The fakes stand in for the QPU: request no QPU and run the fake task_runner.
+    block_runtime = dataclasses.replace(block.get_runtime(), request_qpu=False)
+
+    class Loaded:
+        resource = block.resource
+
+        def get_runtime(self, prepare=None):
+            return block_runtime
 
     async def load(name):
         assert name == "qrmi-runtime"
-        return block_runtime
+        return Loaded()
 
-    monkeypatch.setattr(sampling, "_load_qrmi_runtime", load)
+    monkeypatch.setattr(sampling, "load_qrmi_block", load)
     return block_runtime
 
 
@@ -237,17 +266,12 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_runtime, caplog):
     elec_props = chem.compute_molecular_integrals_from_geometry.fn(
         atom="H 0 0 0; H 0 0 0.74", basis="sto-3g"
     )
-    params = CircuitParameters(
-        configure_transpiler=True,
-        transpiler=TranspilerParameters(
-            sabre_layout_trials=20, sabre_swap_trials=4, sabre_max_iterations=2
-        ),
-    )
+    params = AdvancedSettings(sabre_layout_trials=20, sabre_swap_trials=4, sabre_max_iterations=2)
     with caplog.at_level(logging.INFO, logger=LOGGER.name):
         bool_array = asyncio.run(
             sampling.quantum_sampling.fn(
-                lucj_params=lucj.get_lucj_params.fn(params, elec_props),
-                circuit_params=params,
+                lucj_params=lucj.get_lucj_params.fn(CircuitParameters(), elec_props, "heavy-hex"),
+                advanced=params,
                 sampling_params=SamplingParameters(shots=SHOTS),
             )
         )
@@ -273,8 +297,17 @@ def test_qrmi_sampling_compiles_on_the_node_through_slurm(qrmi_runtime, caplog):
         pub["seed_transpiler"]
         == lucj.circuit_transpile_options(params, np.random.default_rng(24))["seed_transpiler"]
     )
-    assert "#SBATCH --qpu" not in (job_dir / "sampler.slurm").read_text()
+    script = (job_dir / "sampler.slurm").read_text()
+    assert "#SBATCH --qpu" not in script
+    # The block's CRN reaches the job through sbatch's environment, not the script.
+    qrmi_env = json.loads((job_dir / "node_qrmi_env.json").read_text())
+    assert qrmi_env[f"{RESOURCE}_QRMI_IBM_QCS_SERVICE_CRN"] == "crn:v1:testbed"
+    assert "crn:v1:testbed" not in script
+    assert not any("APIKEY" in key for key in qrmi_env)
     loaded = set(json.loads((job_dir / "node_modules.json").read_text()))
     assert "sqd_common" in loaded
     assert loaded.isdisjoint(HEAVY), sorted(loaded & set(HEAVY))
     assert "Compiled on the compute node:" in caplog.text
+    # task_runner's log reaches the job's output through the worker.
+    assert "Task ID: fake-task-1" in (job_dir / "output.out").read_text()
+    assert not (job_dir / "task_ended.txt").exists()
