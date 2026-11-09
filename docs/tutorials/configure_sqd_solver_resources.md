@@ -41,7 +41,7 @@ In this tutorial, you learn how to:
 ## Prerequisites
 
 - A working SQD setup on your system, as in
-  [Set up qcsc-prefect on a Slurm cluster](https://quantum.cloud.ibm.com/docs/en/guides/set-up-qcsc-prefect-slurm)
+  [Set up qcsc-prefect on a Slurm cluster](https://quantum.cloud.ibm.com/docs/en/guides/qcsc-prefect-setup)
   and the tutorial
   [Manage a quantum-centric supercomputing workflow with qcsc-prefect](https://quantum.cloud.ibm.com/docs/en/tutorials/manage-qcsc-workflow-with-qcsc-prefect).
 - A solver executable built on the target system: `qcsc-fulqrum-solve`, SBD `diag` or `diag-gpu`,

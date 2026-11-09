@@ -42,7 +42,7 @@ nodes. The compute environment does not need Prefect or qiskit-addon-sqd.
 
 **The workflow host** (where the Prefect process runs and jobs are submitted) installs the
 package with its dependencies, into the `~/venv/prefect` environment of
-[Set up qcsc-prefect on a Slurm cluster](https://quantum.cloud.ibm.com/docs/en/guides/set-up-qcsc-prefect-slurm):
+[Set up qcsc-prefect on a Slurm cluster](https://quantum.cloud.ibm.com/docs/en/guides/qcsc-prefect-setup):
 
 ```bash
 source ~/venv/prefect/bin/activate

@@ -193,7 +193,7 @@ with the `pip install` command to run.
 Before starting, make sure:
 
 - On a Slurm cluster, you have followed
-  [Set up qcsc-prefect on a Slurm cluster](https://quantum.cloud.ibm.com/docs/en/guides/set-up-qcsc-prefect-slurm): the checkout, both Python
+  [Set up qcsc-prefect on a Slurm cluster](https://quantum.cloud.ibm.com/docs/en/guides/qcsc-prefect-setup): the checkout, both Python
   environments, the Prefect login, `qcsc-qrmi login`, and a shared work directory.
 - For `quantum_source = "real-device"`, you have IBM Quantum credentials for QRMI. See
   the [QRMI Sampler guide](../../../docs/howto/howto_qrmi_slurm_sampler.md).
@@ -208,7 +208,7 @@ The workflow uses two Python environments, and the solvers run outside both:
 | `~/venv/prefect` | workflow host | Prefect, the qcsc-prefect packages and this workflow (see [Install](#install)) |
 | `~/venv/sqd-node` | compute nodes, for `scheduler = "slurm"` | the QRMI worker: QRMI with `task_runner`, `qcsc-prefect-qiskit` and `sqd_common` |
 
-The [setup guide](https://quantum.cloud.ibm.com/docs/en/guides/set-up-qcsc-prefect-slurm) creates both. To create the workflow host environment
+The [setup guide](https://quantum.cloud.ibm.com/docs/en/guides/qcsc-prefect-setup) creates both. To create the workflow host environment
 yourself, run `uv venv ~/venv/prefect -p 3.12` and install as in [Install](#install). For
 QRMI sampling in Slurm, create the compute-node environment on a path the compute nodes
 see, from the repository root:
