@@ -49,6 +49,8 @@ class QFwSource(QuantumSource):
         if not isinstance(device_id, str) or not device_id.strip():
             raise ValueError("device_id must be a nonempty string")
         self.device_id = device_id
+        if isinstance(sampler_args, (str, bytes)):
+            raise TypeError("sampler_args must be a sequence of arguments, not a string")
         self.sampler = str(sampler)
         self.sampler_args = list(sampler_args)
         self.prepare = prepare
@@ -124,6 +126,8 @@ def counts_to_result(record: Mapping, circuit: QuantumCircuit, shots: int) -> Pr
     for index, (name, width) in enumerate(zip(names, widths)):
         samples = np.repeat([parts[index] for parts in keys], repeats)
         data[name] = BitArray.from_samples(list(samples), num_bits=width)
+    # In the circuit's register order, as Qiskit samplers return them.
+    data = {reg.name: data[reg.name] for reg in circuit.cregs}
     metadata = {key: value for key, value in record.items() if key != "counts"}
     result = PrimitiveResult([SamplerPubResult(DataBin(**data), metadata={})], metadata={})
     result = validate_result(result, shots, [registers], where="QFw record")

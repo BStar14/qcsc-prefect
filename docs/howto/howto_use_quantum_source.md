@@ -69,7 +69,7 @@ result = source.sample(circuit, shots=1000)
 given: its scheduler, `prepare`, `transpiler` and `transpile_config`. Set application
 defaults on the runtime first, for example with `dataclasses.replace`. `tags` are
 applied to the runtime's Prefect sampling task, so a Prefect concurrency limit can use
-them. The resource ID is checked when the source is built.
+them; pass a tuple or list, since a single string is rejected. The resource ID is checked when the source is built.
 
 Each call runs the async sampler in a new event loop in the calling thread. Do not call
 `sample()` from a thread that already runs an event loop, such as an `async` flow or
@@ -112,7 +112,8 @@ The launcher's counts become one `BitArray` per classical register:
   Hexadecimal keys are rejected.
 - Every register of a shot comes from the same count entry, so `test[i]` and `meas[i]`
   belong to the same measured shot. The original order of the shots is not kept.
-- Leading zeros and register widths are kept.
+- Leading zeros and register widths are kept, and the registers are in the circuit's
+  order, as Qiskit samplers return them.
 - The counts must add up to `shots`; otherwise `sample()` raises `RuntimeError`.
 
 The rest of the launcher record, for example the job ID, is in

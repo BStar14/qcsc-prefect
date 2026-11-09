@@ -35,6 +35,8 @@ class QrmiSource(QuantumSource):
         resource = runtime.resource
         if not isinstance(resource, str) or not resource or any(c.isspace() for c in resource):
             raise ValueError("resource must be a nonempty QRMI resource ID without whitespace")
+        if isinstance(tags, (str, bytes)):
+            raise TypeError("tags must be an iterable of tag strings, not a string")
         self.runtime = runtime
         self.tags = tuple(tags)
 

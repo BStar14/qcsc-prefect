@@ -143,6 +143,13 @@ def test_qrmi_source_samples_one_circuit_with_the_given_shots_and_tags(fake_iqp)
     assert fake_iqp == [{"shots": 7, "tags": {"app: quantum"}}]
 
 
+def test_sources_reject_a_string_where_a_sequence_is_expected():
+    with pytest.raises(TypeError, match="tags"):
+        QrmiSource(iqp_runtime(), tags="res: quantum")
+    with pytest.raises(TypeError, match="sampler_args"):
+        QFwSource("ibm_fez", sampler="s.py", sampler_args="--optimization-level 3")
+
+
 @pytest.mark.parametrize("resource", ["", "ibm x", " ibm"])
 def test_qrmi_source_validates_the_resource_when_built(resource):
     runtime = iqp_runtime()
@@ -276,7 +283,9 @@ def test_qfw_launcher_import_adds_qfw_slurm_bin_once(monkeypatch, tmp_path):
     (tmp_path / "qfw_slurm_sampler.py").write_text("def run_sampler_job(*a, **k):\n    return a\n")
     monkeypatch.setenv("QFW_SLURM_BIN", str(tmp_path))
     monkeypatch.setattr(sys, "path", list(sys.path))
-    monkeypatch.delitem(sys.modules, "qfw_slurm_sampler", raising=False)
+    # setitem first, so that monkeypatch removes the imported module afterwards.
+    monkeypatch.setitem(sys.modules, "qfw_slurm_sampler", None)
+    monkeypatch.delitem(sys.modules, "qfw_slurm_sampler")
     first, second = qfw_mod._launcher(), qfw_mod._launcher()
     assert first is second
     assert sys.path.count(str(tmp_path)) == 1
@@ -347,6 +356,24 @@ def test_qfw_counts_match_the_qrmi_layout_after_the_same_filter():
         return Counter(data.meas.get_bitstrings(data.test.bitcount() == 0))
 
     assert kept(qrmi) == kept(qfw) == {"110": 2}
+
+
+def test_qfw_registers_are_in_circuit_order_like_qiskit_samplers():
+    from qiskit.primitives import StatevectorSampler
+
+    # meas (2 bits) before test (3 bits), with different widths so the layout matters.
+    qreg = QuantumRegister(2, "q")
+    circuit = QuantumCircuit(qreg, ClassicalRegister(2, "meas"), ClassicalRegister(3, "test"))
+    circuit.x(0)
+    circuit.measure(qreg, circuit.cregs[0])
+    circuit.measure(qreg, circuit.cregs[1][:2])
+    expected = StatevectorSampler().run([circuit], shots=4).result()[0]
+    counts = expected.join_data().get_counts()
+    # Counts list the registers in reverse order: "test meas".
+    split = {f"{key[:3]} {key[3:]}": value for key, value in counts.items()}
+    qfw = counts_to_result({"counts": split}, circuit, 4)[0]
+    assert list(qfw.data.keys()) == list(expected.data.keys()) == ["meas", "test"]
+    assert qfw.join_data().get_counts() == counts
 
 
 # --- QFwResource -----------------------------------------------------------------------

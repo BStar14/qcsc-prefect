@@ -55,6 +55,7 @@ class QFwResource(Block):
         return target
 
     def run_circuit(self, circuit, num_shots=1024):
+        import defw  # noqa: F401  (first, as in the original module)
         from svc_lib_qpm.frontend import Frontend
         from util.circuit_payload import dump_qpy
 
