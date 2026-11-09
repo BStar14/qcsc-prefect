@@ -35,6 +35,10 @@ class QFwSource(QuantumSource):
     serializes it, and must keep the classical registers. The counts are returned as
     one PUB with a ``BitArray`` per classical register; the rest of the launcher record
     is in ``result.metadata["qcsc_qfw"]``.
+
+    Applications with custom gates whose Python attributes do not survive QPY must
+    supply ``prepare`` to lower those gates before serialization. The source does
+    not choose an application-specific preparation pass.
     """
 
     def __init__(

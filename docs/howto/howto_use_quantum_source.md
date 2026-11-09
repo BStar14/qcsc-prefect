@@ -34,11 +34,137 @@ All three implement the abstract base class `QuantumSource`. The API uses Qiskit
 
 | Package | Application |
 | --- | --- |
-| The interface and the three sources | Choosing and configuring a source |
+| The interface, sources and common `QuantumSourceBlock` | Choosing a saved source Block |
+| Loading source blocks and constructing the selected source | Deployment settings (block names, tags and node script arguments) |
 | Validating shots and circuits | Building circuits |
 | Converting platform results into a `PrimitiveResult` | Algorithm-specific preparation and compilation settings |
 | Saving the QFw device settings (`QFwResource`) | Random width and seed |
 | | Interpreting and filtering results, telemetry |
+
+## Select any platform with one saved Block
+
+`QuantumSourceBlock` is a common Prefect Block in this library, with no dependency on
+SBD or any other algorithm.
+
+To make the source and QFw resource types available in the UI before saving an
+instance, register them with:
+
+```bash
+prefect block register -m qcsc_prefect.integrations.qiskit.sources
+```
+
+Saving an instance also registers its type automatically.
+
+Save one Block per sampling configuration:
+
+```python
+from qcsc_prefect.integrations.qiskit.sources import QuantumSourceBlock, QuantumSourceConfig
+
+QuantumSourceBlock(
+    config=QuantumSourceConfig(kind="random"), num_bits=20, seed=42,
+).save("samples-local", overwrite=True)
+
+QuantumSourceBlock(
+    config=QuantumSourceConfig(
+        kind="qrmi", block_name="my-runtime", tags=("app:qpu",),
+    ),
+).save("samples-cloud", overwrite=True)
+
+QuantumSourceBlock(
+    config=QuantumSourceConfig(
+        kind="qfw", block_name="my-qfw-resource",
+        sampler="/shared/node_sampler.py",
+        sampler_arg_names=(("optimization_level", "--optimization-level"),),
+    ),
+    transpile_config={"optimization_level": 2},
+).save("samples-reserved", overwrite=True)
+```
+
+The QRMI and QFw settings reference existing `QrmiRuntimeBlock` and `QFwResource`
+Blocks. Credentials stay in those Blocks. For QRMI, the referenced runtime's scheduler
+selects IQP or Slurm. QFw's node script, argument mapping and work directory are in
+`config`, so the algorithm does not contain any platform selection or CLI handling.
+
+Unknown configuration keys are rejected. QRMI and QFw require a nonempty
+`config.block_name`, and QFw also requires a nonempty `config.sampler`. These checks
+run when the settings or source Block are constructed, without loading a backend.
+
+Every algorithm uses the same call, changing only the saved Block name:
+
+```python
+source = QuantumSourceBlock.load_source(source_block_name)
+circuit = build_circuit() if source.requires_circuit else None
+result = source.sample(circuit, shots=1000)
+```
+
+`source_block_name` can be `"samples-local"`, `"samples-cloud"` or `"samples-reserved"`;
+these names have no special meaning to the library or algorithm. Editing the saved
+configuration under the same name also switches the platform without changing the
+flow parameter. Standard `QuantumSourceBlock.load(name)` returns the Block; call
+`block.get_source()` to construct a source from an already loaded Block.
+
+Create the source inside the sampling worker. The parent passes only the Block name,
+not live sources, runtimes or Blocks. Loading the source Block does not initialize a
+platform; `get_source()` loads only its selected runtime/resource Block and does not
+submit work. `sample()` is the submission boundary.
+
+### Algorithm-owned policy
+
+Applications can supply dynamic width/seed and their preparation or compilation
+policy without knowing the selected platform:
+
+```python
+source = QuantumSourceBlock.load_source(
+    source_block_name,
+    num_bits=required_bit_width,
+    seed=sample_seed,
+    prepare=my_prepare,  # optional: QuantumCircuit -> PreparedCircuit
+    transpiler="my_application.compile:transpile",
+    transpile_config=my_compilation_settings,
+)
+```
+
+The Block can store default `num_bits`, `seed`, `transpiler` and `transpile_config`.
+Explicit application values override those defaults. An explicit compilation
+configuration replaces the saved configuration; if omitted in both places, QRMI
+keeps the referenced runtime's configuration. Random ignores device policy.
+
+`transpiler` is the QRMI compiler hook. QFw uses the configured node script instead;
+do not save a `transpiler` on a QFw source Block. An algorithm can still pass its
+QRMI hook through the common call above while using QFw's script for the same policy.
+
+QFw takes the circuit from `PreparedCircuit`, with preparation applied once before
+serialization, and maps compilation values to `config.sampler_arg_names` in order,
+without changing their types. QFw rejects nonempty `PreparedCircuit.config` overrides
+before submission. Fixed CLI arguments can be passed through `config.sampler_args`;
+`config.work_dir` defaults to `~/qfw_jobs`.
+
+Every supplied QFw compilation setting must have a `sampler_arg_names` entry;
+unmapped values raise an error before a platform Block is loaded. Mapping names and
+flags must be unique, and fixed `sampler_args` cannot repeat a mapped flag (including
+the `--flag=value` form). Saved settings are checked on Block construction; settings
+supplied dynamically by an algorithm are checked when its source is constructed.
+When a circuit contains gates with Python attributes lost by QPY, the application
+must supply `prepare` to lower those gates before serialization.
+
+The library also exposes `load_quantum_source(config, **policy)` for applications that
+already have a `QuantumSourceConfig` and do not need to save a source Block. The config
+is serializable with `dataclasses.asdict` and JSON. Missing source or platform Blocks
+raise `SourceLoadError`, retaining the underlying exception as the cause. Direct
+construction of the source classes below remains available.
+
+### Closed-loop SQD migration
+
+The closed-loop SQD flow's `quantum_source` parameter now names a saved
+`QuantumSourceBlock`, defaulting to `"quantum-source"`. It is no longer an enum with
+built-in `random`, `real-device` and `qfw` behavior. Existing parameter values still
+work if source Blocks with those exact names are saved. Random mode also needs a
+source Block, though it never loads a runtime/resource Block or a platform SDK.
+
+The algorithm's `[source]` configuration creates the common Block. See its
+[README](https://github.com/qiskit-community/qcsc-prefect/tree/main/algorithms/closed_loop/sqd_de#quantum-sampling)
+for configuration. Other algorithms can adopt the same Block API independently;
+the open-loop flows retain their current parameter behavior.
 
 ## `RandomSource`
 

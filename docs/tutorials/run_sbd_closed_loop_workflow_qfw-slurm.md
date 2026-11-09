@@ -1,5 +1,14 @@
 # Run the SQD Closed-loop Workflow with SBD on QFw-SLURM (qcsc-prefect)
 
+> **Quantum source configuration:** `quantum_source` now names a saved
+> `QuantumSourceBlock`; its default is `quantum-source`. The block generator saves
+> this Block from the `[source]` table. Set the Block's `config.kind` to `random`,
+> `qrmi` or `qfw` to choose the platform, or pass another saved source Block name.
+> Older values `random`, `real-device` and `qfw` work only after source Blocks with
+> those names are saved. See [Quantum Sources](../howto/howto_use_quantum_source.md)
+> and the [SQD source configuration](https://github.com/qiskit-community/qcsc-prefect/tree/main/algorithms/closed_loop/sqd_de#quantum-sampling).
+
+
 This tutorial demonstrates a Sample-based Quantum Diagonalization (SQD) workflow with the [SBD solver](https://github.com/r-ccs-cms/sbd) in a [QFw-SLURM](https://github.com/openQSE/QFw-SLURM-Cluster#readme) environment. The workflow combines quantum sampling with classical processing and uses SBD to diagonalize a sparse chemistry Hamiltonian in the `QFw-SLURM` environment, with Prefect orchestrating the end-to-end workflow.
 
 For the example in this tutorial, the goal is to compute the ground-state energy of the N₂ molecular system using the SQD workflow.
@@ -42,7 +51,8 @@ The tutorial will cover creating and starting the QFw-SLURM environment, configu
 
 ## Workflow architecture
 
-With `quantum_source="qfw"`, the SQD workflow uses QFw and QRMI for quantum execution and Slurm/MPI for the classical SBD stage.
+With `quantum_source="quantum-source"` and that Block's `config.kind="qfw"`, SQD uses
+QFw and QRMI for quantum execution and Slurm/MPI for the classical SBD stage.
 
 ![QFw-SLURM SQD workflow architecture](../images/img-sbd-qfw-slurm-architecture.png)
 
@@ -402,6 +412,14 @@ For a quick functional test, the low-iteration settings in the example configura
 
 ### Step 8. Generate the Prefect Blocks
 
+Before generating the Blocks, replace the copied Slurm example's `[source]` and
+`[source.config]` tables with the QFw source configuration in the
+[SQD README](https://github.com/qiskit-community/qcsc-prefect/tree/main/algorithms/closed_loop/sqd_de#quantum-sampling).
+Set `name = "quantum-source"`, `block_name = "qfw-runner"`, and an absolute sampler
+script path. The four `sampler_arg_names` entries forward SQD's compilation settings.
+The generator then saves the source Block as well as the classical execution Blocks.
+
+
 Use the Slurm SBD configuration created in the previous step to create the reusable Prefect blocks used by the classical stage of the workflow.
 
 Create the classical execution blocks:
@@ -528,7 +546,7 @@ Example:
 | FCIDump File | `/path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/data/fcidump_N2_MO.txt` |
 | SQD Subspace Dimension | `10000` |
 | Differential Evolution Iterations | `1` |
-| Quantum Source | `qfw` |
+| Quantum Source Block | `quantum-source` (configured for QFw) |
 | Random Seed | `24` |
 | Solver Block Ref | `sbd_solver_job/davidson-solver` |
 | Reset Mitigation | `false` for direct-access systems where reset-check measurements are unavailable |
@@ -537,7 +555,9 @@ Example:
 >
 > Reset mitigation requires meaningful reset-check measurements from the target quantum system. For direct-access `IBMQuantumSystem` resources where this behavior is not supported or available, set `use_reset_mitigation=false`. Quantum execution through QFw/QRMI is otherwise unaffected.
 >
-> If a quantum device is not immediately available, you can set **Quantum Source** to `random` instead of `qfw`. The `random` option generates sampling data without submitting a job to a quantum device, allowing you to experiment with the SQD workflow and exercise the classical SBD execution path.
+> If a device is unavailable, set the saved source Block's `config.kind` to `random`.
+> Keep **Quantum Source Block** set to `quantum-source`. Synthetic data exercises the
+> classical SBD path without submitting a quantum job.
 >
 > Use `qfw` when you want to validate the complete QFw/QRMI quantum execution path on a configured quantum device.
 
@@ -631,7 +651,7 @@ The `sqd-telemetry` artifact records the energy computed for each walker across 
 When:
 
 ```text
-quantum_source = "qfw"
+quantum_source = "quantum-source"  # the saved source Block has config.kind = "qfw"
 ```
 
 the workflow loads the configured `QFwResource`.

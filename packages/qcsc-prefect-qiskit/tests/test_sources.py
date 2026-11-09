@@ -439,9 +439,13 @@ def test_importing_sources_and_loading_qfw_resource_off_the_main_thread_skips_qf
 
         def worker():
             try:
-                from qcsc_prefect.integrations.qiskit.sources import QFwResource, RandomSource
+                from qcsc_prefect.integrations.qiskit.sources import (
+                    QFwResource, QuantumSourceBlock, QuantumSourceConfig, RandomSource,
+                )
                 QFwResource(device_id="ibm_fez")
                 RandomSource(num_bits=4, seed=1).sample(shots=3)
+                block = QuantumSourceBlock(config=QuantumSourceConfig("random"), num_bits=4)
+                block.get_source().sample(shots=3)
             except BaseException as exc:
                 errors.append(repr(exc))
 

@@ -2,11 +2,10 @@
 
 The `QFwResource` Prefect block stores the configuration needed to access a quantum device through QFw.
 
-Use this block when the SQD workflow is configured with:
-
-```text
-quantum_source = "qfw"
-```
+Use this Block as the resource referenced by a `QuantumSourceBlock` whose
+`config.kind` is `"qfw"` and `config.block_name` is `"qfw-runner"`. The SQD
+`quantum_source` parameter is the source Block's document name, not a platform
+selector. See [Quantum Sources](howto_use_quantum_source.md).
 
 ## 1. Prerequisites
 
@@ -67,7 +66,9 @@ The output should include `QFwResource`.
 > signal handlers on import, which Python allows only in the main thread, while Prefect
 > loads block files and runs tasks in worker threads. The block can therefore be
 > registered with `prefect block register -m qcsc_prefect.integrations.qiskit.sources`
-> as well as with the Python snippet above. Do not call its QFw methods from a worker
+> as well as with the Python snippet above. The module command registers both
+> `QFwResource` and the common `QuantumSourceBlock`; the Python snippet registers
+> only `QFwResource`. Do not call its QFw methods from a worker
 > thread; the SQD workflow uses only the saved `device_id`, through `QFwSource`.
 >
 > `QFwResource.run_sampler` is deprecated: it filters the shots inside the block and

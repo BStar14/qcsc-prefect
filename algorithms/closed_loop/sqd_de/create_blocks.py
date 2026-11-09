@@ -43,6 +43,7 @@ def _register_block_types(*custom_block_classes) -> None:
 
 # QRMI settings that are secrets: read from the environment, never from the config file.
 SECRET_RESOURCE_KEYS = ("QRMI_IBM_QCS_IAM_APIKEY",)
+RUNTIME_BLOCK_NAME = "qrmi-runtime"
 
 
 def _require(name: str, value: Any) -> Any:
@@ -92,6 +93,18 @@ def _set_variable(variable_name: str, value: Any) -> None:
         ["prefect", "variable", "set", variable_name, json.dumps(value), "--overwrite"],
         check=True,
     )
+
+
+def _quantum_source_block(settings: dict[str, Any]):
+    """Validate source deployment settings before any Blocks are registered or saved."""
+    from qcsc_prefect.integrations.qiskit.sources import QuantumSourceBlock
+
+    values = dict(settings)
+    name = values.pop("name", "quantum-source")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("source.name must be a nonempty Block document name")
+    block = QuantumSourceBlock.model_validate(values)
+    return name, block
 
 
 def _parse_args() -> argparse.Namespace:
@@ -298,7 +311,9 @@ def main() -> None:
     args = _parse_args()
     config = _load_config_file(args.config)
     env = _env_values()
+    source = _quantum_source_block(config["source"]) if "source" in config else None
 
+    from qcsc_prefect.integrations.qiskit.sources import QuantumSourceBlock
     from qcsc_prefect_blocks.common.blocks import (
         CommandBlock,
         ExecutionProfileBlock,
@@ -306,7 +321,7 @@ def main() -> None:
     )
 
     sbd_solver_cls = _import_sbd_solver_block()
-    _register_block_types(sbd_solver_cls)
+    _register_block_types(sbd_solver_cls, QuantumSourceBlock)
 
     hpc_target = (
         str(_pick_value(args.hpc_target, config.get("hpc_target"), env.get("hpc_target"), "miyabi"))
@@ -624,9 +639,12 @@ def main() -> None:
 
     runtime_saved = "runtime" in config
     if runtime_saved:
-        from sbd.sampling import RUNTIME_BLOCK_NAME
-
         _runtime_block(config["runtime"]).save(RUNTIME_BLOCK_NAME, overwrite=True)
+
+    source_name = None
+    if source is not None:
+        source_name, source_block = source
+        source_block.save(source_name, overwrite=True)
 
     print(f"Saved blocks and variable for SBD workflow (target={hpc_target})")
     print(f"  SBD solver block: {solver_block_name}")
@@ -640,6 +658,8 @@ def main() -> None:
     print(f"  Metrics artifact key: {metrics_artifact_key}")
     if runtime_saved:
         print(f"  QRMI runtime block: {RUNTIME_BLOCK_NAME}")
+    if source_name:
+        print(f"  Quantum source block: {source_name}")
 
 
 if __name__ == "__main__":

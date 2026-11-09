@@ -1,7 +1,7 @@
 {
   "fcidump": "algorithms/closed_loop/sqd_de/data/fcidump_N2_MO.txt",
   "sqd_dim": 200000,
-  "quantum_source": "real-device",
+  "quantum_source": "quantum-source",
   "random_seed": 24,
   "circ_params": {
     "n_lucj_layers": 2,

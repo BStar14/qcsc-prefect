@@ -15,7 +15,10 @@ saved as a `QrmiRuntimeBlock`.
 `qcsc_prefect.integrations.qiskit.sources` gives applications one synchronous
 `source.sample(circuit, shots=shots)` call over `RandomSource` (uniform random bits,
 no circuit), `QrmiSource` (an existing `QrmiRuntime`) and `QFwSource` (the QFw-SLURM
-launcher, with the `QFwResource` block). See
+launcher, with the `QFwResource` block). The reusable `QuantumSourceBlock` saves
+source selection and platform settings for any algorithm: change the saved Block
+name or its configuration to switch platforms. `QuantumSourceBlock.load_source(name)`
+builds a source in the sampling worker. See
 [Quantum Sources](../../docs/howto/howto_use_quantum_source.md).
 
 See [QRMI Sampler](../../docs/howto/howto_qrmi_slurm_sampler.md) for configuration,

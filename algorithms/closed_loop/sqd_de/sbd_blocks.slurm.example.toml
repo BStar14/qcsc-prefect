@@ -38,7 +38,15 @@ solver_mode = "cpu"
 # Optional runtime options variable
 # Default if omitted: {"params":{"shots":50000}} for Slurm
 
-# QrmiRuntimeBlock "qrmi-runtime" for quantum_source = "real-device". Uncomment the
+# The flow loads this QuantumSourceBlock by name. No device credentials for this preset.
+[source]
+name = "quantum-source"
+
+[source.config]
+kind = "random"
+
+# To use a QRMI runtime, set kind = "qrmi" and block_name = "qrmi-runtime" above.
+# QrmiRuntimeBlock "qrmi-runtime". Uncomment the
 # tables below to create it; random and qfw runs do not need it. Set
 # QRMI_IBM_QCS_IAM_APIKEY in the environment for scheduler = "iqp".
 # [runtime]

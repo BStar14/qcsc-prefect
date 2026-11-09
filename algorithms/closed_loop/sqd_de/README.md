@@ -19,7 +19,7 @@ Compatibility notes from old `prefect_sbd.sbd_job`:
 
 - You can submit HPC jobs on your target system (`qsub` / `qstat` for Miyabi, `pjsub` / `pjstat` for Fugaku).
 - Prefect API is reachable (On-Prem or Cloud profile is active).
-- For `quantum_source = "real-device"`, IBM Quantum credentials for QRMI. See
+- For a QRMI source Block, IBM Quantum credentials. See
   [Quantum sampling](#quantum-sampling).
 - SBD executable (`diag`) is already built on your target HPC system and you know its absolute path.
 
@@ -83,12 +83,12 @@ vim algorithms/closed_loop/sqd_de/sbd_blocks.toml
 ```
 
 The `[runtime]` and `[runtime.qrmi]` tables at the end of the Miyabi example create the
-`QrmiRuntimeBlock` for `quantum_source = "real-device"`. In the Fugaku and Slurm examples
+`QrmiRuntimeBlock` referenced by the source Block. In the Fugaku and Slurm examples
 they are commented out:
 
-- For `random` or `qfw` only, delete (or keep commented) both tables. No QRMI settings or
+- For source kind `random` or `qfw` only, delete (or keep commented) both tables. No QRMI settings or
   API key are needed, and an existing runtime block is left unchanged.
-- For `real-device` with `scheduler = "iqp"`, set `resource` and the `[runtime.qrmi]`
+- For source kind `qrmi` with `scheduler = "iqp"`, set `resource` and the `[runtime.qrmi]`
   values, and export the API key before running the generator. It must not be written in
   the file:
 
@@ -145,6 +145,7 @@ This creates:
 - `SBD Solver Job` block (default: `davidson-solver`)
 - Prefect Variable `sqd_options`
 - `QrmiRuntimeBlock` `qrmi-runtime`, only when the config has a `[runtime]` table
+- `QuantumSourceBlock` `quantum-source`, when the config has a `[source]` table
 
 ## Run flow
 
@@ -157,7 +158,7 @@ python algorithms/closed_loop/sqd_de/exec.py algorithms/closed_loop/sqd_de/defau
 Note:
 - The example JSON files use intentionally low `circ_params.sabre_layout_trials` values so Fugaku runs do not appear stuck in SABRE layout search before IBM Quantum submission.
 - These are conservative starting points only. Tune them for your own backend, qubit count, and circuit specification.
-- Set `"quantum_source": "random"` in the JSON if you want to skip quantum sampling and use deterministic pseudo-random bitstrings instead. `"random_seed"` controls reproducibility in that mode.
+- `"quantum_source"` is a saved source Block name. The examples use `"quantum-source"`. To use synthetic samples, set the Block's `config.kind` to `"random"`; `"random_seed"` controls reproducibility.
 
 Deploy entrypoint:
 
@@ -170,29 +171,66 @@ sbd-deploy
 
 ## Quantum sampling
 
-`quantum_source` selects the
-[quantum source](../../../docs/howto/howto_use_quantum_source.md) of each walker.
-`sbd.sampling.load_quantum_source` builds it inside the walker, and the walker calls
-`source.sample(circuit, shots=shots)` the same way for every source:
+`quantum_source` is the name of a saved
+[`QuantumSourceBlock`](../../../docs/howto/howto_use_quantum_source.md), defaulting to
+`quantum-source`. The library loads that Block inside each walker and constructs the
+configured source. SQD passes its width, walker seed and compilation policy, then calls
+`source.sample(circuit, shots=shots)`. It has no platform registry or platform-specific
+block-loading branch.
 
-- `real-device`: `QrmiSource` over `QrmiRuntime`, using the `QrmiRuntimeBlock` named
-  `qrmi-runtime`. The block's `scheduler` selects where QRMI runs (see below).
-- `random`: `RandomSource`, deterministic pseudo-random bitstrings of
-  `2 * num_orbitals` bits. Each walker's seed is `random_seed` plus a pairing of the
-  trial and walker indices. No circuit is built and no block is loaded.
-- `qfw`: `QFwSource` over the QFw-SLURM launcher, using the `QFwResource` block
-  `qfw-runner`. The ffsim pre-init stage runs in the walker, and the sampler script
-  `sbd/qfw_slurm_sqd_sampler.py` searches the SABRE layout on the node with the same
-  `circ_params` settings as `real-device`. See
-  [the QFw-SLURM tutorial](../../../docs/tutorials/run_sbd_closed_loop_workflow_qfw-slurm.md).
+The block generator saves a source Block from the `[source]` table, independently of
+its solver and runtime configuration:
 
-For `real-device` and `qfw`, the walker applies reset mitigation itself, the same way
-for both: when `circ_params.use_reset_mitigation` is set, it keeps the shots whose
+```toml
+[source]
+name = "quantum-source"
+
+[source.config]
+kind = "random"
+```
+
+To use QRMI, set `kind = "qrmi"`, `block_name = "qrmi-runtime"` and
+`tags = ["res: quantum"]` in `[source.config]`. The referenced runtime selects IQP or
+Slurm. The Miyabi example has this preset; Fugaku and Slurm start with `random`.
+
+To use QFw, replace the source settings with the following. The sampler path must be
+an absolute path in the workflow environment; the existing launcher passes it to the
+node as before:
+
+```toml
+[source]
+name = "quantum-source"
+
+[source.config]
+kind = "qfw"
+block_name = "qfw-runner"
+sampler = "/path/to/qcsc-prefect/algorithms/closed_loop/sqd_de/sbd/qfw_slurm_sqd_sampler.py"
+sampler_arg_names = [
+  ["optimization_level", "--optimization-level"],
+  ["sabre_max_iterations", "--sabre-max-iterations"],
+  ["sabre_swap_trials", "--sabre-swap-trials"],
+  ["sabre_layout_trials", "--sabre-layout-trials"],
+]
+```
+
+Save several source Blocks under different names and switch only `quantum_source`,
+or edit the Block under the same name to change its source. No code change in SQD is
+needed. Existing values `random`, `real-device` and `qfw` have no special meaning;
+create source Blocks with those names if retaining those flow parameters. Random
+also needs a source Block; it loads no runtime/resource Block and builds no circuit.
+The width remains `2 * num_orbitals` and the seed remains `random_seed` plus a pairing
+of trial and walker indices.
+
+The QFw node script's move into the library remains PR2; it still lives at the path
+above. See [the QFw-SLURM tutorial](../../../docs/tutorials/run_sbd_closed_loop_workflow_qfw-slurm.md).
+
+For sources requiring a circuit, the walker applies reset mitigation itself: when
+`circ_params.use_reset_mitigation` is set, it keeps the shots whose
 `test` register is all zeros, and records the fraction kept as `shot_retention_rate`.
 A result without a `test` register, or with no shot left, is an error. `random` has no
 `test` register and records no `shot_retention_rate`.
 
-With `real-device`, each walker sends its LUCJ circuit untranspiled in one `sampler()`
+With a QRMI source Block, each walker sends its LUCJ circuit untranspiled in one `sampler()`
 call. The ffsim pre-init stage runs in the workflow process. The runtime then searches
 the SABRE layout and transpiles against the actual Target with the hook
 `sbd.transpilation:transpile`, using `optimization_level` and the SABRE settings in
@@ -228,6 +266,10 @@ with another name, the walker samples the default 100,000 shots.
 Sampling through quantum sources changes these cases. Check saved `sqd_options` values
 and QFw results before upgrading:
 
+- `quantum_source` now names a `QuantumSourceBlock`, defaulting to `quantum-source`.
+  Save that Block, or save Blocks named `random`, `real-device` and `qfw` to keep
+  existing explicit parameter values. Random also loads the source configuration
+  Block, though it does not load a runtime/resource Block.
 - `random` and `qfw` now reject options other than `params.shots`, as `real-device`
   already did. Before, they ignored them.
 - Invalid shots are rejected in every mode. Before, `random` and `qfw` truncated floats

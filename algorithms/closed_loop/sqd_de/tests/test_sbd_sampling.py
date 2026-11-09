@@ -13,7 +13,12 @@ from prefect.context import TagsContext
 from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime, QrmiRuntimeBlock
 from qcsc_prefect.integrations.qiskit.qrmi import iqp as iqp_mod
 from qcsc_prefect.integrations.qiskit.qrmi.compile import compile_pubs
-from qcsc_prefect.integrations.qiskit.sources import QFwResource, QrmiSource, RandomSource
+from qcsc_prefect.integrations.qiskit.sources import (
+    QFwResource,
+    QuantumSourceBlock,
+    QuantumSourceConfig,
+    RandomSource,
+)
 from qcsc_prefect.integrations.qiskit.sources import qfw as qfw_mod
 from qcsc_prefect_sbd import SBDResult
 from qiskit.primitives import PrimitiveResult, SamplerPubResult
@@ -34,6 +39,42 @@ CIRCUIT_PARAMS = CircuitParameters(
 SOURCE_ARGS = dict(
     circuit_params=CIRCUIT_PARAMS, num_orbitals=NORB, random_seed=24, trial_index=0, walker_index=1
 )
+RUNTIME_BLOCK_NAME = "qrmi-runtime"
+QUANTUM_TAG = "res: quantum"
+
+
+@pytest.fixture(autouse=True)
+def source_blocks(monkeypatch):
+    """Replace only persisted source settings; algorithm code knows none of these kinds."""
+    from pathlib import Path
+
+    blocks = {
+        "random": QuantumSourceBlock(config=QuantumSourceConfig("random")),
+        "real-device": QuantumSourceBlock(
+            config=QuantumSourceConfig("qrmi", block_name=RUNTIME_BLOCK_NAME, tags=(QUANTUM_TAG,))
+        ),
+        "qfw": QuantumSourceBlock(
+            config=QuantumSourceConfig(
+                "qfw",
+                block_name="qfw-runner",
+                sampler=str(Path(sampling.__file__).with_name("qfw_slurm_sqd_sampler.py")),
+                sampler_arg_names=(
+                    ("optimization_level", "--optimization-level"),
+                    ("sabre_max_iterations", "--sabre-max-iterations"),
+                    ("sabre_swap_trials", "--sabre-swap-trials"),
+                    ("sabre_layout_trials", "--sabre-layout-trials"),
+                ),
+            )
+        ),
+    }
+
+    def load(cls, name, **kwargs):
+        if name not in blocks:
+            raise ValueError(f"Unable to find source block {name}")
+        return blocks[name]
+
+    monkeypatch.setattr(QuantumSourceBlock, "load", classmethod(load))
+    return blocks
 
 
 class FakeIqp:
@@ -98,9 +139,9 @@ def saved_runtime(monkeypatch):
     return loaded
 
 
-def test_load_runtime_sets_the_sbd_hooks_and_keeps_the_scheduler(saved_runtime):
-    runtime = sampling.load_runtime("my-runtime", CIRCUIT_PARAMS)
-    assert saved_runtime == ["my-runtime"]
+def test_source_factory_sets_the_sbd_hooks_and_keeps_the_scheduler(saved_runtime):
+    runtime = sampling.load_quantum_source("real-device", **SOURCE_ARGS).runtime
+    assert saved_runtime == [RUNTIME_BLOCK_NAME]
     assert runtime.scheduler == "iqp"
     assert runtime.resource == "ibm_test"
     assert runtime.transpiler == TRANSPILER
@@ -115,9 +156,7 @@ def test_load_runtime_sets_the_sbd_hooks_and_keeps_the_scheduler(saved_runtime):
 
 
 def qrmi_source():
-    return QrmiSource(
-        sampling.load_runtime("my-runtime", CIRCUIT_PARAMS), tags=(sampling.QUANTUM_TAG,)
-    )
+    return sampling.load_quantum_source("real-device", **SOURCE_ARGS)
 
 
 def test_real_device_source_runs_without_an_event_loop_and_tags_the_task(saved_runtime, fake_iqp):
@@ -128,11 +167,11 @@ def test_real_device_source_runs_without_an_event_loop_and_tags_the_task(saved_r
 
     result = source.sample(circuit, shots=SHOTS)
 
-    assert saved_runtime == [sampling.RUNTIME_BLOCK_NAME]
+    assert saved_runtime == [RUNTIME_BLOCK_NAME]
     assert source.backend_name == "ibm_test" and source.requires_circuit
     assert result[0].data.meas.num_shots == SHOTS
     (call,) = fake_iqp.calls
-    assert sampling.QUANTUM_TAG in call["tags"]
+    assert QUANTUM_TAG in call["tags"]
     # Sent untranspiled; prepare ran the ffsim pre-init stage before compilation.
     assert "ucj_balanced_jw" in circuit.count_ops()
     assert "ucj_balanced_jw" not in call["circuits"][0].count_ops()
@@ -156,7 +195,7 @@ def test_qrmi_source_from_threads_without_event_loops(saved_runtime, fake_iqp):
     assert [result[0].data.meas.num_shots for result in results] == [SHOTS] * 4
     assert len(fake_iqp.calls) == 4
     assert len({call["thread"] for call in fake_iqp.calls}) == 4
-    assert all(sampling.QUANTUM_TAG in call["tags"] for call in fake_iqp.calls)
+    assert all(QUANTUM_TAG in call["tags"] for call in fake_iqp.calls)
 
 
 @pytest.mark.parametrize("shots", [0, -1, 4.9, "8", True, None])
@@ -261,10 +300,10 @@ def test_real_device_walker_samples_through_qrmi_runtime(walker, saved_runtime, 
 
     (energy, carryover), telemetry = walker("real-device")
 
-    assert saved_runtime == [sampling.RUNTIME_BLOCK_NAME]
+    assert saved_runtime == [RUNTIME_BLOCK_NAME]
     (call,) = fake.calls
     assert call["runtime"].transpiler == TRANSPILER
-    assert sampling.QUANTUM_TAG in call["tags"]
+    assert QUANTUM_TAG in call["tags"]
     # Reset mitigation keeps the shots whose test register is all zeros.
     assert telemetry["shot_retention_rate"] == (SHOTS - 2) / SHOTS
     assert energy == -0.5
@@ -277,12 +316,12 @@ def test_real_device_walker_without_reset_mitigation(walker, saved_runtime, fake
     assert telemetry["shot_retention_rate"] == 1.0
 
 
-def test_missing_runtime_block_points_to_random_mode(walker, monkeypatch, fake_iqp):
+def test_missing_runtime_block_reports_the_saved_reference(walker, monkeypatch, fake_iqp):
     def load_runtime(name, prepare=None):
         raise ValueError(f"Unable to find block document named {name}")
 
     monkeypatch.setattr(QrmiRuntimeBlock, "load_runtime", load_runtime)
-    with pytest.raises(RuntimeError, match="quantum_source='random'"):
+    with pytest.raises(RuntimeError, match="QrmiRuntimeBlock 'qrmi-runtime'"):
         walker("real-device")
     assert fake_iqp.calls == []
 
@@ -399,9 +438,36 @@ def module(name, obj):
     return mod
 
 
-def test_unknown_quantum_source_is_rejected(walker):
-    with pytest.raises(ValueError, match="Unsupported quantum_source"):
+def test_missing_quantum_source_block_is_rejected(walker):
+    with pytest.raises(RuntimeError, match="QuantumSourceBlock 'other'"):
         walker("other")
+
+
+def test_walker_accepts_an_arbitrary_source_block_name(walker, source_blocks):
+    source_blocks["configured"] = QuantumSourceBlock(config=QuantumSourceConfig("random"))
+    (energy, _), telemetry = walker("configured")
+    assert energy == -0.5
+    assert "shot_retention_rate" not in telemetry
+
+
+def test_same_block_name_switches_the_walker_between_all_platforms(
+    walker, source_blocks, saved_runtime, fake_iqp, monkeypatch
+):
+    monkeypatch.setattr(QFwResource, "load", lambda name: QFwResource(device_id="test_qfw"))
+    monkeypatch.setattr(
+        qfw_mod,
+        "_launcher",
+        lambda: (
+            lambda circuit, **kwargs: {"counts": {f"{'0' * WIDTH} {'1' * WIDTH}": kwargs["shots"]}}
+        ),
+    )
+    for name in ("random", "real-device", "qfw"):
+        source_blocks["shared-name"] = source_blocks[name]
+        (energy, _), telemetry = walker("shared-name")
+        assert energy == -0.5
+        assert ("shot_retention_rate" in telemetry) is (name != "random")
+    assert len(fake_iqp.calls) == 1
+    assert saved_runtime == [RUNTIME_BLOCK_NAME]
 
 
 def test_walker_records_sbd_with_carryover(walker):
