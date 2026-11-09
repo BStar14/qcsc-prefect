@@ -5,7 +5,10 @@ same subspaces for the same RNG state.
 
 - CI strings are ``int64`` for ``norb < 64`` and Python ints (``object`` dtype)
   otherwise, which the fulqrum solver accepts.
-- Open-shell batches keep at least one string per spin, so a very small
+- Open-shell batches split ``subspace_dim`` between the spins in proportion to their
+  full CI string counts, ``C(norb, n_alpha)`` and ``C(norb, n_beta)``, capped by the
+  strings available to each spin; a capped spin's share goes to the other one (see
+  :func:`batch_sizes`). Each spin keeps at least one string, so a very small
   ``subspace_dim`` cannot produce an empty subspace.
 - Carryover CI strings, the heaviest strings of the previous iteration's ground
   state, come first in every batch and count toward its size, but take at most
@@ -14,6 +17,7 @@ same subspaces for the same RNG state.
   those of plain subsampling.
 """
 
+import math
 from typing import Iterator
 
 import numpy as np
@@ -104,7 +108,7 @@ def subsample(
             per spin. The heaviest ones are kept when there are more.
 
     Batches have at most ``max(1, int(sqrt(subspace_dim)))`` strings (closed shell)
-    or the per-spin sizes of plain subsampling (open shell). The carryover strings
+    or the per-spin sizes of :func:`batch_sizes` (open shell). The carryover strings
     fill a batch first, at most ``int(carryover_fraction * size)`` of them, and the
     rest is drawn without replacement from the other sampled strings, with
     renormalized probabilities.
@@ -153,22 +157,14 @@ def subsample(
         ci_strs_a_all = _union(ci_strs_a_unique, carry_a)
         ci_strs_b_all = _union(ci_strs_b_unique, carry_b)
         net_dim = len(ci_strs_a_all) * len(ci_strs_b_all)
-        truncate_rate = np.sqrt(subspace_dim / net_dim)
         if net_dim > subspace_dim:
-            draw_a = _Draw(
-                ci_strs_a_unique,
-                ci_probs_a_unique,
-                carry_a,
-                max(1, int(len(ci_strs_a_all) * truncate_rate)),
-                carryover_fraction,
+            size_a, size_b = batch_sizes(
+                subspace_dim,
+                available=(len(ci_strs_a_all), len(ci_strs_b_all)),
+                full=(math.comb(norb, nelec[0]), math.comb(norb, nelec[1])),
             )
-            draw_b = _Draw(
-                ci_strs_b_unique,
-                ci_probs_b_unique,
-                carry_b,
-                max(1, int(len(ci_strs_b_all) * truncate_rate)),
-                carryover_fraction,
-            )
+            draw_a = _Draw(ci_strs_a_unique, ci_probs_a_unique, carry_a, size_a, carryover_fraction)
+            draw_b = _Draw(ci_strs_b_unique, ci_probs_b_unique, carry_b, size_b, carryover_fraction)
             for _ in range(num_batches):
                 ci_strs_a_subsampled = draw_a(rng)
                 ci_strs_b_subsampled = draw_b(rng)
@@ -177,6 +173,37 @@ def subsample(
             # Only returns a single set because running diagonalization
             # on the same subspace doesn't improve results.
             yield (ci_strs_a_all, ci_strs_b_all)
+
+
+def batch_sizes(
+    subspace_dim: int, available: tuple[int, int], full: tuple[int, int]
+) -> tuple[int, int]:
+    """Alpha and beta batch sizes whose product is at most ``subspace_dim``.
+
+    The sizes follow the ratio of the full CI string counts ``full``, so a spin with
+    more possible strings gets more of the subspace: ``a / b ~ full_a / full_b`` and
+    ``a * b ~ subspace_dim``. A spin cannot take more than its ``available`` strings
+    (distinct samples and carryover); when it is capped, the other spin takes the
+    rest of ``subspace_dim``, up to its own cap. Each size is at least 1.
+
+    Args:
+        subspace_dim: Target subspace dimension of a batch.
+        available: Distinct alpha and beta strings to draw from.
+        full: Number of alpha and beta CI strings, ``C(norb, n_alpha)`` and
+            ``C(norb, n_beta)``.
+
+    Returns:
+        ``(size_a, size_b)``.
+    """
+    avail_a, avail_b = (max(1, int(n)) for n in available)
+    full_a, full_b = (max(1, int(n)) for n in full)
+    dim = max(1, int(subspace_dim))
+    # a = sqrt(dim * full_a / full_b), in integers so that a large norb cannot overflow.
+    size_a = min(avail_a, max(1, math.isqrt(dim * full_a // full_b)))
+    size_b = min(avail_b, max(1, dim // size_a))
+    # Give a capped or rounded-down share of beta back to alpha.
+    size_a = min(avail_a, max(1, dim // size_b))
+    return size_a, size_b
 
 
 def _carryover_ci_strs(
