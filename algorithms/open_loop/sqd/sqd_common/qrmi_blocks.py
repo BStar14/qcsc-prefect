@@ -172,7 +172,7 @@ def resolve_qrmi_settings(
         root_dir=str(Path(str(pick("work_dir", Path(solver["root_dir"]) / "qrmi"))).expanduser()),
         queue=str(pick("queue", solver["queue"])).strip(),
         project=str(pick("project", solver["project"])).strip(),
-        walltime=str(pick("walltime", "00:30:00")).strip(),
+        walltime=str(pick("walltime", "12:00:00")).strip(),
         ompthreads=None if ompthreads is None else int(ompthreads),
         slurm_memory=_optional_str(pick("slurm_memory", solver.get("slurm_memory"))),
         modules=_str_list(pick("modules", solver["modules"])),

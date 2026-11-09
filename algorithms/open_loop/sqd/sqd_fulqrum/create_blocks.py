@@ -295,7 +295,7 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         num_nodes=int(pick("num_nodes", 1)),
         mpiprocs=int(mpiprocs),
         ompthreads=None if ompthreads is None else int(ompthreads),
-        walltime=str(pick("walltime", "01:00:00")).strip(),
+        walltime=str(pick("walltime", "12:00:00")).strip(),
         resource_class=str(pick("resource_class", "cpu")).strip(),
         gpus_per_node=gpus_per_node,
         modules=_normalize_str_list(pick("modules")),
@@ -306,7 +306,7 @@ def resolve_settings(args: argparse.Namespace, config: dict[str, Any]) -> dict[s
         metrics_artifact_key=str(
             pick("metrics_artifact_key", defaults["metrics_artifact_key"])
         ).strip(),
-        timeout_seconds=float(pick("timeout_seconds", 7200.0)),
+        timeout_seconds=float(pick("timeout_seconds", 46800.0)),
         eigensolver=str(pick("eigensolver", "scipy")).strip(),
         hamiltonian_format=str(pick("hamiltonian_format", "csr")).strip(),
         tol=float(pick("tol", 1e-8)),

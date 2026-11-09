@@ -64,7 +64,7 @@ class FulqrumSolverJob(Block):
         description="Scheduler script filename. The suffix is normalized per target.",
     )
     metrics_artifact_key: str = Field(default="fulqrum-metrics", title="Metrics Artifact Key")
-    timeout_seconds: float = Field(default=7200.0, title="Timeout Seconds")
+    timeout_seconds: float = Field(default=46800.0, title="Timeout Seconds")
 
     eigensolver: Literal["scipy", "primme"] = Field(
         default="scipy",

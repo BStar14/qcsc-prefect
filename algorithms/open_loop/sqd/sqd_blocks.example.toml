@@ -94,4 +94,4 @@ dice_executable = "/path/to/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/D
 # metrics_artifact_key = "<system>-sqd-<solver>-metrics"
 # runtime_block_name = "qrmi-runtime"
 # advanced_block_name = "sqd-advanced-settings"
-# timeout_seconds = 7200
+# timeout_seconds = 46800           # Wait for each solver job (fulqrum; SBD, DICE: 7200)
