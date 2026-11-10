@@ -1,17 +1,15 @@
 # Workflow for observability demo
 
 import asyncio
-import os
-import sys
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 import numpy as np
-from ffsim.qiskit import PRE_INIT
 from prefect import get_run_logger, task
 from prefect.variables import Variable
+from qcsc_prefect.integrations.qiskit.qrmi.contract import resolve_shots
 from qcsc_prefect_dice import DiceSHCISolverJob
 from qcsc_prefect_sbd import SBDSolverJob
 from qcsc_workflow_utility import DICE_SLUG, SBD_SLUG, solver_class
@@ -23,7 +21,7 @@ from qiskit_addon_sqd.configuration_recovery import (
 from qiskit_addon_sqd.configuration_recovery import (
     recover_configurations as _recover_configurations,
 )
-from qiskit_addon_sqd.counts import bit_array_to_arrays, generate_bit_array_uniform
+from qiskit_addon_sqd.counts import bit_array_to_arrays
 
 from .data_io import save_ndarray
 from .flow_params import CircuitParameters
@@ -32,7 +30,7 @@ from .np_type_extension import (
     NpStrict1DArrayLL,
     NpStrict2DArrayBool,
 )
-from .sampling import RUNTIME_BLOCK_NAME, load_runtime, sample_sync
+from .sampling import load_quantum_source
 
 # Convert Addon function into Prefect Task
 recover_configurations = task(_recover_configurations)
@@ -58,6 +56,9 @@ def walker_sqd(
     random_seed: int,
 ) -> tuple[tuple[float, NpStrict2DArrayBool], dict[str, Any]]:
     logger = get_run_logger()
+    # Before any block is loaded, so that a bad Variable fails the walker first.
+    shots = resolve_sqd_shots(Variable.get("sqd_options", default={}))
+
     solver_cls, solver_block_name = load_solver_class(solver_block_ref)
     davidson_solver = solver_cls.load(solver_block_name)
 
@@ -67,52 +68,18 @@ def walker_sqd(
         **solver_record(solver_cls),
     }
 
-    options = Variable.get("sqd_options", default={"params": {"shots": 100_000}})
-    shots = int(options.get("params", {}).get("shots") or 100_000)
+    source = load_quantum_source(
+        quantum_source,
+        circuit_params=circuit_params,
+        num_orbitals=elec_props.num_orbitals,
+        random_seed=random_seed,
+        trial_index=trial_index,
+        walker_index=walker_index,
+    )
 
-    runtime = None
-    qfw = None
-    resource_name = None
-
-    if quantum_source == "real-device":
-        try:
-            runtime = load_runtime(RUNTIME_BLOCK_NAME, circuit_params)
-        except ValueError as exc:
-            raise RuntimeError(
-                "Quantum source 'real-device' requested but QrmiRuntimeBlock "
-                f"'{RUNTIME_BLOCK_NAME}' could not be loaded. Set quantum_source='random' "
-                "to use deterministic random sampling instead."
-            ) from exc
-
-        resource_name = runtime.resource
-
-    elif quantum_source == "qfw":
-        try:
-            from .qfw_resource import QFwResource
-        except ImportError as exc:
-            raise RuntimeError(
-                "Quantum source 'qfw' requires the QFw environment and dependencies."
-            ) from exc
-
-        qfw_slurm_bin = os.environ.get("QFW_SLURM_BIN")
-        if qfw_slurm_bin:
-            sys.path.insert(0, qfw_slurm_bin)
-
-        from qfw_slurm_sampler import run_sampler_job
-
-        try:
-            qfw = QFwResource.load("qfw-runner")
-        except ValueError as exc:
-            raise RuntimeError(
-                "Quantum source 'qfw' requested but QFwResource block 'qfw-runner' is not defined."
-            ) from exc
-
-        resource_name = qfw.device_id
-
-    if quantum_source in ("real-device", "qfw"):
-        logger.info("Preparing quantum sampling on backend %s.", resource_name)
-
-        vir_circuit = create_lucj_circuit(
+    circuit = None
+    if source.requires_circuit:
+        circuit = create_lucj_circuit(
             ucj_parameter=ucj_parameter,
             elec_props=elec_props,
             aa_indices=aa_indices,
@@ -121,144 +88,26 @@ def walker_sqd(
             use_reset_mitigation=circuit_params.use_reset_mitigation,
         )
 
-        logger.info(
-            "Submitting sampler workload to %s (shots=%s).",
-            resource_name,
-            shots,
+    logger.info("Sampling from %s (shots=%s).", source.backend_name, shots)
+    sampling_start = perf_counter()
+    try:
+        result = source.sample(circuit, shots=shots)
+    except Exception:
+        logger.exception("Sampling failed on backend %s.", source.backend_name)
+        raise
+    logger.info(
+        "Completed sampling on %s in %.2fs.",
+        source.backend_name,
+        perf_counter() - sampling_start,
+    )
+
+    bit_array = result[0].data.meas
+    if source.requires_circuit:
+        # Measured on a device: filter here, the same way for every device source.
+        bit_array, shot_retention_rate = mitigate_reset_errors(
+            result[0].data, use_reset_mitigation=circuit_params.use_reset_mitigation
         )
-        sampling_start = perf_counter()
-
-        if runtime is not None:
-            # QrmiRuntime searches the SABRE layout and transpiles against the actual
-            # Target: in this process for scheduler="iqp", on the compute node for "slurm".
-            logger.info(
-                "Sampling through QrmiRuntime (scheduler=%s, max_iterations=%s, "
-                "swap_trials=%s, layout_trials=%s).",
-                runtime.scheduler,
-                circuit_params.sabre_max_iterations,
-                circuit_params.sabre_swap_trials,
-                circuit_params.sabre_layout_trials,
-            )
-            try:
-                pub_result = sample_sync(runtime, vir_circuit, options=options)
-            except Exception:
-                logger.exception(
-                    "Sampler submission or execution failed for backend %s.",
-                    resource_name,
-                )
-                raise
-
-            meas_bits = pub_result[0].data.meas
-            if circuit_params.use_reset_mitigation:
-                test_bits = pub_result[0].data.test
-                bit_array = meas_bits.get_bitstrings(test_bits.bitcount() == 0)
-                bit_array = BitArray.from_samples(
-                    bit_array,
-                    num_bits=meas_bits.num_bits,
-                )
-            else:
-                bit_array = meas_bits
-
-            shot_retention_rate = float(bit_array.num_shots / meas_bits.num_shots)
-
-        else:
-            try:
-                vir_circuit = PRE_INIT.run(vir_circuit)
-
-                sampler_path = Path(__file__).with_name("qfw_slurm_sqd_sampler.py")
-
-                record = run_sampler_job(
-                    vir_circuit,
-                    shots=shots,
-                    qpu=resource_name,
-                    work_dir=str(Path.home() / "qfw_jobs"),
-                    sampler=str(sampler_path),
-                    sampler_args=[
-                        "--optimization-level",
-                        circuit_params.optimization_level,
-                        "--sabre-max-iterations",
-                        circuit_params.sabre_max_iterations,
-                        "--sabre-swap-trials",
-                        circuit_params.sabre_swap_trials,
-                        "--sabre-layout-trials",
-                        circuit_params.sabre_layout_trials,
-                    ],
-                )
-
-                counts = record["counts"]
-
-                if circuit_params.use_reset_mitigation:
-                    samples = []
-
-                    for bitstring, count in counts.items():
-                        registers = bitstring.split()
-
-                        if len(registers) != 2:
-                            raise RuntimeError(
-                                "Expected QFw reset-mitigation counts to contain "
-                                f"two classical registers, got {bitstring!r}."
-                            )
-
-                        test_bits = registers[0]
-                        meas_bits = registers[1]
-
-                        if int(test_bits, 2).bit_count() == 0:
-                            samples.extend([meas_bits] * count)
-
-                    if not samples:
-                        raise RuntimeError(
-                            "Reset mitigation removed all samples from the QFw sampler result."
-                        )
-
-                    bit_array = BitArray.from_samples(samples)
-
-                else:
-                    samples = []
-
-                    for bitstring, count in counts.items():
-                        samples.extend([bitstring] * count)
-
-                    bit_array = BitArray.from_samples(samples)
-
-            except Exception:
-                logger.exception(
-                    "QFw Slurm sampler submission or execution failed for device %s.",
-                    resource_name,
-                )
-                raise
-
-            shot_retention_rate = float(bit_array.num_shots / shots)
-
-        logger.info(
-            "Completed sampler workload on %s in %.2fs.",
-            resource_name,
-            perf_counter() - sampling_start,
-        )
-
-        telemetry.update(
-            shot_retention_rate=shot_retention_rate,
-        )
-
-    elif quantum_source == "random":
-        # Random sampling
-        # Isolate bitstring seed from the module seed for equivalent control
-        # with quantum-device sampling path.
-        seed = int(
-            random_seed
-            + ((trial_index + walker_index) * (trial_index + walker_index + 1) // 2 + walker_index)
-        )
-        logger.info("Sampling bitstrings with RNG seed %s", seed)
-        bit_array = generate_bit_array_uniform(
-            num_samples=shots,
-            num_bits=elec_props.num_orbitals * 2,
-            rand_seed=seed,
-        )
-
-    else:
-        raise ValueError(
-            f"Unsupported quantum_source: {quantum_source!r}. "
-            "Expected 'random', 'real-device' or 'qfw'."
-        )
+        telemetry.update(shot_retention_rate=shot_retention_rate)
 
     logger.debug("Starting configuration recovery and diagonalization.")
     raw_bitstrings, raw_probs = bit_array_to_arrays(bit_array)
@@ -324,6 +173,41 @@ def walker_sqd(
     )
 
     return ((energy, next_carryover), telemetry)
+
+
+DEFAULT_SHOTS = 100_000
+
+
+def resolve_sqd_shots(options) -> int:
+    """Shots from the ``sqd_options`` Variable, with the same rules for every source.
+
+    Only ``{"params": {"shots": <positive integer>}}`` is accepted; without shots it is
+    ``DEFAULT_SHOTS``. ``null`` shots, floats, booleans, strings and other options are
+    rejected rather than replaced or ignored.
+    """
+    if not isinstance(options, Mapping):
+        raise TypeError("sqd_options must be a mapping")
+    params = options.get("params", {})
+    has_shots = isinstance(params, Mapping) and "shots" in params
+    return resolve_shots(None if has_shots else DEFAULT_SHOTS, options)
+
+
+def mitigate_reset_errors(data, *, use_reset_mitigation: bool) -> tuple[BitArray, float]:
+    """The ``meas`` bits to use and the fraction of shots kept.
+
+    With reset mitigation, keep the shots whose ``test`` register is all zeros. ``test``
+    must be present then, and at least one shot must remain.
+    """
+    meas_bits = data.meas
+    if not use_reset_mitigation:
+        return meas_bits, 1.0
+    if "test" not in data.keys():
+        raise RuntimeError("Reset mitigation needs the 'test' register in the sampler result.")
+    samples = meas_bits.get_bitstrings(data.test.bitcount() == 0)
+    if not samples:
+        raise RuntimeError("Reset mitigation removed all samples.")
+    kept = BitArray.from_samples(samples, num_bits=meas_bits.num_bits)
+    return kept, float(kept.num_shots / meas_bits.num_shots)
 
 
 SOLVER_CLASSES = {SBD_SLUG: SBDSolverJob, DICE_SLUG: DiceSHCISolverJob}

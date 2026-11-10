@@ -51,9 +51,17 @@ solver_mode = "cpu"
 # default if omitted: {"params":{"shots":500000}} for miyabi, {"params":{"shots":50000}} for fugaku
 shots = 50000 # Fugaku tutorial baseline; override for your workload
 
-# QrmiRuntimeBlock "qrmi-runtime" used for quantum_source = "real-device". For random or
-# qfw only, delete [runtime] and [runtime.qrmi]; an existing block is then kept. The flow
-# sets the SBD transpiler and its configuration itself.
+# The flow's quantum_source is this QuantumSourceBlock's name, not a platform selector.
+# For synthetic samples, set kind = "random" and delete the [runtime] tables below.
+[source]
+name = "quantum-source"
+
+[source.config]
+kind = "qrmi"
+block_name = "qrmi-runtime"
+tags = ["res: quantum"]
+
+# The runtime referenced above. The flow supplies its own compilation policy.
 [runtime]
 # "iqp": submit from the workflow process. "slurm": use root_dir and three block names.
 scheduler = "iqp"

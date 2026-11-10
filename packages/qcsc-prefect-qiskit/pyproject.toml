@@ -17,6 +17,7 @@ maintainers = [
 ]
 dependencies = [
     "anyio>=4",
+    "numpy",
     "prefect>=2.19",
     "pydantic>=2",
     "qiskit-ibm-runtime>=0.46",

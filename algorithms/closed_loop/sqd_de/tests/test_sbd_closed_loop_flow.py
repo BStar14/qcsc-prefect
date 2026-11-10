@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+from qcsc_prefect.integrations.qiskit.sources import QuantumSourceBlock, QuantumSourceConfig
 from qcsc_prefect_dice import DiceSHCISolverJob
 from qcsc_prefect_sbd import SBDResult, SBDSolverJob, check_sbd_input
 from qcsc_workflow_utility import chem
@@ -43,6 +44,13 @@ class DoneList(list):
 
 @pytest.fixture
 def flow(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        QuantumSourceBlock,
+        "load",
+        classmethod(
+            lambda cls, name, **kwargs: QuantumSourceBlock(config=QuantumSourceConfig("random"))
+        ),
+    )
     logger = SimpleNamespace(
         info=lambda *a, **k: None,
         debug=lambda *a, **k: None,
@@ -80,7 +88,7 @@ def flow(monkeypatch, tmp_path):
         parameters = FlowParameters(
             fcidump=N2,
             sqd_dim=400,
-            quantum_source="random",
+            quantum_source="test-source",
             solver_block_ref=solver_block_ref,
             # randomization_factor=0: with ffsim 0.0.85, the default random perturbation of
             # t2 breaks its pair symmetry and the LUCJ parameter conversion rejects it, for

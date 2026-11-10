@@ -1,5 +1,14 @@
 # Run SBD Closed-loop Workflow on Fugaku (qcsc-prefect)
 
+> **Quantum source configuration:** `quantum_source` now names a saved
+> `QuantumSourceBlock`; its default is `quantum-source`. The block generator saves
+> this Block from the `[source]` table. Set the Block's `config.kind` to `random`,
+> `qrmi` or `qfw` to choose the platform, or pass another saved source Block name.
+> Older values `random`, `real-device` and `qfw` work only after source Blocks with
+> those names are saved. See [Quantum Sources](../howto/howto_use_quantum_source.md)
+> and the [SQD source configuration](https://github.com/qiskit-community/qcsc-prefect/tree/main/algorithms/closed_loop/sqd_de#quantum-sampling).
+
+
 This tutorial walks us through reproducing a Sample-based Quantum Diagonalization (SQD) experiment using the `qcsc-prefect` architecture.
 We will run a hybrid quantum-classical workflow using the [SBD](https://github.com/r-ccs-cms/sbd) solver to diagonalize a sparse chemistry Hamiltonian on Fugaku, orchestrated via Prefect.
 
@@ -292,7 +301,7 @@ In the Prefect console, click **Run** → **Custom run** and set at least:
 | FCIDump File | `/path/to/work/qcsc-prefect/algorithms/closed_loop/sqd_de/data/fcidump_N2_MO.txt` |
 | SQD Subspace Dimension (Optional) | `1000000` |
 | Differential Evolution Iterations (Optional) | `1` (start small for testing) |
-| Quantum Source (Optional) | `real-device` or `random` |
+| Quantum Source Block (Optional) | `quantum-source` |
 | Random Seed (Optional) | `24` |
 | Solver Block Ref | `sbd_solver_job/davidson-solver` |
 
