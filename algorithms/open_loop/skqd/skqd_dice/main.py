@@ -293,6 +293,10 @@ async def skqd_2501_09702(
     logger.info("Solver: %s (block %s)", "SBD" if use_sbd else "DICE", solver_block_name)
     sci_solver = await solver_cls.load(solver_block_name)
     if use_sbd:
+        # This flow still uses the closed-shell conversion even though SBD itself
+        # also supports restricted open-shell inputs.
+        if elec_props.num_electrons[0] != elec_props.num_electrons[1]:
+            raise ValueError("SKQD with SBD supports closed-shell systems only.")
         check_sbd_input(
             ci_strings=_hartree_fock_strings(elec_props.num_electrons[0]),
             nelec=elec_props.num_electrons,
