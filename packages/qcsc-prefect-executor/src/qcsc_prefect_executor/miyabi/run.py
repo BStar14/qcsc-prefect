@@ -17,6 +17,8 @@ from qcsc_prefect_adapters.miyabi.builder import (
 from qcsc_prefect_adapters.miyabi.runtime import MiyabiPBSRuntime
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
+from qcsc_prefect_executor.job_logs import log_job_stderr
+
 MAX_LOG_SIZE = 10_000  # mirror existing behavior
 
 
@@ -178,10 +180,12 @@ async def run_miyabi_job(
     stdout = truncate_log(_read_text_if_exists(out_path))
     stderr = truncate_log(_read_text_if_exists(err_path))
 
+    # existing behavior returns Exit_status as int
+    exit_status = int(final_status.get("Exit_status", "0") or "0")
+
     if stdout:
         logger.info(stdout)
-    if stderr:
-        logger.error(stderr)
+    log_job_stderr(logger, stderr, failed=exit_status != 0, truncate=lambda text: text)
 
     # 4) metrics artifact (table) (same shape as existing code)
     art_dict = _create_job_artifact(job_id=job_id, job_status=final_status)
@@ -190,6 +194,4 @@ async def run_miyabi_job(
         key=metrics_artifact_key,
     )
 
-    # existing behavior returns Exit_status as int
-    exit_status = int(final_status.get("Exit_status", "0") or "0")
     return MiyabiRunResult(job_id=job_id, exit_status=exit_status, job_status=final_status_any)

@@ -22,6 +22,7 @@ qcsc-prefect/
 │   ├── qcsc-prefect-executor/
 │   ├── qcsc-prefect-qiskit/
 │   ├── qcsc-prefect-dice/
+│   ├── qcsc-prefect-fulqrum/
 │   └── qcsc-prefect-sbd/
 ├── algorithms/
 │   ├── qcsc_workflow_utility/

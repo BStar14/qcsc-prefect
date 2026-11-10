@@ -29,8 +29,16 @@ def build_local_command(*, exec_profile: ExecutionProfile, executable: str) -> l
     """Build a shell-free command for local execution.
 
     Local execution intentionally does not interpret shell setup. Modules and
-    pre-commands must be applied before the Prefect worker is started.
+    pre-commands must be applied before the Prefect worker is started. GPU
+    requests are scheduler directives, so ``gpus_per_node`` is rejected too:
+    the process sees whatever GPUs the worker host exposes.
     """
+
+    if exec_profile.gpus_per_node is not None:
+        raise ValueError(
+            "Local execution does not support gpus_per_node. "
+            "The process uses the GPUs visible to the Prefect worker."
+        )
 
     unsupported: list[str] = []
     if exec_profile.modules:

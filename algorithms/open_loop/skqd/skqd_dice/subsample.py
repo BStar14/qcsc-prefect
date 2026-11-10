@@ -1,9 +1,18 @@
-"""Modification of subsample code for presice control of subspace dimension."""
+"""Post-selection and subsampling with precise control of the subspace dimension.
+
+Both SQD workflows share this module, so the DICE and fulqrum solvers see the
+same subspaces for the same RNG state.
+
+- CI strings are ``int64`` for ``norb < 64`` and Python ints (``object`` dtype)
+  otherwise, which the fulqrum solver accepts.
+- Open-shell batches keep at least one string per spin, so a very small
+  ``subspace_dim`` cannot produce an empty subspace.
+"""
 
 from typing import Iterator
 
 import numpy as np
-from qiskit_addon_sqd.configuration_recovery import post_select_by_hamming_weight
+from qiskit_addon_sqd.subsampling import postselect_by_hamming_right_and_left
 
 
 def postselect(
@@ -22,16 +31,37 @@ def postselect(
         hamming_right: The target hamming weight for the right half of sampled bitstrings.
         hamming_left: The target hamming weight for the left half of sampled bitstrings.
     """
-    mask_postsel = post_select_by_hamming_weight(
+    return postselect_by_hamming_right_and_left(
         bitstring_matrix,
+        probabilities,
         hamming_right=hamming_right,
         hamming_left=hamming_left,
     )
-    bs_mat_postsel = bitstring_matrix[mask_postsel]
-    probs_postsel = probabilities[mask_postsel]
-    probs_postsel = np.abs(probs_postsel) / np.sum(np.abs(probs_postsel))
 
-    return bs_mat_postsel, probs_postsel
+
+def bitstrings_to_ci_strs(bitstring_matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Convert each row into (alpha, beta) CI strings without deduplication.
+
+    The right half of a row is alpha (spin-up), the left half is beta, and the
+    rightmost bit of each half is orbital 0.
+
+    Returns:
+        ``(ci_strs_a, ci_strs_b)`` with one entry per row: ``int64`` for
+        ``norb < 64``, Python ints (``object`` dtype) otherwise.
+    """
+    norb = bitstring_matrix.shape[1] // 2
+    num_configs = bitstring_matrix.shape[0]
+    dtype = np.int64 if norb < 64 else object
+    ci_strs_a = np.zeros(num_configs, dtype=dtype)
+    ci_strs_b = np.zeros(num_configs, dtype=dtype)
+
+    # For performance, we accumulate the left and right CI strings together, column-wise,
+    # across the two halves of the input bitstring matrix.
+    for i in range(norb):
+        weight = 1 << (norb - 1 - i)
+        ci_strs_b += bitstring_matrix[:, i].astype(dtype) * weight
+        ci_strs_a += bitstring_matrix[:, norb + i].astype(dtype) * weight
+    return ci_strs_a, ci_strs_b
 
 
 def subsample(
@@ -41,7 +71,7 @@ def subsample(
     num_batches: int,
     rng: np.random.Generator,
     open_shell: bool = False,
-) -> Iterator[np.ndarray]:
+) -> Iterator[tuple[np.ndarray, np.ndarray]]:
     """Subsample batches of integer representation of determinants from unique set.
 
     Args:
@@ -49,6 +79,7 @@ def subsample(
             values such that each row represents a single bitstring.
         probabilities: A 1D array specifying a probability distribution over the bitstrings.
         subspace_dim: A target dimension of subspace for diagonalization.
+        num_batches: Number of subspaces to draw when the full set exceeds ``subspace_dim``.
         rng: A random number generator to control random behavior.
         open_shell: A flag specifying whether unique configurations from the left and right
             halves of the bitstrings should be kept separate. If ``False``, configurations
@@ -60,20 +91,11 @@ def subsample(
         A length-2 tuple of determinant lists representing the right (spin-up)
         and left (spin-down) halves of the bitstrings, respectively.
     """
-    norb = bitstring_matrix.shape[1] // 2
-    num_configs = bitstring_matrix.shape[0]
-    ci_strs_a = np.zeros(num_configs, dtype=np.longlong)
-    ci_strs_b = np.zeros(num_configs, dtype=np.longlong)
+    ci_strs_a, ci_strs_b = bitstrings_to_ci_strs(bitstring_matrix)
 
-    # For performance, we accumulate the left and right CI strings together, column-wise,
-    # across the two halves of the input bitstring matrix.
-    for i in range(norb):
-        ci_strs_b[:] += bitstring_matrix[:, i] * 2 ** (norb - 1 - i)
-        ci_strs_a[:] += bitstring_matrix[:, norb + i] * 2 ** (norb - 1 - i)
-
-    # Reduce duplicated elements from CI strings and accumurate probabilities.
+    # Reduce duplicated elements from CI strings and accumulate probabilities.
     if not open_shell:
-        ci_strs_unique, ci_probs_unique = _unique_and_accumurate_probs(
+        ci_strs_unique, ci_probs_unique = _unique_and_accumulate_probs(
             ci_strings=np.concatenate((ci_strs_a, ci_strs_b)),
             probabilities=np.tile(probabilities, 2) / 2.0,
         )
@@ -82,7 +104,7 @@ def subsample(
             for _ in range(num_batches):
                 ci_strs_subsampled = rng.choice(
                     ci_strs_unique,
-                    size=int(np.sqrt(subspace_dim)),
+                    size=max(1, int(np.sqrt(subspace_dim))),
                     replace=False,
                     p=ci_probs_unique,
                 )
@@ -92,11 +114,11 @@ def subsample(
             # on the same subspace doesn't improve results.
             yield (ci_strs_unique, ci_strs_unique)
     else:
-        ci_strs_a_unique, ci_probs_a_unique = _unique_and_accumurate_probs(
+        ci_strs_a_unique, ci_probs_a_unique = _unique_and_accumulate_probs(
             ci_strings=ci_strs_a,
             probabilities=probabilities,
         )
-        ci_strs_b_unique, ci_probs_b_unique = _unique_and_accumurate_probs(
+        ci_strs_b_unique, ci_probs_b_unique = _unique_and_accumulate_probs(
             ci_strings=ci_strs_b,
             probabilities=probabilities,
         )
@@ -106,13 +128,13 @@ def subsample(
             for _ in range(num_batches):
                 ci_strs_a_subsampled = rng.choice(
                     ci_strs_a_unique,
-                    size=int(len(ci_strs_a_unique) * truncate_rate),
+                    size=max(1, int(len(ci_strs_a_unique) * truncate_rate)),
                     replace=False,
                     p=ci_probs_a_unique,
                 )
                 ci_strs_b_subsampled = rng.choice(
                     ci_strs_b_unique,
-                    size=int(len(ci_strs_b_unique) * truncate_rate),
+                    size=max(1, int(len(ci_strs_b_unique) * truncate_rate)),
                     replace=False,
                     p=ci_probs_b_unique,
                 )
@@ -123,11 +145,11 @@ def subsample(
             yield (ci_strs_a_unique, ci_strs_b_unique)
 
 
-def _unique_and_accumurate_probs(
+def _unique_and_accumulate_probs(
     ci_strings: np.ndarray,
     probabilities: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Reduce duplicated elements from CI string and accumurate probability.
+    """Reduce duplicated elements from CI string and accumulate probability.
 
     Args:
         ci_strings: CI strings to reduce overlapped element.
@@ -141,7 +163,7 @@ def _unique_and_accumurate_probs(
         return_inverse=True,
     )
     ci_probs_unique = np.bincount(
-        ci_strs_inv,
+        ci_strs_inv.reshape(-1),
         weights=probabilities,
         minlength=len(ci_strs_unique),
     )

@@ -84,8 +84,9 @@ jobs:
             -e packages/qcsc-prefect-dice \
             -e packages/qcsc-prefect-qiskit \
             -e packages/qcsc-prefect-sbd \
+            -e packages/qcsc-prefect-fulqrum \
             -e algorithms/qcsc_workflow_utility \
-            -e algorithms/open_loop/sqd \
+            -e "algorithms/open_loop/sqd[all]" \
             -e algorithms/open_loop/skqd \
             -e algorithms/closed_loop/sqd_de \
             pytest

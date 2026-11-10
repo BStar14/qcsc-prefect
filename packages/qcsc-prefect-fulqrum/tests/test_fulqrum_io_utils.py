@@ -1,0 +1,259 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+from qcsc_prefect_fulqrum import io_utils
+from qcsc_prefect_fulqrum.solver import FulqrumSolution, FulqrumSolverOptions
+
+
+def _problem(norb: int = 4, seed: int = 0):
+    rng = np.random.default_rng(seed)
+    h1 = rng.normal(size=(norb, norb))
+    eri = rng.normal(size=(norb,) * 4)
+    # Two electrons per spin in four orbitals; unsorted with duplicates.
+    strs_a = np.array([0b1100, 0b0011, 0b0101, 0b0011])
+    strs_b = np.array([0b1010, 0b0011])
+    return (strs_a, strs_b), h1, eri
+
+
+def test_make_job_work_dir_is_unique(tmp_path: Path):
+    first = io_utils.make_job_work_dir(tmp_path / "root")
+    second = io_utils.make_job_work_dir(tmp_path / "root")
+    assert first != second
+    assert first.parent == second.parent == tmp_path / "root"
+    assert first.name.startswith("job_")
+
+
+def test_solver_input_round_trip(tmp_path: Path):
+    ci_strings, h1, eri = _problem()
+    options = FulqrumSolverOptions(
+        eigensolver="primme", tol=1e-10, max_iter=50, backend="gpu-mpi", carryover_fraction=0.5
+    )
+    io_utils.write_solver_input(
+        work_dir=tmp_path,
+        ci_strings=ci_strings,
+        one_body_tensor=h1,
+        two_body_tensor=eri,
+        norb=4,
+        nelec=(2, 2),
+        options=options,
+    )
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["input.npz", "solver.json"]
+
+    problem = io_utils.read_solver_input(tmp_path)
+    strs_a, strs_b = problem["ci_strings"]
+    np.testing.assert_array_equal(strs_a, [0b0011, 0b0101, 0b1100])
+    np.testing.assert_array_equal(strs_b, [0b0011, 0b1010])
+    assert strs_a.dtype == np.int64
+    np.testing.assert_array_equal(problem["one_body_tensor"], h1)
+    np.testing.assert_array_equal(problem["two_body_tensor"], eri)
+    assert problem["norb"] == 4
+    assert problem["nelec"] == (2, 2)
+    assert problem["options"] == options
+
+
+def test_write_solver_input_validates_before_writing(tmp_path: Path):
+    ci_strings, h1, eri = _problem()
+    with pytest.raises(ValueError, match="electrons"):
+        io_utils.write_solver_input(
+            work_dir=tmp_path,
+            ci_strings=ci_strings,
+            one_body_tensor=h1,
+            two_body_tensor=eri,
+            norb=4,
+            nelec=(1, 2),
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_read_solver_input_rejects_unknown_format(tmp_path: Path):
+    ci_strings, h1, eri = _problem()
+    io_utils.write_solver_input(
+        work_dir=tmp_path,
+        ci_strings=ci_strings,
+        one_body_tensor=h1,
+        two_body_tensor=eri,
+        norb=4,
+        nelec=(2, 2),
+    )
+    spec = json.loads((tmp_path / "solver.json").read_text())
+    spec["format_version"] = 99
+    (tmp_path / "solver.json").write_text(json.dumps(spec))
+    with pytest.raises(ValueError, match="format_version"):
+        io_utils.read_solver_input(tmp_path)
+
+
+@pytest.mark.parametrize("with_amplitudes", [True, False])
+def test_solver_output_round_trip(tmp_path: Path, with_amplitudes: bool):
+    amplitudes = np.arange(6, dtype=float).reshape(3, 2) if with_amplitudes else None
+    solution = FulqrumSolution(
+        energy=-1.25,
+        orbital_occupancies=(np.array([1.0, 0.5, 0.5, 0.0]), np.array([1.0, 1.0, 0.0, 0.0])),
+        ci_strs_a=np.array([3, 5, 12], dtype=np.int64),
+        ci_strs_b=np.array([3, 10], dtype=np.int64),
+        amplitudes=amplitudes,
+        metadata={"subspace_dim": 6, "nnz": np.int64(20), "timings": {"eigensolve": 0.1}},
+    )
+    io_utils.write_solver_output(tmp_path, solution)
+
+    loaded = io_utils.read_solver_output(tmp_path, norb=4)
+    assert loaded.energy == -1.25
+    np.testing.assert_array_equal(loaded.orbital_occupancies[0], solution.orbital_occupancies[0])
+    np.testing.assert_array_equal(loaded.orbital_occupancies[1], solution.orbital_occupancies[1])
+    np.testing.assert_array_equal(loaded.ci_strs_a, solution.ci_strs_a)
+    np.testing.assert_array_equal(loaded.ci_strs_b, solution.ci_strs_b)
+    if with_amplitudes:
+        np.testing.assert_array_equal(loaded.amplitudes, amplitudes)
+    else:
+        assert loaded.amplitudes is None
+    assert loaded.metadata == {"subspace_dim": 6, "nnz": 20, "timings": {"eigensolve": 0.1}}
+    assert len(loaded.carryover_a) == len(loaded.carryover_b) == 0
+    assert not list(tmp_path.glob("*.tmp*"))
+
+
+def test_carryover_round_trip(tmp_path: Path):
+    solution = FulqrumSolution(
+        energy=-1.0,
+        orbital_occupancies=(np.zeros(4), np.zeros(4)),
+        ci_strs_a=np.array([3, 5, 12], dtype=np.int64),
+        ci_strs_b=np.array([3, 10], dtype=np.int64),
+        amplitudes=None,
+        carryover_a=np.array([12, 3], dtype=np.int64),
+        carryover_b=np.array([10], dtype=np.int64),
+    )
+    io_utils.write_solver_output(tmp_path, solution)
+    loaded = io_utils.read_solver_output(tmp_path, norb=4)
+    # Heaviest-first order is kept.
+    np.testing.assert_array_equal(loaded.carryover_a, [12, 3])
+    np.testing.assert_array_equal(loaded.carryover_b, [10])
+
+
+def test_format_version_1_output_reads_with_empty_carryover(tmp_path: Path):
+    """An output written before carryover existed still reads."""
+    np.savez(
+        tmp_path / "output.npz",
+        occupancies_a=np.zeros(4),
+        occupancies_b=np.zeros(4),
+        ci_strs_a=np.array([3], dtype=np.int64),
+        ci_strs_b=np.array([3], dtype=np.int64),
+    )
+    (tmp_path / "result.json").write_text(
+        json.dumps({"format_version": 1, "energy": -1.0, "has_amplitudes": False, "metadata": {}})
+    )
+    loaded = io_utils.read_solver_output(tmp_path, norb=4)
+    assert loaded.energy == -1.0
+    assert len(loaded.carryover_a) == len(loaded.carryover_b) == 0
+
+
+def test_wide_ci_strings_round_trip_without_pickle(tmp_path: Path):
+    norb = 70
+    big = (1 << 69) | 1
+    solution = FulqrumSolution(
+        energy=0.0,
+        orbital_occupancies=(np.zeros(norb), np.zeros(norb)),
+        ci_strs_a=np.array([3, big], dtype=object),
+        ci_strs_b=np.array([big], dtype=object),
+        amplitudes=np.ones((2, 1)),
+        carryover_a=np.array([big], dtype=object),
+        carryover_b=np.array([big], dtype=object),
+    )
+    io_utils.write_solver_output(tmp_path, solution)
+    loaded = io_utils.read_solver_output(tmp_path, norb=norb)
+    assert loaded.ci_strs_a.dtype == object
+    assert [int(x) for x in loaded.ci_strs_a] == [3, big]
+    assert [int(x) for x in loaded.ci_strs_b] == [big]
+    assert [int(x) for x in loaded.carryover_a] == [big]
+
+
+def test_error_json_takes_precedence(tmp_path: Path):
+    try:
+        raise ValueError("boom")
+    except ValueError as exc:
+        io_utils.write_solver_error(tmp_path, exc)
+
+    error = io_utils.read_solver_error(tmp_path)
+    assert error["type"] == "ValueError"
+    assert error["message"] == "boom"
+    assert "Traceback" in error["traceback"]
+    with pytest.raises(io_utils.FulqrumSolverError, match="ValueError: boom") as info:
+        io_utils.read_solver_output(tmp_path, norb=4)
+    assert info.value.error["type"] == "ValueError"
+
+
+def test_missing_outputs_raise_file_not_found(tmp_path: Path):
+    assert io_utils.read_solver_error(tmp_path) is None
+    with pytest.raises(FileNotFoundError):
+        io_utils.read_solver_output(tmp_path, norb=4)
+
+
+def _problem_files(tmp_path: Path, options: FulqrumSolverOptions) -> dict:
+    ci_strings, h1, eri = _problem()
+    io_utils.write_solver_input(
+        work_dir=tmp_path,
+        ci_strings=ci_strings,
+        one_body_tensor=h1,
+        two_body_tensor=eri,
+        norb=4,
+        nelec=(2, 2),
+        options=options,
+    )
+    return json.loads((tmp_path / "solver.json").read_text())
+
+
+def test_default_options_are_written_as_version_1(tmp_path: Path):
+    """A host and a node of different package versions keep working for CPU solves."""
+    spec = _problem_files(tmp_path, FulqrumSolverOptions(eigensolver="primme"))
+    assert spec["format_version"] == 1
+    assert "backend" not in spec["options"] and "carryover_fraction" not in spec["options"]
+    assert io_utils.read_solver_input(tmp_path)["options"] == FulqrumSolverOptions(
+        eigensolver="primme"
+    )
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        FulqrumSolverOptions(backend="gpu"),
+        FulqrumSolverOptions(carryover_fraction=0.5),
+        FulqrumSolverOptions(max_basis_size=40),
+        FulqrumSolverOptions(backend="gpu-mpi", process_grid=(2, 1), convergence="energy"),
+    ],
+)
+def test_new_options_are_written_as_version_2(tmp_path: Path, options):
+    spec = _problem_files(tmp_path, options)
+    assert spec["format_version"] == 2
+    assert io_utils.read_solver_input(tmp_path)["options"] == options
+
+
+def test_output_without_carryover_is_version_1(tmp_path: Path):
+    solution = FulqrumSolution(
+        energy=-1.0,
+        orbital_occupancies=(np.zeros(4), np.zeros(4)),
+        ci_strs_a=np.array([3], dtype=np.int64),
+        ci_strs_b=np.array([3], dtype=np.int64),
+        amplitudes=None,
+    )
+    io_utils.write_solver_output(tmp_path, solution)
+    assert json.loads((tmp_path / "result.json").read_text())["format_version"] == 1
+    with np.load(tmp_path / "output.npz") as data:
+        assert "carryover_a" not in data.files
+
+
+def test_an_unsupported_version_names_the_fix(tmp_path: Path):
+    _problem_files(tmp_path, FulqrumSolverOptions())
+    spec = json.loads((tmp_path / "solver.json").read_text())
+    spec["format_version"] = 3
+    (tmp_path / "solver.json").write_text(json.dumps(spec))
+    with pytest.raises(ValueError, match="same qcsc-prefect-fulqrum version"):
+        io_utils.read_solver_input(tmp_path)
+
+
+def test_an_unknown_option_asks_for_the_same_version(tmp_path: Path):
+    spec = _problem_files(tmp_path, FulqrumSolverOptions(max_basis_size=40))
+    spec["options"]["from_a_newer_host"] = 1
+    (tmp_path / "solver.json").write_text(json.dumps(spec))
+    with pytest.raises(ValueError, match="unknown solver options from_a_newer_host.*same"):
+        io_utils.read_solver_input(tmp_path)

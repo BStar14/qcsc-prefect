@@ -23,6 +23,7 @@ class ExecutionProfile:
     mpiprocs: int | None = None
     ompthreads: int | None = None
     walltime: str | None = None  # "HH:MM:SS"
+    gpus_per_node: int | None = None
 
     # runtime
     launcher: Launcher = "single"

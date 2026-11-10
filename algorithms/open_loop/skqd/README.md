@@ -116,11 +116,14 @@ The flow uses DICE by default (`DiceSHCISolverJob` named by `solver_name`). To u
 set `solver_block_ref` to `sbd_solver_job/<name>`; `dice_shci_solver_job/<name>` selects
 DICE explicitly. The slug selects the block class, and an unknown slug is rejected.
 
-DICE and SBD take the same arguments but do not solve the same problem. SBD:
+DICE and SBD take the same arguments but do not solve the same problem. In this SKQD flow, SBD:
 
 - solves closed-shell systems only, and uses one determinant set for alpha and beta;
 - needs the Hartree-Fock determinant first;
 - has no total spin target, so `spin_sq` must be `null` in the molecule settings.
+
+The SBD solver itself also supports restricted open-shell systems, but this flow uses
+the closed-shell subspace conversion.
 
 Input that SBD cannot solve fails with `ValueError` before sampling. For SBD, the flow
 puts the Hartree-Fock determinant first and keeps the subspace size limit: one slot for

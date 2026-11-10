@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,8 @@ from prefect.logging import get_run_logger
 from qcsc_prefect_adapters.slurm.builder import SlurmJobRequest, render_script, write_script_file
 from qcsc_prefect_adapters.slurm.runtime import SlurmRuntime
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
+
+from qcsc_prefect_executor.job_logs import log_job_stderr
 
 MAX_LOG_SIZE = 10_000
 
@@ -75,6 +78,7 @@ async def run_slurm_job(
     watch_poll_interval: float = 10.0,
     timeout_seconds: float | None = None,
     metrics_artifact_key: str = "slurm-job-metrics",
+    submit_env: Mapping[str, str | None] | None = None,
 ) -> SlurmRunResult:
     """Execute a Slurm job end-to-end from runtime models.
 
@@ -90,6 +94,8 @@ async def run_slurm_job(
         watch_poll_interval: Poll interval in seconds for job status checks.
         timeout_seconds: Optional timeout for waiting final status.
         metrics_artifact_key: Prefect artifact key for job metrics table.
+        submit_env: Extra environment variables for ``sbatch`` only; the job and
+            its SPANK plugins see them, and the rendered script does not hold them.
 
     Returns:
         `SlurmRunResult` containing job id, exit status, state, and
@@ -102,7 +108,8 @@ async def run_slurm_job(
     script_path = write_script_file(work_dir=work_dir, filename=script_filename, text=script_text)
 
     runtime = SlurmRuntime()
-    submit = await runtime.submit(script_path, cwd=work_dir)
+    extra = {"env": dict(submit_env)} if submit_env else {}
+    submit = await runtime.submit(script_path, cwd=work_dir, **extra)
     final_status = await runtime.wait_final_status(
         submit.job_id,
         watch_poll_interval=watch_poll_interval,
@@ -112,10 +119,14 @@ async def run_slurm_job(
     stdout_file = work_dir / "output.out"
     stderr_file = work_dir / "output.err"
 
+    exit_code_text = str(final_status.get("ExitCode", "-1:0")).split(":", 1)[0]
+    exit_status = int(exit_code_text) if exit_code_text.isdigit() else -1
+
     if logs := _read_text_if_exists(stdout_file):
         logger.info(truncate_log(logs))
-    if logs := _read_text_if_exists(stderr_file):
-        logger.error(truncate_log(logs))
+    log_job_stderr(
+        logger, _read_text_if_exists(stderr_file), failed=exit_status != 0, truncate=truncate_log
+    )
 
     if final_status:
         artifact = _create_job_artifact(
@@ -128,9 +139,6 @@ async def run_slurm_job(
             table=[list(artifact.keys()), list(artifact.values())],
             key=metrics_artifact_key,
         )
-
-    exit_code_text = str(final_status.get("ExitCode", "-1:0")).split(":", 1)[0]
-    exit_status = int(exit_code_text) if exit_code_text.isdigit() else -1
 
     return SlurmRunResult(
         job_id=submit.job_id,

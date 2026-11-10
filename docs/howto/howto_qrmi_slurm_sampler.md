@@ -9,7 +9,8 @@ QRMI; they differ in where the code runs:
 | --- | --- | --- |
 | Runs in | a Slurm job on a compute node | the workflow (Prefect worker) process |
 | Session | the Batch that SPANK acquires | none: one job per `sampler()` call |
-| QRMI settings | compute-node environment | `resource_config` (stored as a secret) |
+| QRMI settings | the runtime's CRN, endpoints and session mode, through the job environment | the runtime's settings |
+| API key | `qrmi_config.json` on the compute nodes | `qrmi_config.json` on the workflow host, or `QRMI_IBM_QCS_IAM_APIKEY` |
 | Needs | shared `root_dir`, three execution blocks, SPANK | network access to IBM Quantum |
 | Resource types | as configured for SPANK | `ibm-quantum-compute-service` only |
 
@@ -35,6 +36,9 @@ entrypoint for Slurm, or inside the sampling task for IQP. The HPC executor is
 imported when a Slurm sampling task runs, keeping it optional for native Qiskit
 users. The Bell circuit examples in `examples/qrmi_slurm_bell` and
 `examples/qrmi_iqp_bell` use the default compiler and only the public sampler API.
+The SQD workflow in `algorithms/open_loop/sqd` is a full application of both hooks:
+an ffsim `prepare` step on the workflow host and an importable `transpiler` (see its
+[README](https://github.com/qiskit-community/qcsc-prefect/tree/main/algorithms/open_loop/sqd)).
 
 ## Installation and cluster configuration
 
@@ -61,7 +65,19 @@ python -m pip check
 ```
 
 Retain the cluster's QRMI, SPANK and `task_runner` installation. The Python
-selected by the CommandBlock must import the installed library. Configure its
+selected by the CommandBlock must import the installed library. A dedicated
+compute-node environment, for example `~/venv/sqd-node` of the SQD workflow, keeps
+it apart from the workflow host's `~/venv/prefect`:
+
+```bash
+uv venv ~/venv/sqd-node -p 3.12
+source ~/venv/sqd-node/bin/activate
+uv pip install "qrmi[ibm]"          # QRMI and task_runner
+uv pip install -e packages/qcsc-prefect-qiskit
+```
+
+`sqd-create-blocks` writes the top-level `python_executable` of `sqd_blocks.toml`,
+such as `~/venv/sqd-node/bin/python`, into this CommandBlock. Configure its
 default arguments to run the worker module:
 
 ```python
@@ -69,8 +85,9 @@ default arguments to run the worker module:
 ```
 
 The installation also provides the `qcsc-qrmi-sampler` console script.
-Set `launcher="single"` on the execution profile, `hpc_target="slurm"` on the HPC
-profile, and `slurm_qpu` to the same ID as the runtime's `resource`.
+Set `launcher="single"` on the execution profile and `hpc_target="slurm"` on the HPC
+profile. The job requests the runtime's `resource` as `--qpu`, so the HPC profile
+needs no `slurm_qpu`.
 The work directory must be readable and writable at the same absolute path on
 both the workflow host and compute nodes.
 
@@ -78,6 +95,70 @@ SPANK must acquire a Batch before Python starts. Configure the selected resource
 with `QRMI_IBM_QCS_SESSION_MODE="batch"` on every eligible node. The worker checks
 the resource-prefixed mode and acquisition-token presence before execution.
 It does not change the mode or print the token.
+
+The service CRN, the endpoints and the session mode come from the runtime.
+`QrmiRuntime(job_settings={...})` takes them by their QRMI names without the
+`<resource>_` prefix (`QrmiRuntimeBlock` builds it from its instance and fields).
+They are passed to `sbatch` in its environment as `<resource>_QRMI_IBM_QCS_*`, not
+written into the script, and SPANK sets them with priority over the file. The
+API key cannot travel this way: SPANK reads per-job settings only from the job's
+environment, which Slurm records, and QRMI has no key-file setting. So
+`QRMI_IBM_QCS_IAM_APIKEY` stays in `qrmi_config.json` on the compute nodes, and a
+Slurm runtime with an API key is rejected. An API key in the workflow process's
+environment is removed from the `sbatch` environment.
+
+### Set up access with `qcsc-qrmi login`
+
+`qcsc-qrmi login` asks for the IBM Cloud API key, finds the IBM Quantum instances
+it can use and their backends (through qiskit-ibm-runtime), and writes
+`qrmi_config.json`: `--config PATH`, else `$QRMI_CONFIG`, else
+`~/.qiskit/qrmi_config.json`, with mode 600. Instances are shown as
+`name (plan, region)`, chosen by number and stored by CRN, so instances with the
+same name in `us-east` and `eu-de` stay apart. The backend prompt lists only the
+default instance's backends and names the instances that have a backend it does
+not. qiskit-ibm-runtime's own warnings are hidden (set
+`QISKIT_IBM_RUNTIME_LOG_LEVEL=WARNING` to see them), and a failed request is
+reported in one line. `--no-discover` asks for each
+instance's name, plan, CRN and backends instead; `--api-key-env VAR` reads the key
+from an environment variable instead of the prompt.
+
+```json
+{
+  "environment": {"QRMI_IBM_QCS_IAM_APIKEY": "..."},
+  "default_instance": "crn:v1:...:main::",
+  "instances": [
+    {"name": "main-instance", "plan": "premium", "crn": "crn:v1:...",
+     "backends": ["ibm_fez", "ibm_kingston"]},
+    {"name": "open-instance", "plan": "open", "crn": "crn:v1:...",
+     "backends": ["ibm_kingston"]}
+  ],
+  "resources": [
+    {"name": "ibm_fez", "type": "ibm-quantum-compute-service",
+     "environment": {"QRMI_IBM_QCS_IAM_APIKEY": "..."}},
+    {"name": "ibm_kingston", "type": "ibm-quantum-compute-service",
+     "environment": {"QRMI_IBM_QCS_IAM_APIKEY": "..."}}
+  ]
+}
+```
+
+- The API key is set once, in `environment`.
+- `instances` lists each instance once, with its CRN and backends.
+- `resources` lists each backend once, whichever instances can use it.
+- SPANK reads only an entry's own `environment`, so each entry carries a copy of
+  the key; `login` and `refresh` keep the copies equal to the top-level key.
+- The entries hold nothing else: the CRN, endpoints and session mode come from the
+  runtime block for every job.
+- QRMI and SPANK ignore the other top-level keys, and `login` keeps entries of
+  other resource types.
+
+SPANK reads the file named in `plugstack.conf` on each compute node, so install the
+written file there (often `/etc/slurm/qrmi_config.json`) or pass that path as
+`--config`. `login` also saves the QRMI Runtime block (`--block`, default
+`qrmi-runtime`) with your instances, their backends, and dropdowns for IBM Quantum
+Instance and QPU Backend, and prints the `[qrmi]` lines of `sqd_blocks.toml` that
+keep the choice. `qcsc-qrmi refresh` repeats the discovery with the stored key,
+`qcsc-qrmi list` prints the instances and backends (never the key), and
+`qcsc-qrmi check` checks the block's instance and backend.
 
 ## Sampling
 
@@ -289,6 +370,11 @@ shared directory or compute-node installation. Install QRMI with its IBM extra
 on that host (`pip install "qrmi[ibm]"`; QRMI publishes Linux wheels). The host
 must reach the IBM Quantum and IBM Cloud IAM endpoints.
 
+With a `QrmiRuntimeBlock`, the key comes from the workflow host's
+`qrmi_config.json` that `qcsc-qrmi login` writes, or from the
+`QRMI_IBM_QCS_IAM_APIKEY` environment variable. Built directly, the runtime takes
+the settings and the key in `resource_config`:
+
 ```python
 from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime
 
@@ -357,9 +443,26 @@ time, final status, Target width and the per-PUB compilation report.
 
 ### Runtime block
 
-`QrmiRuntimeBlock` stores the runtime settings in Prefect, with `resource_config`
-as a secret. `prepare` is a Python callable and cannot be stored; pass it when
-building the runtime:
+`QrmiRuntimeBlock` stores the runtime settings in Prefect. Its form shows, in order:
+
+| Field | Meaning |
+| --- | --- |
+| Scheduler | `slurm` or `iqp` |
+| IBM Quantum Instance | the instance, as `name (plan, region)`; a dropdown after `qcsc-qrmi login` |
+| QPU Backend (`resource`) | the backend; a dropdown of every instance's backends, each once |
+| Service CRN | empty: the instance's CRN; set it to use another |
+| Instances | `name (plan, region)` → CRN, filled by `login` |
+| IBM Quantum Endpoint, IAM Endpoint, Session Mode | IBM Quantum's URLs and `batch` by default; the API endpoint follows the instance's region (`eu-de.quantum.cloud.ibm.com` for `eu-de`) |
+| Backend Access | the backends each instance can use, filled by `login` and `refresh` |
+
+The block holds no API key. `check_backend_access()` raises `BackendAccessError`
+when the instance cannot use the backend: from the Backend Access list, or, when
+the host has the API key, by asking IBM Quantum, whose answer wins over a stale
+list. `qrmi_runtime_block_class(instances, backends)` returns the block class with
+the two dropdowns; save with it, and load with `QrmiRuntimeBlock`, which accepts
+any value. `resource_config` (secret, IQP only) remains for blocks saved earlier.
+`prepare` is a Python callable and cannot be stored; pass it when building the
+runtime:
 
 ```python
 from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
@@ -367,7 +470,8 @@ from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntimeBlock
 QrmiRuntimeBlock(
     scheduler="iqp",
     resource="ibm_kingston",
-    resource_config={...},
+    instance="main-instance (premium)",
+    instances={"main-instance (premium)": "<your service instance CRN>"},
 ).save("my-qrmi-runtime", overwrite=True)
 
 runtime = await QrmiRuntimeBlock.aload_runtime("my-qrmi-runtime", prepare=prepare)

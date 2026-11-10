@@ -1,6 +1,6 @@
-"""SQD and SKQD run to the end in random mode with DICE or SBD replaced by a tiny fake.
+"""SKQD runs to the end in random mode with DICE or SBD replaced by a tiny fake.
 
-The flows run without a Prefect server: their Prefect calls (variables, artifacts, result
+The flow runs without a Prefect server: its Prefect calls (variables, artifacts, result
 caching) are replaced. The solver blocks are replaced by fakes that record their input.
 """
 
@@ -17,7 +17,6 @@ import pytest
 from qcsc_workflow_utility import chem
 from qiskit_addon_sqd.fermion import SCIResult
 
-pytest.importorskip("sqd_dice")
 pytest.importorskip("skqd_dice")
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -25,7 +24,6 @@ N2 = str(ROOT / "algorithms/closed_loop/sqd_de/data/fcidump_N2_MO.txt")
 H2 = str(ROOT / "algorithms/closed_loop/sqd_de/data/fcidump_H2_STO3G.txt")
 SHOTS = 2000
 FLOWS = {
-    "sqd": ("sqd_dice.main", "sqd_2405_05068", "sqd", "sqd-solver"),
     "skqd": ("skqd_dice.main", "skqd_2501_09702", "skqd", "skqd-solver"),
 }
 
@@ -189,14 +187,13 @@ def test_unknown_solver_slug_is_rejected(flow_key, monkeypatch):
 # at that commit. A fixed revision keeps the comparison meaningful after later changes.
 PREVIOUS_REVISION = "a394b846c69c08da272e21db954b0378b517ce8d"
 PREVIOUS_PATHS = {
-    "sqd": "algorithms/sqd/sqd_dice/main.py",
     "skqd": "algorithms/skqd/skqd_dice/main.py",
 }
 
 
 @pytest.fixture(scope="module")
 def previous_flows(tmp_path_factory):
-    """The SQD and SKQD flow modules before solver selection, read from git history."""
+    """The SKQD flow module before solver selection, read from git history."""
     directory = tmp_path_factory.mktemp("previous")
     modules = {}
     for flow_key in FLOWS:

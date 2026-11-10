@@ -8,6 +8,7 @@ from prefect.client.schemas.objects import BlockDocument
 from prefect.testing.utilities import prefect_test_harness
 from qcsc_prefect.integrations.qiskit.qrmi import QrmiRuntime
 from qcsc_prefect.integrations.qiskit.qrmi import iqp as iqp_mod
+from qcsc_prefect.integrations.qiskit.qrmi.config_file import API_KEY_SETTING
 from qcsc_prefect.integrations.qiskit.sources import (
     QFwResource,
     QuantumSourceBlock,
@@ -142,6 +143,7 @@ def test_real_prefect_source_block_can_switch_platforms_under_the_same_name(tmp_
     monkeypatch.setenv("PREFECT_HOME", str(tmp_path / "prefect"))
     monkeypatch.setenv("PREFECT_SERVER_ANALYTICS_ENABLED", "false")
     monkeypatch.setenv("PREFECT_API_KEY", "")
+    monkeypatch.setenv(API_KEY_SETTING, "test-secret")
     connect = socket.socket.connect
     connect_ex = socket.socket.connect_ex
 
@@ -179,7 +181,6 @@ def test_real_prefect_source_block_can_switch_platforms_under_the_same_name(tmp_
         factory.QrmiRuntimeBlock(
             scheduler="iqp",
             resource="test_qrmi",
-            resource_config={"api_key": "test-secret"},
         ).save("application-runtime")
         QFwResource(device_id="test_qfw").save("application-resource")
         configs = [

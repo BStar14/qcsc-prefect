@@ -29,8 +29,10 @@ cd qcsc-prefect
 Activate the Python environment used by the workflow:
 
 ```bash
-source .venv/bin/activate
+source ~/venv/prefect/bin/activate
 ```
+
+If the environment does not exist yet, create it with `uv venv ~/venv/prefect -p 3.12`.
 
 ---
 

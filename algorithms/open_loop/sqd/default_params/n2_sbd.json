@@ -1,21 +1,22 @@
 {
   "molecule": {
-    "fcidump_file": "algorithms/closed_loop/sqd_de/data/fcidump_N2_MO.txt",
+    "fcidump_file": "algorithms/open_loop/sqd/data/n2_631g_fc.fcidump",
     "spin_sq": null
   },
   "circuit": {
-    "use_reset_mitigation": false,
-    "optimization_level": 3,
-    "sabre_max_iterations": 8,
-    "sabre_swap_trials": 10,
-    "sabre_layout_trials": 512,
-    "n_lucj_layers": 1
+    "n_lucj_layers": 1,
+    "compress": true,
+    "compress_maxiter": 50
+  },
+  "sampling": {
+    "quantum_source": "random",
+    "shots": 10000,
+    "random_seed": 24
   },
   "sqd": {
-    "subspace_dim": 40000,
+    "subspace_dim": 10000,
     "num_batches": 2,
     "max_iterations": 2
   },
-  "quantum_source": "random",
-  "random_seed": 24
+  "solver_block_ref": "sbd_solver_job/sqd-sbd-solver"
 }

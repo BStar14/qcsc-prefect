@@ -216,3 +216,15 @@ packages/qcsc-prefect-sbd/native/*.o
 packages/qcsc-prefect-sbd/native/sbd/
 .DS_Store
 .vscode/sftp.json
+
+# Native fulqrum build outputs
+packages/qcsc-prefect-fulqrum/native/fulqrum/
+packages/qcsc-prefect-fulqrum/native/fulqrum-gpu/
+packages/qcsc-prefect-fulqrum/native/external/
+
+# Local Docker/Slurm testbed
+/docker/
+
+# Copied SQD block configs: user and site paths
+algorithms/open_loop/sqd/sqd_blocks.toml
+algorithms/open_loop/sqd/sqd_fulqrum_blocks.slurm.toml

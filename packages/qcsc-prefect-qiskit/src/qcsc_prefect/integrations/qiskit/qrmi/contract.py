@@ -19,6 +19,11 @@ except ModuleNotFoundError:
 SCHEMA_VERSION = 2
 
 
+# Written by the compute-node worker in the job directory when the quantum task ended
+# without a result, for example cancelled on IBM Quantum.
+TASK_ENDED_FILE = "task_ended.txt"
+
+
 def positive_shots(value) -> int:
     if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
         raise ValueError("shots must be a positive integer")

@@ -252,6 +252,36 @@ packages. Native Qiskit primitives are documented separately in
     options:
       show_source: false
 
+## Fulqrum API
+
+::: qcsc_prefect_fulqrum.solver_job.FulqrumSolverJob
+    options:
+      show_source: false
+
+::: qcsc_prefect_fulqrum.block_utils.register_fulqrum_block_types
+    options:
+      show_source: false
+
+::: qcsc_prefect_fulqrum.block_utils.create_fulqrum_blocks
+    options:
+      show_source: false
+
+::: qcsc_prefect_fulqrum.solver.solve_fulqrum
+    options:
+      show_source: false
+
+::: qcsc_prefect_fulqrum.solver.FulqrumSolverOptions
+    options:
+      show_source: false
+
+::: qcsc_prefect_fulqrum.solver.FulqrumSolution
+    options:
+      show_source: false
+
+::: qcsc_prefect_fulqrum.io_utils.make_job_work_dir
+    options:
+      show_source: false
+
 ## SBD API
 
 ::: qcsc_prefect_sbd.solver_job.SBDSolverJob

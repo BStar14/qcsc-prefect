@@ -1,0 +1,29 @@
+# System profile: a generic Slurm cluster. Selected with profile = "slurm".
+# Settings in your sqd_blocks.toml override the ones here.
+
+hpc_target = "slurm"
+
+# fulqrum: one OpenMP process per subspace.
+launcher = "single"
+num_nodes = 1
+mpiprocs = 1
+ompthreads = 4                      # --cpus-per-task and OMP_NUM_THREADS
+walltime = "12:00:00"
+modules = []
+pre_commands = []
+# slurm_memory = "8G"               # Optional: #SBATCH --mem
+
+# SBD: MPI. Used with solver = "sbd".
+[sbd]
+launcher = "srun"
+mpi_options = ["--mpi=pmix"]        # Match the PMI plugin of your Slurm and MPI
+num_nodes = 1
+mpiprocs = 4                        # --ntasks-per-node
+ompthreads = 1
+walltime = "01:00:00"
+
+# The QRMI sampler job. It holds the QPU while the node compiles the circuit.
+[qrmi]
+walltime = "12:00:00"
+ompthreads = 4
+timeout_seconds = 46800             # How long the flow waits; does not cancel the job

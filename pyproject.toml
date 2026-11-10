@@ -52,6 +52,10 @@ qcsc-prefect-executor = { workspace = true }
 qcsc-prefect-dice     = { workspace = true }
 qcsc-prefect-qiskit   = { workspace = true }
 qcsc-prefect-sbd      = { workspace = true }
+# Not a workspace member: uv would resolve its [solver] extra (fulqrum>=0.5,
+# not on PyPI) for `uv sync --all-packages`. packages/conftest.py puts its
+# src/ on sys.path for the tests.
+qcsc-prefect-fulqrum  = { path = "packages/qcsc-prefect-fulqrum", editable = true }
 
 # --- Poetry ---
 [tool.poetry]
@@ -101,6 +105,8 @@ addopts = "-ra"
 markers = [
     "miyabi_integration: tests that require Miyabi login node and real qsub/qstat",
     "fugaku_integration: tests that require Fugaku login node and real pjsub/pjstat",
+    "slurm_integration: tests that require a Slurm login node and real sbatch/sacct",
+    "fulqrum_gpu_integration: tests that require a GPU build of fulqrum and a CUDA device",
 ]
 
 [tool.ruff]
