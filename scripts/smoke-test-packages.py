@@ -16,6 +16,8 @@ REQUIRED_MODULES = [
 OPTIONAL_MODULES = [
     ("qcsc-prefect-qiskit", "qcsc_prefect.integrations.qiskit"),
     ("qcsc-prefect-dice", "qcsc_prefect_dice"),
+    ("qcsc-prefect-fulqrum", "qcsc_prefect_fulqrum"),
+    ("qcsc-prefect-sbd", "qcsc_prefect_sbd"),
 ]
 
 

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 import socket
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -13,7 +16,7 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from qcsc_prefect.integrations.qiskit.qrmi import PreparedCircuit, QrmiRuntime, worker
 from qcsc_prefect.integrations.qiskit.qrmi import runtime as runtime_mod
-from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister, qpy
+from qiskit import ClassicalRegister, QuantumCircuit, QuantumRegister, qasm3, qpy
 from qiskit.circuit import Parameter
 from qiskit.primitives import PrimitiveResult, SamplerPubResult
 from qiskit.primitives.containers import BitArray, DataBin
@@ -31,23 +34,36 @@ def measured_circuit():
     return circuit
 
 
-def make_result(shots=4, registers=None):
+def make_result(shots=4, registers=None, *, bits=None):
+    """One sampler PUB result per register mapping, all samples set to ``bits[i]``."""
     if registers is None:
         registers = {"readout": 2, "test": 1}
+    pub_registers = registers if isinstance(registers, list) else [registers]
+    bits = bits or ["0"] * len(pub_registers)
     return PrimitiveResult(
         [
             SamplerPubResult(
                 DataBin(
                     **{
-                        name: BitArray.from_samples(["0" * width] * shots, num_bits=width)
-                        for name, width in registers.items()
+                        name: BitArray.from_samples([bit * width] * shots, num_bits=width)
+                        for name, width in pub.items()
                     }
                 ),
                 metadata={},
             )
+            for pub, bit in zip(pub_registers, bits)
         ],
         metadata={},
     )
+
+
+def read_configs(work_dir):
+    return json.loads((work_dir / "transpile_config.json").read_text())
+
+
+def read_circuits(work_dir):
+    with (work_dir / "circuit.qpy").open("rb") as stream:
+        return qpy.load(stream)
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +100,10 @@ def submitted(monkeypatch):
         calls.append(kwargs)
         request = json.loads((kwargs["work_dir"] / "sampler_request.json").read_text())
         (kwargs["work_dir"] / "result.json").write_text(
-            json.dumps(make_result(shots=request["shots"]), cls=RuntimeEncoder)
+            json.dumps(
+                make_result(shots=request["shots"], registers=request["registers"]),
+                cls=RuntimeEncoder,
+            )
         )
         return SimpleNamespace(job_id="73", state="COMPLETED", exit_status=0)
 
@@ -104,7 +123,8 @@ def test_explicit_slurm_scheduler_submits_and_decodes_result(runtime, submitted)
 @pytest.mark.parametrize(
     "scheduler,exception,message",
     [
-        ("iqp", NotImplementedError, 'scheduler="iqp" is not implemented'),
+        # Slurm settings are present, so "iqp" rejects them instead of running.
+        ("iqp", ValueError, 'scheduler="iqp" does not use root_dir'),
         ("unknown", ValueError, "Unsupported scheduler"),
         (None, ValueError, "Unsupported scheduler"),
     ],
@@ -173,23 +193,31 @@ def test_bad_options_fail_before_files_or_submission(runtime, submitted, kwargs)
     assert not runtime.root_dir.exists()
 
 
-@pytest.mark.parametrize("kind", ["empty", "multiple", "params", "unbound", "unmeasured"])
-def test_unsupported_pubs_fail_before_submission(runtime, submitted, kind):
+@pytest.mark.parametrize(
+    "kind", ["empty", "params", "per_pub_shots", "not_tuple", "unbound", "unmeasured"]
+)
+@pytest.mark.parametrize("position", [0, 1])
+def test_unsupported_pubs_fail_before_submission(runtime, submitted, kind, position):
+    # A bad PUB rejects the whole call, wherever it appears.
     circuit = measured_circuit()
-    pubs = [(circuit,)]
-    if kind == "empty":
-        pubs = []
-    elif kind == "multiple":
-        pubs *= 2
-    elif kind == "params":
-        pubs = [(circuit, [1])]
+    bad = (circuit,)
+    if kind == "params":
+        bad = (circuit, [1])
+    elif kind == "per_pub_shots":
+        bad = (circuit, None, 4)
+    elif kind == "not_tuple":
+        bad = circuit
     elif kind == "unbound":
         circuit.rx(Parameter("theta"), 0)
     elif kind == "unmeasured":
-        pubs = [(QuantumCircuit(1, 1),)]
+        bad = (QuantumCircuit(1, 1),)
+    pubs = [] if kind == "empty" else [(measured_circuit(),)]
+    if kind != "empty":
+        pubs.insert(position, bad)
     with pytest.raises(ValueError):
         asyncio.run(runtime.sampler(pubs, shots=4))
     assert submitted == []
+    assert not runtime.root_dir.exists()
 
 
 def test_prepare_config_and_qpy_handoff_does_not_mutate_input(runtime, submitted):
@@ -203,14 +231,10 @@ def test_prepare_config_and_qpy_handoff_does_not_mutate_input(runtime, submitted
     runtime.transpile_config = {"seed_transpiler": 1, "initial_layout": [2, 0]}
     result = asyncio.run(runtime.sampler([(original,)], shots=4))
     work_dir = Path(result.metadata["qcsc_slurm"]["work_dir"])
-    with (work_dir / "circuit.qpy").open("rb") as stream:
-        (restored,) = qpy.load(stream)
+    (restored,) = read_circuits(work_dir)
     assert "x" not in original.count_ops()
     assert restored.count_ops()["x"] == 1
-    assert json.loads((work_dir / "transpile_config.json").read_text()) == {
-        "seed_transpiler": 24,
-        "initial_layout": [2, 0],
-    }
+    assert read_configs(work_dir) == [{"seed_transpiler": 24, "initial_layout": [2, 0]}]
     assert result.metadata["qcsc_slurm"]["job_id"] == "73"
 
 
@@ -228,11 +252,8 @@ def test_prepared_layout_overrides_runtime_config_and_matches_prepared_circuit(
     original = measured_circuit()
     asyncio.run(runtime.sampler([(original,)], shots=4))
     work_dir = submitted[0]["work_dir"]
-    assert json.loads((work_dir / "transpile_config.json").read_text()) == {
-        "initial_layout": layout
-    }
-    with (work_dir / "circuit.qpy").open("rb") as stream:
-        (restored,) = qpy.load(stream)
+    assert read_configs(work_dir) == [{"initial_layout": layout}]
+    (restored,) = read_circuits(work_dir)
     assert restored.num_qubits == len(layout)
     assert original.num_qubits == 2
 
@@ -344,7 +365,7 @@ def test_valid_preset_types_and_boundaries_are_forwarded(runtime, submitted, con
     # Plugin existence and plugin-specific configuration remain compute-node checks.
     runtime.transpile_config = config
     asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
-    assert json.loads((submitted[0]["work_dir"] / "transpile_config.json").read_text()) == config
+    assert read_configs(submitted[0]["work_dir"]) == [config]
 
 
 def test_generic_transpile_applies_physical_layout_and_preserves_registers():
@@ -372,7 +393,9 @@ def test_configured_compilation_through_worker(runtime, monkeypatch, custom):
     qrmi = ModuleType("qrmi")
     qrmi.QRMIService = lambda: SimpleNamespace(resources=lambda: [resource])
     ibm = ModuleType("qrmi.primitives.ibm")
-    ibm.get_target = lambda acquired: target if acquired is resource else None
+    ibm.get_backend = lambda acquired: SimpleNamespace(
+        target=target if acquired is resource else None
+    )
     monkeypatch.setitem(sys.modules, "qrmi", qrmi)
     monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
     monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)
@@ -398,8 +421,9 @@ def test_configured_compilation_through_worker(runtime, monkeypatch, custom):
         runtime.transpiler = "custom_compilation:transpile"
         runtime.transpile_config["algorithm_option"] = "custom"
 
-    def execute(isa, shots, executable, resource_id):
+    def execute(isa_circuits, shots, executable, resource_id):
         assert resource_id == runtime.resource
+        (isa,) = isa_circuits
         assert isa.layout.initial_index_layout(filter_ancillas=True) == [2, 0]
         if custom:
             assert "barrier" not in isa.count_ops()
@@ -418,10 +442,219 @@ def test_configured_compilation_through_worker(runtime, monkeypatch, custom):
     assert result[0].data.readout.num_shots == 4
     work_dir = Path(result.metadata["qcsc_slurm"]["work_dir"])
     report = json.loads((work_dir / "transpile_report.json").read_text())
-    assert report["initial_layout"] == [2, 0]
+    (pub_report,) = report["pubs"]
+    assert pub_report["initial_layout"] == [2, 0]
     assert report["transpiler"] == runtime.transpiler
     if custom:
-        assert report["algorithm_option"] == "custom"
+        assert pub_report["algorithm_option"] == "custom"
+
+
+def bell_circuit(register="meas", extra_qubits=0):
+    circuit = QuantumCircuit(2 + extra_qubits)
+    circuit.add_register(ClassicalRegister(2, register))
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.measure([0, 1], circuit.cregs[0])
+    return circuit
+
+
+def test_multiple_pubs_submit_one_job_and_keep_result_order(runtime, monkeypatch):
+    circuits = [measured_circuit(), bell_circuit("alpha"), bell_circuit("beta", extra_qubits=1)]
+    expected = [{"readout": 2, "test": 1}, {"alpha": 2}, {"beta": 2}]
+    calls = []
+
+    async def submit(**kwargs):
+        calls.append(kwargs)
+        request = json.loads((kwargs["work_dir"] / "sampler_request.json").read_text())
+        assert request["registers"] == expected
+        # A different bit value per PUB shows which input each result belongs to.
+        result = make_result(request["shots"], request["registers"], bits=["0", "1", "0"])
+        (kwargs["work_dir"] / "result.json").write_text(json.dumps(result, cls=RuntimeEncoder))
+        return SimpleNamespace(job_id="73", state="COMPLETED", exit_status=0)
+
+    monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
+    result = asyncio.run(runtime.sampler([(circuit,) for circuit in circuits], shots=4))
+    assert len(calls) == 1
+    assert len(result) == 3
+    assert result[0].data.readout.get_counts() == {"00": 4}
+    assert result[1].data.alpha.get_counts() == {"11": 4}
+    assert result[2].data.beta.get_counts() == {"00": 4}
+    restored = read_circuits(calls[0]["work_dir"])
+    assert [circuit.num_qubits for circuit in restored] == [2, 2, 3]
+    assert [{r.name: len(r) for r in circuit.cregs} for circuit in restored] == expected
+    for original, copy in zip(circuits, restored):
+        assert copy.count_ops() == original.count_ops()
+    assert read_configs(calls[0]["work_dir"]) == [{}, {}, {}]
+
+
+def test_prepared_config_overrides_base_config_per_pub(runtime, submitted):
+    # The base config applies to every PUB; each PreparedCircuit.config overrides it.
+    def prepare(circuit):
+        if circuit.cregs[0].name == "wide":
+            circuit.add_register(QuantumRegister(1, "extra"))
+            return PreparedCircuit(circuit, {"initial_layout": [4, 2, 0]})
+        return PreparedCircuit(circuit)
+
+    runtime.prepare = prepare
+    runtime.transpile_config = {"initial_layout": [1, 3], "seed_transpiler": 7}
+    asyncio.run(runtime.sampler([(bell_circuit("narrow"),), (bell_circuit("wide"),)], shots=4))
+    work_dir = submitted[0]["work_dir"]
+    assert read_configs(work_dir) == [
+        {"initial_layout": [1, 3], "seed_transpiler": 7},
+        {"initial_layout": [4, 2, 0], "seed_transpiler": 7},
+    ]
+    assert [circuit.num_qubits for circuit in read_circuits(work_dir)] == [2, 3]
+
+
+@pytest.mark.parametrize("position", [0, 1])
+def test_one_invalid_pub_config_rejects_all_pubs(runtime, submitted, position):
+    def prepare(circuit):
+        if circuit.cregs[0].name == "bad":
+            return PreparedCircuit(circuit, {"initial_layout": [0, 1, 2]})
+        return PreparedCircuit(circuit)
+
+    runtime.prepare = prepare
+    pubs = [(bell_circuit("good"),)]
+    pubs.insert(position, (bell_circuit("bad"),))
+    with pytest.raises(ValueError, match=f"PUB {position}: .*expected 2, got 3"):
+        asyncio.run(runtime.sampler(pubs, shots=4))
+    assert submitted == []
+    assert not runtime.root_dir.exists()
+
+
+def test_shared_layout_requires_equal_prepared_qubit_counts(runtime, submitted):
+    pubs = [(bell_circuit("narrow"),), (bell_circuit("wide", extra_qubits=1),)]
+    runtime.transpile_config = {"initial_layout": [0, 1]}
+    with pytest.raises(ValueError, match="PUB 1: .*expected 3, got 2"):
+        asyncio.run(runtime.sampler(pubs, shots=4))
+    assert submitted == []
+    # Without a layout, PUBs of different widths are accepted.
+    for config in ({}, {"initial_layout": None}):
+        runtime.transpile_config = config
+        asyncio.run(runtime.sampler(pubs, shots=4))
+    assert len(submitted) == 2
+
+
+@pytest.mark.parametrize(
+    "returned,shots,message",
+    [
+        ([{"alpha": 2}], 4, "returned 1 PUBs; expected 2"),
+        ([{"alpha": 2}, {"alpha": 2}, {"beta": 2}], 4, "returned 3 PUBs; expected 2"),
+        ([{"beta": 2}, {"alpha": 2}], 4, r"expected \{'alpha': 2\} \(PUB 0\)"),
+        ([{"alpha": 2}, {"beta": 1}], 4, r"2 bits for beta \(PUB 1\)"),
+        ([{"alpha": 2}, {"beta": 2}], 3, r"3 shots; expected 4 \(PUB 0\)"),
+    ],
+)
+def test_host_rejects_mismatched_multi_pub_results(runtime, monkeypatch, returned, shots, message):
+    async def submit(**kwargs):
+        (kwargs["work_dir"] / "result.json").write_text(
+            json.dumps(make_result(shots, returned), cls=RuntimeEncoder)
+        )
+        return SimpleNamespace(job_id="73", state="COMPLETED", exit_status=0)
+
+    monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
+    with pytest.raises(RuntimeError, match=message):
+        asyncio.run(runtime.sampler([(bell_circuit("alpha"),), (bell_circuit("beta"),)], shots=4))
+
+
+def install_fake_qrmi(monkeypatch, resource_id, target):
+    resource = SimpleNamespace(resource_id=lambda: resource_id)
+    qrmi = ModuleType("qrmi")
+    qrmi.QRMIService = lambda: SimpleNamespace(resources=lambda: [resource])
+    ibm = ModuleType("qrmi.primitives.ibm")
+    ibm.get_backend = lambda _: SimpleNamespace(target=target)
+    monkeypatch.setitem(sys.modules, "qrmi", qrmi)
+    monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
+    monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)
+    monkeypatch.setenv(f"{resource_id}_QRMI_IBM_QCS_SESSION_MODE", "batch")
+    monkeypatch.setenv(f"{resource_id}_QRMI_JOB_ACQUISITION_TOKEN", "test-token")
+
+
+def test_worker_compiles_each_pub_with_its_config_and_sends_one_payload(runtime, monkeypatch):
+    target = GenericBackendV2(num_qubits=5, basis_gates=["rz", "sx", "x", "cx"]).target
+    install_fake_qrmi(monkeypatch, runtime.resource, target)
+
+    def prepare(circuit):
+        if circuit.cregs[0].name == "wide":
+            circuit.add_register(QuantumRegister(1, "extra"))
+            return PreparedCircuit(circuit, {"initial_layout": [4, 2, 0]})
+        return PreparedCircuit(circuit)
+
+    runtime.prepare = prepare
+    runtime.transpile_config = {"initial_layout": [1, 3], "seed_transpiler": 7}
+    payloads = []
+
+    def fake_cli(command):
+        parameters = json.loads(Path(command[2]).read_text())["parameters"]
+        payloads.append(parameters)
+        assert [pub[1:] for pub in parameters["pubs"]] == [[None, 4], [None, 4]]
+        # Payload PUB i must be ISA circuit i, in input order.
+        with Path("isa.qpy").open("rb") as stream:
+            expected = [
+                qasm3.dumps(isa, disable_constants=True, allow_aliasing=True)
+                for isa in qpy.load(stream)
+            ]
+        sent = [pub[0] for pub in parameters["pubs"]]
+        assert sent == expected
+        # Answer from the sent QASM, so a reordered payload also reorders results.
+        names = [re.search(r"^bit\[\d+\] (\w+);$", qasm, re.M).group(1) for qasm in sent]
+        bits = {"narrow": "0", "wide": "1"}
+        result = make_result(4, [{name: 2} for name in names], bits=[bits[n] for n in names])
+        Path(command[3]).write_text(json.dumps(result, cls=RuntimeEncoder))
+        return "INFO Task ID: t1\n"
+
+    async def submit(**kwargs):
+        monkeypatch.chdir(kwargs["work_dir"])
+        worker.main(kwargs["user_args"])
+        return SimpleNamespace(job_id="73", state="COMPLETED", exit_status=0)
+
+    monkeypatch.setattr(worker, "run_task_runner", fake_cli)
+    monkeypatch.setattr(runtime_mod, "run_job_from_blocks", submit)
+    result = asyncio.run(
+        runtime.sampler([(bell_circuit("narrow"),), (bell_circuit("wide"),)], shots=4)
+    )
+    assert len(payloads) == 1
+    assert result[0].data.narrow.get_counts() == {"00": 4}
+    assert result[1].data.wide.get_counts() == {"11": 4}
+    work_dir = Path(result.metadata["qcsc_slurm"]["work_dir"])
+    with (work_dir / "isa.qpy").open("rb") as stream:
+        isa_circuits = qpy.load(stream)
+    layouts = [isa.layout.initial_index_layout(filter_ancillas=True) for isa in isa_circuits]
+    assert layouts == [[1, 3], [4, 2, 0]]
+    report = json.loads((work_dir / "transpile_report.json").read_text())
+    assert [pub["initial_layout"] for pub in report["pubs"]] == [[1, 3], [4, 2, 0]]
+    assert [pub["registers"] for pub in report["pubs"]] == [{"narrow": 2}, {"wide": 2}]
+
+
+@pytest.mark.parametrize(
+    "registers,configs,message",
+    [
+        ([{"meas": 2}], [{}, {}], "1 registers and 2 transpile configs"),
+        ([{"meas": 2}, {"meas": 2}], [{}], "2 registers and 1 transpile configs"),
+        ({"meas": 2}, [{}, {}], "one entry per PUB"),
+        ([{"meas": 2}, {"meas": 2}], {}, "one entry per PUB"),
+        ([{"meas": 2}, {"other": 2}], [{}, {}], "registers do not match"),
+    ],
+)
+def test_worker_rejects_inconsistent_request_files(
+    runtime, tmp_path, monkeypatch, registers, configs, message
+):
+    install_fake_qrmi(monkeypatch, runtime.resource, None)
+    monkeypatch.chdir(tmp_path)
+    request = {
+        "schema_version": 2,
+        "resource": runtime.resource,
+        "shots": 4,
+        "registers": registers,
+        "transpiler": runtime_mod.DEFAULT_TRANSPILER,
+    }
+    Path("sampler_request.json").write_text(json.dumps(request))
+    Path("transpile_config.json").write_text(json.dumps(configs))
+    with Path("circuit.qpy").open("wb") as stream:
+        qpy.dump([bell_circuit(), bell_circuit()], stream)
+    monkeypatch.setattr(worker, "run_task_runner", lambda *a, **k: pytest.fail("must not run"))
+    with pytest.raises(ValueError, match=message):
+        worker.main([])
 
 
 def test_prepare_cannot_change_registers(runtime, submitted):
@@ -463,10 +696,11 @@ def test_worker_validates_every_register_even_when_cli_exits_zero(tmp_path, monk
         Path("result.json").write_text(
             json.dumps(make_result(registers={"readout": 2}), cls=RuntimeEncoder)
         )
+        return ""
 
-    monkeypatch.setattr(worker.subprocess, "run", zero_exit_with_missing_test)
+    monkeypatch.setattr(worker, "run_task_runner", zero_exit_with_missing_test)
     with pytest.raises(RuntimeError, match="registers"):
-        worker.execute_task_runner(measured_circuit(), 4, Path("task_runner"), "custom_resource")
+        worker.execute_task_runner([measured_circuit()], 4, Path("task_runner"), "custom_resource")
 
 
 @pytest.mark.parametrize(
@@ -523,7 +757,7 @@ def test_generic_handoff_with_custom_resource_and_registers(runtime, tmp_path, m
     qrmi.QRMIService = lambda: SimpleNamespace(resources=lambda: [resource])
     ibm = ModuleType("qrmi.primitives.ibm")
     target = GenericBackendV2(num_qubits=3, basis_gates=["rz", "sx", "x", "cx"]).target
-    ibm.get_target = lambda _: target
+    ibm.get_backend = lambda _: SimpleNamespace(target=target)
     monkeypatch.setitem(sys.modules, "qrmi", qrmi)
     monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
     monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)
@@ -569,14 +803,16 @@ Path(destination).write_text(json.dumps(result, cls=RuntimeEncoder))
     work_dir = Path(result.metadata["qcsc_slurm"]["work_dir"])
     report = json.loads((work_dir / "transpile_report.json").read_text())
     assert report["resource"] == "custom_resource"
-    assert report["registers"] == {"readout": 2, "test": 1}
+    assert report["pubs"][0]["registers"] == {"readout": 2, "test": 1}
     assert report["target_num_qubits"] == 3
     assert result[0].data.readout.get_counts() == {"00": 4}
 
 
-def test_worker_rejects_unknown_schema_before_qrmi_import(tmp_path, monkeypatch):
+@pytest.mark.parametrize("version", [1, 3])
+def test_worker_rejects_unknown_schema_before_qrmi_import(tmp_path, monkeypatch, version):
+    # Version 1 (single PUB) requests come from an older host install.
     monkeypatch.chdir(tmp_path)
-    Path("sampler_request.json").write_text('{"schema_version": 2}')
+    Path("sampler_request.json").write_text(json.dumps({"schema_version": version}))
     with pytest.raises(ValueError, match="schema_version"):
         worker.main([])
 
@@ -608,3 +844,121 @@ from qcsc_prefect.integrations.qiskit.qrmi.worker import main
     src = Path(__file__).parents[1] / "src"
     env = {**os.environ, "PYTHONPATH": str(src)}
     subprocess.run([sys.executable, "-c", program], env=env, check=True, capture_output=True)
+
+
+def test_job_settings_go_to_the_sbatch_environment_not_the_files(runtime, submitted):
+    run = replace(
+        runtime,
+        resource="ibm_kingston",
+        job_settings={"QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:x", "QRMI_IBM_QCS_SESSION_MODE": "batch"},
+    )
+    asyncio.run(run.sampler([(measured_circuit(),)], shots=4))
+    (call,) = submitted
+    # SPANK reads the settings under the resource prefix; --qpu follows the resource.
+    assert call["submit_env"] == {
+        "ibm_kingston_QRMI_IBM_QCS_SERVICE_CRN": "crn:v1:x",
+        "ibm_kingston_QRMI_IBM_QCS_SESSION_MODE": "batch",
+    }
+    assert call["slurm_qpu"] == "ibm_kingston"
+    job_dir = call["work_dir"]
+    for name in ("sampler_request.json", "transpile_config.json", "slurm_job.json"):
+        assert "crn:v1:x" not in (job_dir / name).read_text()
+
+
+def test_without_job_settings_the_submit_env_is_empty(runtime, submitted, monkeypatch):
+    for name in list(os.environ):
+        if name.endswith("QRMI_IBM_QCS_IAM_APIKEY"):
+            monkeypatch.delenv(name)
+    asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    assert submitted[0]["submit_env"] == {}
+    # --qpu is the resource that the request, the env prefix and the worker use.
+    assert submitted[0]["slurm_qpu"] == runtime.resource
+
+
+def test_the_workflow_api_key_is_removed_from_the_sbatch_environment(
+    runtime, submitted, monkeypatch
+):
+    monkeypatch.setenv("QRMI_IBM_QCS_IAM_APIKEY", "workflow-key")
+    monkeypatch.setenv("custom_resource_QRMI_IBM_QCS_IAM_APIKEY", "prefixed-key")
+    asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    env = submitted[0]["submit_env"]
+    assert env["QRMI_IBM_QCS_IAM_APIKEY"] is None
+    assert env["custom_resource_QRMI_IBM_QCS_IAM_APIKEY"] is None
+    assert "workflow-key" not in json.dumps(env)
+
+
+TASK_RUNNER_OUTPUT = {
+    # As task_runner logs it: it exits 0 and writes no result file.
+    "Cancelled": "2026-11-08 04:36:54,463 INFO Task ID: dbnvopg\n"
+    "2026-11-08 04:40:06,195 ERROR TaskStatus.Cancelled\n",
+    "Failed": "2026-11-08 04:36:54,463 INFO Task ID: dbnvopg\n"
+    "2026-11-08 04:40:06,195 ERROR TaskStatus.Failed\n",
+    "stopped": "2026-11-08 04:36:54,463 INFO Task ID: dbnvopg\n",
+}
+
+
+@pytest.mark.parametrize(
+    "case,message",
+    [
+        ("Cancelled", "Quantum task dbnvopg on custom_resource was cancelled on IBM Quantum"),
+        ("Failed", "Quantum task dbnvopg on custom_resource failed on IBM Quantum"),
+        ("stopped", "ended without a result"),
+    ],
+)
+def test_a_task_without_a_result_is_named_not_a_missing_file(tmp_path, monkeypatch, case, message):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(worker, "run_task_runner", lambda command: TASK_RUNNER_OUTPUT[case])
+    with pytest.raises(worker.QuantumTaskEnded, match=message):
+        worker.execute_task_runner([measured_circuit()], 4, Path("task_runner"), "custom_resource")
+
+
+def test_the_worker_exits_with_one_line_and_tells_the_host(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+
+    def ended(argv=None):
+        raise worker.QuantumTaskEnded("Quantum task t1 on r was cancelled on IBM Quantum.")
+
+    monkeypatch.setattr(worker, "main", ended)
+    with pytest.raises(SystemExit) as exit_info:
+        worker.run()
+    assert exit_info.value.code == 3
+    err = capsys.readouterr().err
+    assert err == "qcsc-qrmi-sampler: Quantum task t1 on r was cancelled on IBM Quantum.\n"
+    assert (tmp_path / "task_ended.txt").read_text().startswith("Quantum task t1")
+
+
+def test_task_runner_output_reaches_the_job_log(tmp_path, capsys):
+    script = tmp_path / "fake_runner.py"
+    script.write_text(
+        "print('INFO Task ID: t9', flush=True)\nprint('ERROR TaskStatus.Cancelled')\n"
+    )
+    output = worker.run_task_runner([sys.executable, str(script)])
+    assert "TaskStatus.Cancelled" in output
+    assert "INFO Task ID: t9" in capsys.readouterr().out
+    script.write_text("import sys; sys.exit(2)\n")
+    with pytest.raises(subprocess.CalledProcessError):
+        worker.run_task_runner([sys.executable, str(script)])
+
+
+def test_the_host_reports_a_cancelled_job_or_task_in_one_line(runtime, monkeypatch):
+    async def cancelled_with_the_run(**kwargs):
+        # The executor scancels the job and returns no status when the wait is cancelled.
+        return SimpleNamespace(job_id="275", state="", exit_status=-1, job_status={})
+
+    monkeypatch.setattr(runtime_mod, "run_job_from_blocks", cancelled_with_the_run)
+    with pytest.raises(runtime_mod.QrmiJobCancelled, match="275 was cancelled with the run"):
+        asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))
+    (work_dir,) = [p for p in runtime.root_dir.iterdir()]
+    assert json.loads((work_dir / "slurm_job.json").read_text())["state"] == "CANCELLED"
+
+    async def cancelled_on_ibm(**kwargs):
+        Path(kwargs["work_dir"], "task_ended.txt").write_text(
+            "Quantum task t1 on custom_resource was cancelled on IBM Quantum; no samples."
+        )
+        return SimpleNamespace(
+            job_id="274", state="FAILED", exit_status=3, job_status={"State": "FAILED"}
+        )
+
+    monkeypatch.setattr(runtime_mod, "run_job_from_blocks", cancelled_on_ibm)
+    with pytest.raises(runtime_mod.QrmiJobCancelled, match="^Quantum task t1 .* cancelled on IBM"):
+        asyncio.run(runtime.sampler([(measured_circuit(),)], shots=4))

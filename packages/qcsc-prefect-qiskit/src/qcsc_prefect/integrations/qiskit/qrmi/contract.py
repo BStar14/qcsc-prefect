@@ -1,8 +1,8 @@
-"""Shared QPY/JSON and result validation contract for a single sampler PUB."""
+"""Shared QPY/JSON and result validation contract for bound sampler PUBs."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from numbers import Integral
 from pathlib import Path
 
@@ -15,7 +15,13 @@ try:
 except ModuleNotFoundError:
     from qiskit_ibm_runtime.utils.result_decoder import ResultDecoder
 
-SCHEMA_VERSION = 1
+# Version 2: one QPY file, plus one registers and transpile_config entry per PUB.
+SCHEMA_VERSION = 2
+
+
+# Written by the compute-node worker in the job directory when the quantum task ended
+# without a result, for example cancelled on IBM Quantum.
+TASK_ENDED_FILE = "task_ended.txt"
 
 
 def positive_shots(value) -> int:
@@ -61,27 +67,43 @@ def circuit_registers(circuit: QuantumCircuit) -> dict[str, int]:
     return registers
 
 
-def decode_result(path: Path, shots: int, registers: Mapping[str, int]) -> PrimitiveResult:
+def decode_result(
+    path: Path, shots: int, registers: Sequence[Mapping[str, int]]
+) -> PrimitiveResult:
+    """Decode a sampler result whose PUB ``i`` must match ``registers[i]``."""
     result = ResultDecoder.decode(path.read_text(encoding="utf-8"))
+    return validate_result(result, shots, registers, where=f"see {path}")
+
+
+def validate_result(
+    result, shots: int, registers: Sequence[Mapping[str, int]], *, where: str
+) -> PrimitiveResult:
+    """Check that result PUB ``i`` has the registers, widths and shots of ``registers[i]``."""
     if not isinstance(result, PrimitiveResult):
         raise RuntimeError(
-            f"task_runner returned {type(result).__name__}; expected PrimitiveResult; see {path}"
+            f"task_runner returned {type(result).__name__}; expected PrimitiveResult; {where}"
         )
-    if len(result) != 1:
-        raise RuntimeError(f"task_runner returned {len(result)} PUBs; expected 1; see {path}")
-    if not isinstance(result[0], PubResult):
-        raise RuntimeError(f"Expected sampler PUB result; see {path}")
-    data = result[0].data
-    if set(data.keys()) != set(registers):
-        raise RuntimeError(f"Unexpected result registers; expected {dict(registers)}; see {path}")
-    for name, width in registers.items():
-        samples = data[name]
-        if not isinstance(samples, BitArray) or samples.shape != ():
-            raise RuntimeError(f"Expected scalar BitArray for {name}; see {path}")
-        if samples.num_shots != shots:
+    if len(result) != len(registers):
+        raise RuntimeError(
+            f"task_runner returned {len(result)} PUBs; expected {len(registers)}; {where}"
+        )
+    for index, (pub_result, pub_registers) in enumerate(zip(result, registers)):
+        context = f"(PUB {index}); {where}"
+        if not isinstance(pub_result, PubResult):
+            raise RuntimeError(f"Expected sampler PUB result {context}")
+        data = pub_result.data
+        if set(data.keys()) != set(pub_registers):
             raise RuntimeError(
-                f"task_runner returned {samples.num_shots} shots; expected {shots}; see {path}"
+                f"Unexpected result registers; expected {dict(pub_registers)} {context}"
             )
-        if samples.num_bits != width:
-            raise RuntimeError(f"Expected {width} bits for {name}; see {path}")
+        for name, width in pub_registers.items():
+            samples = data[name]
+            if not isinstance(samples, BitArray) or samples.shape != ():
+                raise RuntimeError(f"Expected scalar BitArray for {name} {context}")
+            if samples.num_shots != shots:
+                raise RuntimeError(
+                    f"task_runner returned {samples.num_shots} shots; expected {shots} {context}"
+                )
+            if samples.num_bits != width:
+                raise RuntimeError(f"Expected {width} bits for {name} {context}")
     return result

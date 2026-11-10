@@ -3,24 +3,32 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
 from pathlib import Path
 
-from qiskit import qasm3, qpy
-from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+from qiskit import qpy
 
+# Re-exported: the default transpiler path and existing hooks import these names here.
+from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager  # noqa: F401
+
+from .compile import (  # noqa: F401
+    compile_pubs,
+    generic_transpile,
+    make_sampler_parameters,
+    validate_isa,
+)
 from .contract import (
     SCHEMA_VERSION,
+    TASK_ENDED_FILE,
     circuit_registers,
     decode_result,
     positive_shots,
 )
-from .transpilation import preset_pass_manager_options
 
 
 def require_batch_environment(resource: str) -> None:
@@ -34,47 +42,71 @@ def require_batch_environment(resource: str) -> None:
         raise RuntimeError(f"Missing SPANK acquisition token; submit with --qpu={resource}")
 
 
-def generic_transpile(circuit, target, config):
-    """Configure a preset pass manager using JSON options and the actual Target."""
-    options = preset_pass_manager_options(config, num_qubits=circuit.num_qubits)
-    return generate_preset_pass_manager(target=target, **options).run(circuit)
+def make_sampler_payload(isa_circuits, shots: int) -> dict:
+    return {"program_id": "sampler", "parameters": make_sampler_parameters(isa_circuits, shots)}
 
 
-def validate_isa(circuit, target) -> None:
-    for instruction in circuit.data:
-        if instruction.operation.name == "barrier":
-            continue
-        qargs = tuple(circuit.find_bit(bit).index for bit in instruction.qubits)
-        if not target.instruction_supported(
-            operation_name=instruction.operation.name,
-            qargs=qargs,
-            parameters=instruction.operation.params,
-        ):
-            raise RuntimeError(f"Unsupported ISA instruction: {instruction.operation.name} {qargs}")
+class QuantumTaskEnded(RuntimeError):
+    """The quantum task ended without a result: cancelled, failed or stopped."""
 
 
-def make_sampler_payload(isa_circuit, shots: int) -> dict:
-    return {
-        "program_id": "sampler",
-        "parameters": {
-            "pubs": [
-                [qasm3.dumps(isa_circuit, disable_constants=True, allow_aliasing=True), None, shots]
-            ],
-            "version": 2,
-            "support_qiskit": True,
-            "shots": shots,
-            "options": {},
-        },
-    }
+# task_runner logs the final status of a task that ended without a result, for example
+# "ERROR TaskStatus.Cancelled", and exits 0 without writing the result file.
+_TASK_STATUS = re.compile(r"TaskStatus\.(\w+)")
+_TASK_ID = re.compile(r"Task ID: (\S+)")
 
 
-def execute_task_runner(isa_circuit, shots: int, executable: Path, resource: str) -> None:
+def _task_ended_message(output: str, resource: str) -> str:
+    statuses = _TASK_STATUS.findall(output)
+    task_ids = _TASK_ID.findall(output)
+    task = f"Quantum task {task_ids[-1]} on {resource}" if task_ids else f"The task on {resource}"
+    status = statuses[-1] if statuses else None
+    if status == "Cancelled":
+        return f"{task} was cancelled on IBM Quantum; no samples were returned."
+    if status == "Failed":
+        return f"{task} failed on IBM Quantum; see its details on the IBM Quantum dashboard."
+    return (
+        f"{task} ended without a result (task_runner wrote no result.json); the job was "
+        "probably stopped, for example cancelled from Prefect or by Slurm."
+    )
+
+
+def run_task_runner(command: list[str]) -> str:
+    """Run task_runner, copying its log to this job's output as it comes; return the log.
+
+    Raises:
+        subprocess.CalledProcessError: If task_runner exits with an error.
+    """
+    process = subprocess.Popen(
+        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace"
+    )
+    lines = []
+    try:
+        for line in process.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            lines.append(line)
+        returncode = process.wait()
+    except BaseException:
+        # Stopping the worker stops task_runner, which then stops its quantum task.
+        process.terminate()
+        process.wait()
+        raise
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, command)
+    return "".join(lines)
+
+
+def execute_task_runner(isa_circuits, shots: int, executable: Path, resource: str) -> None:
     Path("sampler_input.json").write_text(
-        json.dumps(make_sampler_payload(isa_circuit, shots), indent=2), encoding="utf-8"
+        json.dumps(make_sampler_payload(isa_circuits, shots), indent=2), encoding="utf-8"
     )
     # No retries: a zero CLI exit code alone does not prove quantum success.
-    subprocess.run([str(executable), resource, "sampler_input.json", "result.json"], check=True)
-    decode_result(Path("result.json").resolve(), shots, circuit_registers(isa_circuit))
+    output = run_task_runner([str(executable), resource, "sampler_input.json", "result.json"])
+    result_path = Path("result.json").resolve()
+    if not result_path.is_file():
+        raise QuantumTaskEnded(_task_ended_message(output, resource))
+    decode_result(result_path, shots, [circuit_registers(isa) for isa in isa_circuits])
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -93,41 +125,53 @@ def main(argv: list[str] | None = None) -> None:
 
     # QRMI reads SPANK's environment; import only inside the allocation.
     from qrmi import QRMIService
-    from qrmi.primitives.ibm import get_target
+    from qrmi.primitives.ibm import get_backend
 
     resource = next((r for r in QRMIService().resources() if r.resource_id() == resource_id), None)
     if resource is None:
         raise RuntimeError(f"{resource_id} is not present in this Slurm allocation")
     with Path("circuit.qpy").open("rb") as stream:
-        (circuit,) = qpy.load(stream)
-    if circuit_registers(circuit) != request["registers"]:
+        circuits = qpy.load(stream)
+    registers = request["registers"]
+    configs = json.loads(Path("transpile_config.json").read_text(encoding="utf-8"))
+    if not isinstance(configs, list) or not isinstance(registers, list):
+        raise ValueError("registers and transpile_config must have one entry per PUB")
+    if not circuits or not len(circuits) == len(registers) == len(configs):
+        raise ValueError(
+            f"QPY has {len(circuits)} circuits, request has {len(registers)} registers "
+            f"and {len(configs)} transpile configs; expected one of each per PUB"
+        )
+    if [circuit_registers(circuit) for circuit in circuits] != registers:
         raise ValueError("QPY registers do not match sampler request")
-    config = json.loads(Path("transpile_config.json").read_text(encoding="utf-8"))
-    module_name, function_name = request["transpiler"].split(":")
-    transpile = getattr(importlib.import_module(module_name), function_name)
-    target = get_target(resource)
-    isa = transpile(circuit, target, config)
-    if circuit_registers(isa) != request["registers"]:
-        raise ValueError("transpiler must preserve classical register names and widths")
-    validate_isa(isa, target)
+    target = get_backend(resource).target
+    isa_circuits, pub_reports = compile_pubs(
+        circuits, configs, registers, target, request["transpiler"]
+    )
     report = {
-        **config,
         "transpiler": request["transpiler"],
-        "input_ops": dict(circuit.count_ops()),
-        "isa_ops": dict(isa.count_ops()),
         "target_num_qubits": target.num_qubits,
-        "isa_num_qubits": isa.num_qubits,
-        "registers": request["registers"],
         "host": socket.gethostname(),
         "resource": resource_id,
         "mode": "batch",
+        "pubs": pub_reports,
     }
     Path("transpile_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     with Path("isa.qpy").open("wb") as stream:
-        qpy.dump(isa, stream)
+        qpy.dump(isa_circuits, stream)
     print(f">>> Host: {socket.gethostname()}, resource: {resource_id}, mode: batch", flush=True)
-    execute_task_runner(isa, shots, args.task_runner, resource_id)
+    execute_task_runner(isa_circuits, shots, args.task_runner, resource_id)
+
+
+def run() -> None:
+    """Console entry point: a quantum task that ended without a result exits with one line."""
+    try:
+        main()
+    except QuantumTaskEnded as exc:
+        # The ended task file tells the workflow host why, without a traceback to read.
+        Path(TASK_ENDED_FILE).write_text(str(exc) + "\n", encoding="utf-8")
+        print(f"qcsc-qrmi-sampler: {exc}", file=sys.stderr)
+        raise SystemExit(3) from None
 
 
 if __name__ == "__main__":
-    main()
+    run()

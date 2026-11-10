@@ -47,6 +47,13 @@ jobs:
           "${RUNNER_TEMP}/qcsc-smoke-qiskit/bin/python" -m pip install --find-links dist "qcsc-prefect[qiskit]==${GITHUB_REF_NAME#v}"
           "${RUNNER_TEMP}/qcsc-smoke-qiskit/bin/python" scripts/smoke-test-packages.py
 
+      - name: Smoke test fulqrum extra installation
+        run: |
+          python -m venv "${RUNNER_TEMP}/qcsc-smoke-fulqrum"
+          "${RUNNER_TEMP}/qcsc-smoke-fulqrum/bin/python" -m pip install --upgrade pip
+          "${RUNNER_TEMP}/qcsc-smoke-fulqrum/bin/python" -m pip install --find-links dist "qcsc-prefect[fulqrum]==${GITHUB_REF_NAME#v}"
+          "${RUNNER_TEMP}/qcsc-smoke-fulqrum/bin/python" scripts/smoke-test-packages.py
+
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:

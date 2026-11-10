@@ -21,8 +21,16 @@ qcsc-prefect/
 │   ├── qcsc-prefect-adapters/
 │   ├── qcsc-prefect-executor/
 │   ├── qcsc-prefect-qiskit/
-│   └── qcsc-prefect-dice/
+│   ├── qcsc-prefect-dice/
+│   ├── qcsc-prefect-fulqrum/
+│   └── qcsc-prefect-sbd/
 ├── algorithms/
+│   ├── qcsc_workflow_utility/
+│   ├── open_loop/
+│   │   ├── sqd/
+│   │   └── skqd/
+│   └── closed_loop/
+│       └── sqd_de/
 ├── examples/
 └── docs/
 ```

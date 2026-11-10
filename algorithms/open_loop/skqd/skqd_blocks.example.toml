@@ -1,0 +1,47 @@
+hpc_target = "miyabi"
+group = "your-group"
+queue = "your-queue"
+work_dir = "/work/your-group/your-user/skqd-work"
+dice_executable = "/work/your-group/your-user/qcsc-prefect/packages/qcsc-prefect-dice/native/bin/Dice"
+
+launcher = "mpiexec.hydra"
+walltime = "01:00:00"
+num_nodes = 1
+mpiprocs = 4
+ompthreads = 1
+modules = []
+mpi_options = ["-np", "4"]
+pre_commands = []
+
+command_block_name = "cmd-skqd-dice-solver"
+execution_profile_block_name = "exec-skqd-dice-mpi"
+hpc_profile_block_name = "hpc-miyabi-skqd-dice"
+solver_block_name = "skqd-solver"
+options_variable_name = "sampler_options"
+script_filename = "dice_solver.pbs"
+metrics_artifact_key = "miyabi-skqd-dice-metrics"
+
+select_cutoff = 5e-4
+davidson_tol = 1e-5
+energy_tol = 1e-10
+max_iter = 10
+return_sci_state = false
+
+shots = 100000
+
+# QrmiRuntimeBlock used for quantum_source = "real-device". For random mode only, delete
+# [runtime] and [runtime.qrmi]; an existing block is then kept. The flow sets the SKQD
+# transpiler and its configuration itself.
+runtime_block_name = "qrmi-runtime"
+
+[runtime]
+# "iqp": submit from the workflow process. "slurm": use root_dir and three block names.
+scheduler = "iqp"
+resource = "ibm_kingston"
+
+# QRMI settings without the "<resource>_" prefix. Set QRMI_IBM_QCS_IAM_APIKEY in the
+# environment; it must not be written in this file.
+[runtime.qrmi]
+QRMI_IBM_QCS_ENDPOINT = "https://quantum.cloud.ibm.com/api/v1"
+QRMI_IBM_QCS_IAM_ENDPOINT = "https://iam.cloud.ibm.com"
+QRMI_IBM_QCS_SERVICE_CRN = "crn:v1:bluemix:public:quantum-computing:us-east:a/your-account:your-instance::"

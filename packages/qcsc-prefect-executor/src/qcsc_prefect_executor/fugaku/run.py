@@ -10,6 +10,8 @@ from qcsc_prefect_adapters.fugaku.builder import FugakuJobRequest, render_script
 from qcsc_prefect_adapters.fugaku.runtime import FugakuPJMRuntime
 from qcsc_prefect_core.models.execution_profile import ExecutionProfile
 
+from qcsc_prefect_executor.job_logs import log_job_stderr
+
 MAX_LOG_SIZE = 10_000
 
 
@@ -116,10 +118,17 @@ async def run_fugaku_job(
     err_file = work_dir / f"{script_basename}.{req.job_name}.err"
     stats_file = work_dir / f"{script_basename}.{req.job_name}.stats"
 
+    exit_code_text = str(final_status.get("EC", "")).strip()
+    if exit_code_text.isdigit():
+        exit_status = int(exit_code_text)
+    else:
+        exit_status = 0 if final_status.get("ST") == "EXT" else -1
+
     if logs := _read_text_if_exists(out_file):
         logger.info(truncate_log(logs))
-    if logs := _read_text_if_exists(err_file):
-        logger.error(truncate_log(logs))
+    log_job_stderr(
+        logger, _read_text_if_exists(err_file), failed=exit_status != 0, truncate=truncate_log
+    )
 
     artifact: dict[str, Any] = {
         "job_id": submit.job_id,
@@ -135,12 +144,6 @@ async def run_fugaku_job(
         table=[list(artifact.keys()), list(artifact.values())],
         key=metrics_artifact_key,
     )
-
-    exit_code_text = str(final_status.get("EC", "")).strip()
-    if exit_code_text.isdigit():
-        exit_status = int(exit_code_text)
-    else:
-        exit_status = 0 if final_status.get("ST") == "EXT" else -1
 
     return FugakuRunResult(
         job_id=submit.job_id,

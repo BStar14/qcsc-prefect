@@ -1,0 +1,40 @@
+# System profile: Miyabi-G (PBS), one GH200 GPU per node. Selected with
+# profile = "miyabi-gpu". Settings in your sqd_blocks.toml override the ones here.
+# Set queue to a Miyabi-G queue (debug-g, short-g or regular-g); it becomes the GPU
+# queue (queue_gpu) of the HPC profile block, which resource_class = "gpu" selects.
+
+hpc_target = "miyabi"
+resource_class = "gpu"
+walltime = "01:00:00"
+
+# fulqrum: one MPI rank per GPU (backend "gpu-mpi"); needs a GPU build of fulqrum.
+backend = "gpu-mpi"
+launcher = "mpirun"
+num_nodes = 1                       # One GPU per node: more nodes add more ranks and GPUs
+gpus_per_node = 1                   # Miyabi-G has one GPU per node; not rendered in PBS
+mpiprocs = 1                        # select=N:mpiprocs=1; one rank per GPU
+ompthreads = 72                     # select=N:ompthreads=72; the Grace CPU's 72 cores
+# Load the modules fulqrum was built with, for example:
+# modules = ["cuda", "nvhpc-openmpi3"]
+modules = []
+# Commands run before the solver, for example activating its environment:
+# pre_commands = ["source /work/gXXXX/venvs/fulqrum/bin/activate"]
+pre_commands = []
+
+[environments]
+FQ_DIST_BACKEND = "auto"            # Distributed fulqrum transport; "auto" picks one at run time
+# CuPy compiles kernels on first use. Point its cache at shared storage under your
+# work_dir so the ranks and later jobs reuse it, for example:
+# CUPY_CACHE_DIR = "/work/gXXXX/sqd-fulqrum/.cupy"
+
+# SBD: GPU build (diag-gpu), one rank per node. Used with solver = "sbd".
+[sbd]
+solver_mode = "gpu"
+launcher = "mpirun"
+mpiprocs = 1
+mpi_options = ["-n", "1"]
+modules = []                        # diag-gpu needs no module loads on Miyabi-G
+pre_commands = ["unset OMPI_MCA_mca_base_env_list"]
+
+[sbd.environments]                  # Replaces the fulqrum variables above
+MIYABI = "G"

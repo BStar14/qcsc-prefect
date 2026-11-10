@@ -123,7 +123,7 @@ async def run_hpc_bitcount_from_input(
 async def prefect_bitcount_optimized_flow(
     *,
     quantum_source: QuantumSource = "real-device",
-    runtime_block_name: str = "ibm-runner",
+    runtime_block_name: str = "qrmi-runtime",
     command_block_name: str = "cmd-bitcount-hist",
     execution_profile_block_name: str = "exec-bitcount-mpi",
     hpc_profile_block_name: str = "hpc-miyabi-bitcount",
@@ -173,9 +173,9 @@ if __name__ == "__main__":
         "--quantum-source",
         choices=("real-device", "random"),
         default="real-device",
-        help="Choose IBM Quantum Runtime sampling or deterministic random bitstrings.",
+        help="Choose QrmiRuntime sampling or deterministic random bitstrings.",
     )
-    parser.add_argument("--runtime-block", default="ibm-runner")
+    parser.add_argument("--runtime-block", default="qrmi-runtime")
     parser.add_argument("--command-block", default="cmd-bitcount-hist")
     parser.add_argument("--execution-profile-block", default="exec-bitcount-mpi")
     parser.add_argument("--hpc-profile-block", default="hpc-miyabi-bitcount")

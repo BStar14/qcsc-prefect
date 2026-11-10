@@ -99,3 +99,8 @@ def test_build_local_command_rejects_shell_setup(profile_values, setting_name):
 
     with pytest.raises(ValueError, match=setting_name):
         build_local_command(exec_profile=profile, executable="/opt/bin/solver")
+
+
+def test_build_local_command_rejects_gpus_per_node():
+    with pytest.raises(ValueError, match="gpus_per_node"):
+        build_local_command(exec_profile=_profile(gpus_per_node=1), executable="/opt/bin/solver")

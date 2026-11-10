@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=77.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qcsc-prefect-sbd"
+version = "0.3.1"
+description = "SBD Davidson solver integration for qcsc-prefect"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+    { name = "QCSC Prefect Contributors" },
+]
+maintainers = [
+    { name = "QCSC Prefect Maintainers" },
+]
+dependencies = [
+    "numpy",
+    "prefect>=2.19",
+    "pydantic>=2",
+    "pyscf",
+    "qcsc-prefect-blocks==0.3.1",
+    "qcsc-prefect-core==0.3.1",
+    "qcsc-prefect-executor==0.3.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/qiskit-community/qcsc-prefect"
+Repository = "https://github.com/qiskit-community/qcsc-prefect"
+Documentation = "https://qiskit-community.github.io/qcsc-prefect/"
+Issues = "https://github.com/qiskit-community/qcsc-prefect/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]

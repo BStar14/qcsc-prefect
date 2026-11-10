@@ -23,6 +23,8 @@ packages=(
   "packages/qcsc-prefect-executor"
   "packages/qcsc-prefect-qiskit"
   "packages/qcsc-prefect-dice"
+  "packages/qcsc-prefect-sbd"
+  "packages/qcsc-prefect-fulqrum"
   "packages/qcsc-prefect"
 )
 

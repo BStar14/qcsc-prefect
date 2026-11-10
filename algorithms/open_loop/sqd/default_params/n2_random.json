@@ -1,0 +1,21 @@
+{
+  "molecule": {
+    "fcidump_file": "algorithms/open_loop/sqd/data/n2_631g_fc.fcidump",
+    "spin_sq": null
+  },
+  "circuit": {
+    "n_lucj_layers": 1,
+    "compress": true,
+    "compress_maxiter": 50
+  },
+  "sampling": {
+    "quantum_source": "random",
+    "shots": 10000,
+    "random_seed": 24
+  },
+  "sqd": {
+    "subspace_dim": 10000,
+    "num_batches": 2,
+    "max_iterations": 2
+  }
+}

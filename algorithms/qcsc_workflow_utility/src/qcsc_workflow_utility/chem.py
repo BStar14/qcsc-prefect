@@ -38,26 +38,31 @@ class ElectronicProperties(BaseModel):
     num_orbitals: int
     num_electrons: tuple[int, int]
     open_shell: bool
-    spin_sq: float
+    spin_sq: float | None
 
 
 def _build_property(
     mf: scf.RHF,
     norb: int,
-    spin_sq: float,
+    spin_sq: float | None,
     buf: io.StringIO,
+    ccsd_maxiter: int = 1,
 ) -> ElectronicProperties:
     """Helper function to build ElectronicProperties from molecular calculation results.
 
     Args:
         mf: PySCF RHF object after calculation
         norb: Number of orbitals
-        spin_sq: Target value for the total spin squared
+        spin_sq: Target value for the total spin squared, or None for no target
         buf: StringIO buffer containing PySCF logs
+        ccsd_maxiter: Number of CCSD kernel runs. Each run after the first restarts
+            from the previous amplitudes, which clears the DIIS history.
 
     Returns:
         ElectronicProperties object
     """
+    if ccsd_maxiter < 1:
+        raise ValueError("ccsd_maxiter must be at least 1.")
     # Apply unitary transform with obtained MO coefficient.
     # The FCIdump file already gives you these integrals in MO basis,
     # but the HF calculation may give you correction to these integrals.
@@ -72,6 +77,8 @@ def _build_property(
     # Run CCSD
     mycc = cc.CCSD(mf)
     mycc.kernel()
+    for _ in range(ccsd_maxiter - 1):
+        mycc.kernel(mycc.t1, mycc.t2)
     t2 = mycc.t2
 
     # Diagonalize RDM to obtain the occupancies
@@ -105,7 +112,8 @@ def compute_molecular_integrals_from_geometry(
     atom: str,
     basis: str = "6-31g",
     symmetry: str | bool = False,
-    spin_sq: float = 0.0,
+    spin_sq: float | None = 0.0,
+    ccsd_maxiter: int = 1,
 ) -> ElectronicProperties:
     """Precompute molecular orbital property from geometry with classical methods.
 
@@ -113,7 +121,9 @@ def compute_molecular_integrals_from_geometry(
         atom: Definition for molecule structure.
         basis: Name of basis set.
         symmetry: Whether to use symmetry, otherwise string of point group name.
-        spin_sq: Target value for the total spin squared for the ground state.
+        spin_sq: Target value for the total spin squared for the ground state, or
+            None for no target (required by the SBD solver).
+        ccsd_maxiter: Number of CCSD kernel runs; see ``_build_property``.
 
     Returns:
         ElectronicProperties object containing molecular integrals and properties.
@@ -135,7 +145,7 @@ def compute_molecular_integrals_from_geometry(
     mf = scf.RHF(mol).run()
     norb = mf.mo_coeff.shape[1]
 
-    return _build_property(mf, norb, spin_sq, buf)
+    return _build_property(mf, norb, spin_sq, buf, ccsd_maxiter)
 
 
 @task(
@@ -145,13 +155,16 @@ def compute_molecular_integrals_from_geometry(
 )
 def compute_molecular_integrals_from_fcidump(
     fcidump_file: str,
-    spin_sq: float = 0.0,
+    spin_sq: float | None = 0.0,
+    ccsd_maxiter: int = 1,
 ) -> ElectronicProperties:
     """Precompute molecular orbital property from FCIDump file with classical methods.
 
     Args:
         fcidump_file: Location of FCIDump file storing 1-electron and 2-electron integrals.
-        spin_sq: Target value for the total spin squared for the ground state.
+        spin_sq: Target value for the total spin squared for the ground state, or
+            None for no target (required by the SBD solver).
+        ccsd_maxiter: Number of CCSD kernel runs; see ``_build_property``.
 
     Returns:
         ElectronicProperties object containing molecular integrals and properties.
@@ -179,4 +192,4 @@ def compute_molecular_integrals_from_fcidump(
         dm0[i, i] = 2.0
     mf.kernel(dm0=dm0)
 
-    return _build_property(mf, norb, spin_sq, buf)
+    return _build_property(mf, norb, spin_sq, buf, ccsd_maxiter)

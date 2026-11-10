@@ -48,7 +48,7 @@ def test_bell_example_round_trip(tmp_path, monkeypatch, shots):
     qrmi.QRMIService = lambda: SimpleNamespace(resources=lambda: [resource])
     ibm = ModuleType("qrmi.primitives.ibm")
     target = GenericBackendV2(num_qubits=2, basis_gates=["rz", "sx", "x", "cx"], seed=42).target
-    ibm.get_target = lambda _: target
+    ibm.get_backend = lambda _: SimpleNamespace(target=target)
     monkeypatch.setitem(sys.modules, "qrmi", qrmi)
     monkeypatch.setitem(sys.modules, "qrmi.primitives", ModuleType("qrmi.primitives"))
     monkeypatch.setitem(sys.modules, "qrmi.primitives.ibm", ibm)
@@ -80,7 +80,7 @@ qasm, values, shots = params['pubs'][0]
 assert qasm.startswith('OPENQASM 3.0;')
 assert values is None and shots == params['shots']
 with Path('isa.qpy').open('rb') as stream:
-    circuit, = qpy.load(stream)
+    (circuit,) = qpy.load(stream)
 assert {r.name: len(r) for r in circuit.cregs} == {'meas': 2}
 probs = Statevector.from_instruction(
     circuit.remove_final_measurements(inplace=False)
@@ -127,7 +127,7 @@ Path(destination).write_text(json.dumps(result, cls=RuntimeEncoder))
     assert calls[0]["hpc_profile_block_name"] == "bell-hpc"
     job_dir = Path(summary["slurm"]["work_dir"])
     report = json.loads((job_dir / "transpile_report.json").read_text())
-    assert report["registers"] == {"meas": 2}
+    assert [pub["registers"] for pub in report["pubs"]] == [{"meas": 2}]
     assert report["transpiler"] == runtime_mod.DEFAULT_TRANSPILER
 
 
