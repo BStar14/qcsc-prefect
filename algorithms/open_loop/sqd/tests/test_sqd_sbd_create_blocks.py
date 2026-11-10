@@ -307,7 +307,7 @@ def test_dry_run_with_the_example_qrmi_table(tmp_path, capsys):
     create_blocks.main(["--config", str(_sbd_config(tmp_path, qrmi=True)), "--dry-run"])
     printed = json.loads(capsys.readouterr().out)
     assert set(printed) == {"blocks", "qrmi_blocks", "runtime_block", "advanced_block"}
-    assert printed["qrmi_blocks"]["python_executable"].endswith("/venv/sqd-node/bin/python")
+    assert printed["qrmi_blocks"]["python_executable"].endswith("/venv/qcsc-node/bin/python")
     assert printed["runtime_block"]["scheduler"] == "slurm"
 
 

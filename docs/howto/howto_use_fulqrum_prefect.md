@@ -41,11 +41,11 @@ The build ends by printing the executable that the blocks point to,
 nodes. The compute environment does not need Prefect or qiskit-addon-sqd.
 
 **The workflow host** (where the Prefect process runs and jobs are submitted) installs the
-package with its dependencies, into the `~/venv/prefect` environment of
+package with its dependencies, into the `~/venv/qcsc-host` environment of
 [Set up qcsc-prefect on a Slurm cluster](https://quantum.cloud.ibm.com/docs/en/guides/qcsc-prefect-setup):
 
 ```bash
-source ~/venv/prefect/bin/activate
+source ~/venv/qcsc-host/bin/activate
 python -m pip install \
   -e packages/qcsc-prefect-core \
   -e packages/qcsc-prefect-blocks \
@@ -114,4 +114,4 @@ arXiv:2405.05068 with this solver by default: `sqd-create-blocks` saves the
 Solver Block of the Advanced SQD Settings block. Its README covers block creation from a TOML file
 (`sqd-create-blocks`), deployment (`sqd-deploy`) and QRMI sampling. The QRMI sampler job runs
 the top-level `python_executable` of that file, a compute-node Python such as
-`~/venv/sqd-node/bin/python`, and fulqrum stays in its own environment.
+`~/venv/qcsc-node/bin/python`, and fulqrum stays in its own environment.

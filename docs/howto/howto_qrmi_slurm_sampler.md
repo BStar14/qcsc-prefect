@@ -66,18 +66,18 @@ python -m pip check
 
 Retain the cluster's QRMI, SPANK and `task_runner` installation. The Python
 selected by the CommandBlock must import the installed library. A dedicated
-compute-node environment, for example `~/venv/sqd-node` of the SQD workflow, keeps
-it apart from the workflow host's `~/venv/prefect`:
+compute-node environment, for example `~/venv/qcsc-node` of the SQD workflow, keeps
+it apart from the workflow host's `~/venv/qcsc-host`:
 
 ```bash
-uv venv ~/venv/sqd-node -p 3.12
-source ~/venv/sqd-node/bin/activate
+uv venv ~/venv/qcsc-node -p 3.12
+source ~/venv/qcsc-node/bin/activate
 uv pip install "qrmi[ibm]"          # QRMI and task_runner
 uv pip install -e packages/qcsc-prefect-qiskit
 ```
 
 `sqd-create-blocks` writes the top-level `python_executable` of `sqd_blocks.toml`,
-such as `~/venv/sqd-node/bin/python`, into this CommandBlock. Configure its
+such as `~/venv/qcsc-node/bin/python`, into this CommandBlock. Configure its
 default arguments to run the worker module:
 
 ```python

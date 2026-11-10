@@ -213,17 +213,17 @@ The workflow uses two Python environments, and the solvers run outside both:
 
 | Environment | Where | Holds |
 | --- | --- | --- |
-| `~/venv/prefect` | workflow host | Prefect, the qcsc-prefect packages and this workflow (see [Install](#install)) |
-| `~/venv/sqd-node` | compute nodes, for `scheduler = "slurm"` | the QRMI worker: QRMI with `task_runner`, `qcsc-prefect-qiskit` and `sqd_common` |
+| `~/venv/qcsc-host` | workflow host | Prefect, the qcsc-prefect packages and this workflow (see [Install](#install)) |
+| `~/venv/qcsc-node` | compute nodes, for `scheduler = "slurm"` | the QRMI worker: QRMI with `task_runner`, `qcsc-prefect-qiskit` and `sqd_common` |
 
 The [setup guide](https://quantum.cloud.ibm.com/docs/en/guides/qcsc-prefect-setup) creates both. To create the workflow host environment
-yourself, run `uv venv ~/venv/prefect -p 3.12` and install as in [Install](#install). For
+yourself, run `uv venv ~/venv/qcsc-host -p 3.12` and install as in [Install](#install). For
 QRMI sampling in Slurm, create the compute-node environment on a path the compute nodes
 see, from the repository root:
 
 ```bash
-uv venv ~/venv/sqd-node -p 3.12
-source ~/venv/sqd-node/bin/activate
+uv venv ~/venv/qcsc-node -p 3.12
+source ~/venv/qcsc-node/bin/activate
 uv pip install "qrmi[ibm]"                            # QRMI and task_runner
 uv pip install -e packages/qcsc-prefect-qiskit
 uv pip install --no-deps -e algorithms/open_loop/sqd
@@ -243,7 +243,7 @@ Each solver is built on its own, and its block points to the built executable:
 ### Install
 
 The package is installed from a source checkout. On the submit host (where the
-Prefect process runs and the scheduler commands work), in `~/venv/prefect`, from the
+Prefect process runs and the scheduler commands work), in `~/venv/qcsc-host`, from the
 repository root:
 
 ```bash
@@ -435,7 +435,7 @@ runs depends on the block's scheduler:
   `qcsc-prefect-qiskit` (the worker, which imports Prefect), and this package from the
   same revision. The hook imports only Qiskit and qiskit-ibm-runtime, so ffsim,
   Prefect-Qiskit and the solvers are not needed there. Install them into that Python,
-  `~/venv/sqd-node` in [Python environments](#python-environments), check the
+  `~/venv/qcsc-node` in [Python environments](#python-environments), check the
   imports, and set its path as the top-level `python_executable`. If the QRMI worker
   environment already has `qcsc-prefect-qiskit`, only the last three commands are
   needed:

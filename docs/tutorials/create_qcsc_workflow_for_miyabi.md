@@ -142,7 +142,7 @@ Activate your virtual environment for Prefect:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-source ~/venv/prefect/bin/activate
+source ~/venv/qcsc-host/bin/activate
 ```
 
 Install necessary packages:

@@ -6,7 +6,7 @@
 
 # ============================================================ 1. Solver and system
 
-python_executable = "~/venv/sqd-node/bin/python"  # QRMI worker on the compute nodes
+python_executable = "~/venv/qcsc-node/bin/python"  # QRMI worker on the compute nodes
 profile = "slurm"       # slurm, slurm-gpu, miyabi, miyabi-gpu, fugaku, or a file path
 solver = "fulqrum"      # fulqrum, sbd (sqd[sbd]) or dice (sqd[dice])
 

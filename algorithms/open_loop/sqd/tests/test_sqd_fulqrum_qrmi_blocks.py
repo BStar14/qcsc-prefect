@@ -12,7 +12,7 @@ from sqd_common.block_config import load_block_config
 from sqd_fulqrum import create_blocks
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "sqd_blocks.example.toml"
-NODE_PYTHON = "~/venv/sqd-node/bin/python"
+NODE_PYTHON = "~/venv/qcsc-node/bin/python"
 QRMI = {"resource": "test_heron"}
 
 

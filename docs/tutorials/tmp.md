@@ -63,7 +63,7 @@ Activate a virtual environment and activate for prefect:
 
 <img src="../images/icon-prepost-fugaku.png" alt="prepost" width="70"/><br>
 ```bash
-source ~/venv/prefect/bin/activate
+source ~/venv/qcsc-host/bin/activate
 ```
 
 Install necessary packages:

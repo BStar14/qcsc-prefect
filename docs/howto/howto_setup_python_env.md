@@ -40,7 +40,7 @@ Use `uv` to create a virtual environment with Python 3.12:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-uv venv ~/venv/prefect -p 3.12
+uv venv ~/venv/qcsc-host -p 3.12
 ```
 
 This will install Python 3.12 and set up a new environment named `prefect`.
@@ -51,7 +51,7 @@ Activate the virtual environment:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-source ~/venv/prefect/bin/activate
+source ~/venv/qcsc-host/bin/activate
 uv pip install prefect
 ```
 

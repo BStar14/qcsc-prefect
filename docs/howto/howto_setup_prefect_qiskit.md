@@ -26,7 +26,7 @@ Activate your virtual environment:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-source ~/venv/prefect/bin/activate
+source ~/venv/qcsc-host/bin/activate
 ```
 
 Install the Prefect Qiskit integration:

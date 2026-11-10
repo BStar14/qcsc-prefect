@@ -112,7 +112,7 @@ Activate the environment:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-source ~/venv/prefect/bin/activate
+source ~/venv/qcsc-host/bin/activate
 ```
 
 ### Step 2. Install required packages (bring the Flow definition into your environment)
@@ -304,7 +304,7 @@ Activate environment and deploy:
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
 cd /work/gz00/z12345/qcsc-prefect
-source ~/venv/prefect/bin/activate
+source ~/venv/qcsc-host/bin/activate
 sbd-deploy
 ```
 

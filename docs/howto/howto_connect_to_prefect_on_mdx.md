@@ -36,7 +36,7 @@ Activate your virtual environment:
 
 <img src="../images/icon-mdx.png" alt="mdx" width="50"/><br>
 ```bash
-source ~/venv/prefect/bin/activate
+source ~/venv/qcsc-host/bin/activate
 ```
 ### Step 2: Storage setup on MDX and Clone git repository
 

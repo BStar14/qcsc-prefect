@@ -43,7 +43,7 @@ From repository root:
 
 ```bash
 cd /work/gz00/z12345/qcsc-prefect
-source ~/venv/prefect/bin/activate
+source ~/venv/qcsc-host/bin/activate
 
 # qcsc-prefect local packages
 uv pip install --no-deps \
