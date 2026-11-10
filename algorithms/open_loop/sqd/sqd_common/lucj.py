@@ -35,9 +35,12 @@ def _complex_array_to_data_dict(array_like) -> dict:
     ``np.array(..., dtype="complex128")`` reads back exactly.
     """
     array = np.asarray(array_like)
+    # String formatting needs no ufunc: np.vectorize can report floating-point
+    # warnings raised by scalar formatting on some platforms.
+    data = np.array([repr(complex(value)) for value in array.flat], dtype=object)
     return {
         "data_type": str(array.dtype),
-        "data": np.vectorize(lambda value: repr(complex(value)), otypes=[object])(array).tolist(),
+        "data": data.reshape(array.shape).tolist(),
         "shape": list(array.shape),
     }
 
