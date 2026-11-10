@@ -138,7 +138,7 @@ def test_each_profile_resolves_its_sbd_table(tmp_path, profile, expected):
         "sqd-sbd-mpi",
     )
     assert kwargs["sbd_executable"] == SBD_EXECUTABLE
-    assert kwargs["root_dir"] == "/shared/work/sqd"
+    assert kwargs["root_dir"] == "/shared/work/qcsc-prefect"
 
 
 def test_the_fulqrum_keys_of_a_profile_do_not_reach_the_sbd_blocks(tmp_path):

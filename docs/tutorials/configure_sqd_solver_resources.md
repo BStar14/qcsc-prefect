@@ -437,7 +437,7 @@ on 2 nodes (94 GB each), with 16 ranks x 4 threads per node and a grid of 4 x 8:
 solver = "sbd"
 profile = "slurm"
 queue = "normal"
-work_dir = "/shared/work/sqd"     # QCSC_WORK_DIR
+work_dir = "/shared/work/qcsc-prefect"  # QCSC_WORK_DIR
 slurm_memory = "240G"
 
 [sbd]

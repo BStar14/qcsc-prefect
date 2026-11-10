@@ -14,7 +14,7 @@ solver = "fulqrum"      # fulqrum, sbd (sqd[sbd]) or dice (sqd[dice])
 
 queue = "normal"        # Partition or resource group
 # project = "YOUR_ACCOUNT"  # Account or group; required on Miyabi and Fugaku
-work_dir = "/shared/work/sqd"  # Shared by the workflow host and the compute nodes
+work_dir = "/shared/work/qcsc-prefect"  # Shared by the workflow host and the compute nodes
 
 # Any profile key (walltime, num_nodes, mpiprocs, modules) can be set here.
 # Keys after a [table] header belong to that table, so keep top-level keys above here.
